@@ -111,6 +111,9 @@ struct Entry {
     facts: LogFacts,
     /// The account's Roblox user id, looked up on the first poll.
     expected_user: Option<i64>,
+    /// The `roalt_<user id>` profile seen on the client's command line ("cordial-run …",
+    /// or "cage -- cordial-run …" for a headless client).
+    profile_user: Option<i64>,
     user_checked: bool,
     closing: bool,
     /// Unix ms the client first reached a server.
@@ -154,6 +157,7 @@ impl Entry {
             offset: 0,
             facts: LogFacts::default(),
             expected_user: None,
+            profile_user: None,
             user_checked: false,
             closing: false,
             in_game_at: None,
@@ -193,6 +197,21 @@ impl Entry {
         wants_rejoin(&self.inst, &self.facts, self.hung()).or_else(|| {
             (self.mem_high() && self.inst.state != InstanceState::Exited && self.inst.note.is_none()).then_some(CrashKind::Mem)
         })
+    }
+}
+
+/// Live Cordial/cage account profiles, when there is at least one entry that can be checked by
+/// profile. `None` means "not checked", not "nothing is running".
+fn live_profiles(entries: &[Entry]) -> Option<std::collections::HashSet<i64>> {
+    entries.iter().any(|e| e.profile_user.is_some()).then(process::profiles_by_user).flatten()
+}
+
+/// Whether this entry's profile still has a live Cordial/cage process. Entries without a
+/// recognised profile (Sober, Wine, a hand-started client) keep the process check alone.
+fn profile_is_live(e: &Entry, live: &Option<std::collections::HashSet<i64>>) -> bool {
+    match (e.profile_user, live) {
+        (Some(user), Some(profiles)) => profiles.contains(&user),
+        _ => true,
     }
 }
 
@@ -389,19 +408,37 @@ impl Tracker {
     }
 
     /// The account has a client starting, joining or in a game (a disconnected one doesn't
-    /// count: it is waiting to be closed or rejoined).
+    /// count: it is waiting to be closed or rejoined). A Cordial/cage client whose profile is
+    /// no longer running does not count, even if the last poll has not ended its entry yet.
     pub fn has_live_client(&self, account_id: i64) -> bool {
-        self.entries().iter().any(|e| {
+        self.has_live_client_for(account_id, None)
+    }
+
+    /// `has_live_client`, also asking whether a Cordial/cage process with this account's
+    /// profile exists even when RoALT lost its tracker entry.
+    pub fn has_live_client_for(&self, account_id: i64, user_id: Option<i64>) -> bool {
+        let entries = self.entries();
+        let live = live_profiles(&entries);
+        if entries.iter().any(|e| {
             e.inst.account_id == account_id
                 && matches!(e.inst.state, InstanceState::Starting | InstanceState::Joining | InstanceState::InGame)
-        })
+                && profile_is_live(e, &live)
+        }) {
+            return true;
+        }
+        user_id.is_some_and(|user| process::profiles_by_user().is_some_and(|p| p.contains(&user)))
     }
 
     /// Reserves the account for one launch: None while it has a live client or another launch
     /// holds it. Hold the claim until the new client is registered.
     pub fn claim(&self, account_id: i64) -> Option<Claim<'_>> {
+        self.claim_for(account_id, None)
+    }
+
+    /// `claim`, also refusing when a Cordial/cage process with this account's profile runs.
+    pub fn claim_for(&self, account_id: i64, user_id: Option<i64>) -> Option<Claim<'_>> {
         let mut claimed = self.claimed.lock().unwrap_or_else(|e| e.into_inner());
-        if claimed.contains(&account_id) || self.has_live_client(account_id) {
+        if claimed.contains(&account_id) || self.has_live_client_for(account_id, user_id) {
             return None;
         }
         claimed.push(account_id);
@@ -415,7 +452,9 @@ impl Tracker {
 
     /// True while a client RoALT started hasn't ended.
     pub fn any_running(&self) -> bool {
-        self.entries().iter().any(|e| e.inst.state != InstanceState::Exited)
+        let entries = self.entries();
+        let live = live_profiles(&entries);
+        entries.iter().any(|e| e.inst.state != InstanceState::Exited && profile_is_live(e, &live))
     }
 
     /// How many auto-rejoins in a row led to the client `id` (shown in the UI).
@@ -802,12 +841,26 @@ impl Tracker {
         }
         let mut taken: Vec<u32> = work.iter().filter(|e| e.adopted).map(|e| e.inst.pid).collect();
         let mut roblox = None;
+        let profiles = procs.profiles();
         for e in &mut work {
             if !e.user_checked {
                 e.expected_user = user_of(e.inst.account_id);
                 e.user_checked = true;
             }
             observe(e, dir, procs, &mut roblox, &mut taken, now);
+            // A Cordial/cage process can outlive the PID RoALT follows (or a zombie can keep
+            // that PID around). The account profile is the source of truth: when it is gone,
+            // the instance is gone even if the old process table entry still exists.
+            if e.alive
+                && let (Some(user), Some(live)) = (e.profile_user, profiles.as_ref())
+                && !live.contains(&user)
+            {
+                log::debug!("instance {}: profile {user} no longer has a Cordial/cage process", e.inst.id);
+                e.alive = false;
+                if !e.adopted {
+                    e.gone_at.get_or_insert(now);
+                }
+            }
         }
         let mut entries = self.entries();
         let mut moved = Vec::new();
@@ -825,6 +878,7 @@ impl Tracker {
             (e.inst.anti_afk, e.inst.afk_at) = (old.inst.anti_afk, old.inst.afk_at);
             (e.inst.throttled, e.inst.micro, e.window_seen) = (old.inst.throttled, old.inst.micro, old.window_seen);
             (e.gave_up, e.relaunching) = (old.gave_up, old.relaunching);
+            e.profile_user = old.profile_user.or(e.profile_user);
             (e.inst.relaunching, e.inst.relaunch_problem) = (old.inst.relaunching, old.inst.relaunch_problem.clone());
             let had_game = old.in_game_at.is_some();
             (e.mem_strikes, e.mem_mb, e.mem_restart) = (old.mem_strikes, old.mem_mb, old.mem_restart);
@@ -972,6 +1026,12 @@ trait Procs {
     fn start_time(&self, pid: u32) -> Option<u64>;
     fn roblox(&self) -> Vec<ProcInfo>;
     fn hung(&self, pid: u32) -> bool;
+    fn profile(&self, _pid: u32) -> Option<i64> {
+        None
+    }
+    fn profiles(&self) -> Option<std::collections::HashSet<i64>> {
+        None
+    }
 }
 
 struct Live;
@@ -988,6 +1048,14 @@ impl Procs for Live {
     fn hung(&self, pid: u32) -> bool {
         process::hung(pid)
     }
+
+    fn profile(&self, pid: u32) -> Option<i64> {
+        process::profile_of(pid)
+    }
+
+    fn profiles(&self) -> Option<std::collections::HashSet<i64>> {
+        process::profiles_by_user()
+    }
 }
 
 /// The blocking part of a poll for one entry: liveness, rebinding, log binding and reading.
@@ -1003,6 +1071,9 @@ fn observe(e: &mut Entry, dir: Option<&Path>, procs: &dyn Procs, roblox: &mut Op
     // Kept once it is gone, so a hung client RoALT then closed still ends as hung.
     if e.alive && e.adopted {
         e.hung_polls = if procs.hung(e.inst.pid) { e.hung_polls.saturating_add(1) } else { 0 };
+    }
+    if e.alive && e.profile_user.is_none() {
+        e.profile_user = procs.profile(e.inst.pid);
     }
     let Some(dir) = dir else { return };
     // Read back from the database: a value too large must not panic.
@@ -1089,8 +1160,18 @@ fn created_secs(path: &Path) -> Option<u64> {
 /// launched under 120 s ago, and wasn't closed (a close that reached only a bootstrapper gets
 /// 5 s for the client it may already have started to show up).
 fn may_appear(e: &Entry, now: i64) -> bool {
-    let closed = e.closing && (e.adopted || e.gone_at.is_some_and(|g| now - g >= BOOTSTRAPPER_GRACE_MS));
-    e.in_game_at.is_none() && !closed && !e.facts.replaced && now - e.inst.started_at < REBIND_MS
+    #[cfg(not(windows))]
+    {
+        // Linux launches `cordial-run` directly: it does not hand over to an updater process,
+        // so a vanished pid is the end, not a relaunch to wait 120 s for.
+        let _ = (e, now);
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        let closed = e.closing && (e.adopted || e.gone_at.is_some_and(|g| now - g >= BOOTSTRAPPER_GRACE_MS));
+        e.in_game_at.is_none() && !closed && !e.facts.replaced && now - e.inst.started_at < REBIND_MS
+    }
 }
 
 const BOOTSTRAPPER_GRACE_MS: i64 = 5_000;
@@ -1193,12 +1274,22 @@ mod tests {
     const USER: i64 = 261;
 
     /// Fake processes: what `roblox()` lists and `start_time` finds (bootstrappers included),
-    /// and which of them don't respond.
-    struct Fake(Mutex<Vec<ProcInfo>>, Mutex<Vec<u32>>);
+    /// which of them don't respond, and the Cordial/cage profiles seen on their command lines.
+    struct Fake(
+        Mutex<Vec<ProcInfo>>,
+        Mutex<Vec<u32>>,
+        Mutex<std::collections::HashMap<u32, i64>>,
+        Mutex<Option<std::collections::HashSet<i64>>>,
+    );
 
     impl Fake {
         fn new(procs: &[(u32, u64)]) -> Fake {
-            let f = Fake(Mutex::new(Vec::new()), Mutex::new(Vec::new()));
+            let f = Fake(
+                Mutex::new(Vec::new()),
+                Mutex::new(Vec::new()),
+                Mutex::new(std::collections::HashMap::new()),
+                Mutex::new(Some(std::collections::HashSet::new())),
+            );
             f.set(procs);
             f
         }
@@ -1209,6 +1300,15 @@ mod tests {
 
         fn set_hung(&self, pids: &[u32]) {
             *self.1.lock().unwrap() = pids.to_vec();
+        }
+
+        fn set_profile(&self, pid: u32, user: i64) {
+            self.2.lock().unwrap().insert(pid, user);
+            self.3.lock().unwrap().get_or_insert_with(Default::default).insert(user);
+        }
+
+        fn clear_live_profiles(&self) {
+            self.3.lock().unwrap().get_or_insert_with(Default::default).clear();
         }
     }
 
@@ -1223,6 +1323,14 @@ mod tests {
 
         fn hung(&self, pid: u32) -> bool {
             self.1.lock().unwrap().contains(&pid)
+        }
+
+        fn profile(&self, pid: u32) -> Option<i64> {
+            self.2.lock().unwrap().get(&pid).copied()
+        }
+
+        fn profiles(&self) -> Option<std::collections::HashSet<i64>> {
+            self.3.lock().unwrap().clone()
         }
     }
 
@@ -1475,6 +1583,28 @@ mod tests {
     }
 
     #[test]
+    fn a_dead_cordial_profile_ends_a_client_even_if_its_pid_is_still_listed() {
+        let t = Tracker::new();
+        let start = now_ms();
+        let id = t.register(&info(100, start, false), target()).id;
+        let procs = Fake::new(&[(100, (start / 1000) as u64)]);
+        procs.set_profile(100, USER);
+        {
+            let mut entries = t.entries();
+            let e = entries.iter_mut().find(|e| e.inst.id == id).unwrap();
+            e.adopted = true;
+            e.inst.state = InGame;
+            e.facts.in_game = true;
+            e.in_game_at = Some(start);
+        }
+        t.poll(None, &procs, &user_of, start + 1_000);
+        assert_eq!(state(&t, &id).0, InGame, "the profile is running");
+        procs.clear_live_profiles();
+        t.poll(None, &procs, &user_of, start + 2_000);
+        assert_eq!(state(&t, &id).0, Exited, "the process entry may linger, the profile cannot");
+    }
+
+    #[test]
     fn a_reused_pid_is_not_the_client() {
         let t = Tracker::new();
         let start = now_ms();
@@ -1488,13 +1618,19 @@ mod tests {
 
     /// A log written by a client that started at `secs`: created then, modified a bit ago.
     fn old_log(path: &Path, secs: u64) {
-        use std::os::windows::fs::FileTimesExt;
-        let times = std::fs::FileTimes::new()
-            .set_created(UNIX_EPOCH + Duration::from_secs(secs))
-            .set_modified(std::time::SystemTime::now() - Duration::from_secs(2));
+        #[cfg(windows)]
+        let times = {
+            use std::os::windows::fs::FileTimesExt;
+            std::fs::FileTimes::new()
+                .set_created(UNIX_EPOCH + Duration::from_secs(secs))
+                .set_modified(std::time::SystemTime::now() - Duration::from_secs(2))
+        };
+        #[cfg(not(windows))]
+        let times = std::fs::FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(secs + 8));
         std::fs::File::options().write(true).open(path).unwrap().set_times(times).unwrap();
     }
 
+    #[cfg(windows)]
     #[test]
     fn rebinds_after_an_updater_relaunch() {
         let dir = temp_dir();
@@ -1533,6 +1669,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    #[cfg(windows)]
     #[test]
     fn the_dead_clients_own_log_is_not_a_relaunch() {
         let dir = temp_dir();
@@ -1554,6 +1691,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    #[cfg(windows)]
     #[test]
     fn a_client_gone_before_the_game_ends_after_120_s() {
         let t = Tracker::new();
@@ -1568,6 +1706,7 @@ mod tests {
         assert_eq!(state(&t, &id), (Exited, note("Closed unexpectedly"), 100));
     }
 
+    #[cfg(windows)]
     #[test]
     fn adopts_the_client_behind_a_bootstrapper() {
         let dir = temp_dir();
@@ -1597,6 +1736,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    #[cfg(windows)]
     #[test]
     fn closing_a_bootstrapper_leaves_its_client_running() {
         let dir = temp_dir();

@@ -128,7 +128,22 @@ fn unquote(s: String) -> PathBuf {
 /// is closed at once (Roblox's anti-cheat has flagged long-held handles). Returns the PID and
 /// its start time, read while our handle still reserves the PID (0: already gone). The URI
 /// and the arguments are never logged.
-pub fn start(exe: &ClientExe, uri: &Secret, extra: &[String]) -> Result<(u32, u64)> {
+#[allow(clippy::too_many_arguments)]
+pub fn start(
+    exe: &ClientExe,
+    uri: &Secret,
+    _mobile_uri: Option<&str>,
+    extra: &[String],
+    _account_id: i64,
+    _user_id: i64,
+    _username: &str,
+    _display_name: &str,
+    _cookie: &Secret,
+    _browser_tracker_id: i64,
+    _headless: bool,
+    _keep_running_on_close: bool,
+    _fps_cap: u32,
+) -> Result<(u32, u64)> {
     let dir = exe.path.parent().ok_or_else(|| AppError::Internal(tr!("Roblox's folder is unknown.")))?;
     let mut cmd = Command::new(&exe.path);
     cmd.raw_arg(uri.expose());
@@ -312,7 +327,7 @@ mod tests {
         // follow the first one, space-separated.
         let arg = Secret::new(format!("/c cd > \"{}\" & ping -n", out.display()));
 
-        let (pid, started) = start(&exe, &arg, &["2".into(), "127.0.0.1".into(), ">nul".into()]).unwrap();
+        let (pid, started) = start(&exe, &arg, None, &["2".into(), "127.0.0.1".into(), ">nul".into()], 0, 0, "u", "u", &Secret::new("x"), 0, false, false, 0).unwrap();
         assert!(pid > 0 && started > 0);
         let deadline = Instant::now() + Duration::from_secs(10);
         let written = loop {
@@ -326,6 +341,6 @@ mod tests {
         assert!(written.trim().eq_ignore_ascii_case(&system.join("System32").to_string_lossy()), "{written}");
 
         let missing = ClientExe { path: system.join(r"System32\roalt-no-such.exe"), bootstrapper: false };
-        assert!(matches!(start(&missing, &arg, &[]), Err(AppError::Internal(_))));
+        assert!(matches!(start(&missing, &arg, None, &[], 0, 0, "u", "u", &Secret::new("x"), 0, false, false), Err(AppError::Internal(_))));
     }
 }

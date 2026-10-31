@@ -13,6 +13,8 @@
 //! own. The user's values and the ones launches wrote
 //! are kept in the database (`KEPT`), so this holds across restarts. Only these three settings
 //! are touched; a file another process is still writing (no `</roblox>` yet) is left alone.
+#![cfg_attr(not(windows), allow(dead_code))]
+
 
 use std::io::{ErrorKind, Read};
 use std::ops::RangeInclusive;
@@ -20,8 +22,11 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
+#[cfg(windows)]
+use tauri::Manager;
 
+#[cfg(windows)]
 use crate::App;
 use crate::instances::logwatch;
 use crate::storage::Db;
@@ -287,11 +292,19 @@ impl Undo {
 /// values from it. None when the file can't be used (logged); that never stops the launch.
 /// Hold `LOCK`.
 pub fn apply(db: &Db, fps: u32, low: bool) -> Option<Undo> {
-    let Some(file) = file() else {
-        log::warn!("FPS cap and graphics skipped: LOCALAPPDATA isn't set");
-        return None;
-    };
-    apply_at(db, file, fps, low)
+    #[cfg(not(windows))]
+    {
+        let _ = (db, fps, low);
+        None
+    }
+    #[cfg(windows)]
+    {
+        let Some(file) = file() else {
+            log::warn!("FPS cap and graphics skipped: LOCALAPPDATA isn't set");
+            return None;
+        };
+        apply_at(db, file, fps, low)
+    }
 }
 
 fn apply_at(db: &Db, file: PathBuf, fps: u32, low: bool) -> Option<Undo> {
@@ -423,6 +436,9 @@ pub async fn wait_until_read(browser_tracker_id: i64, since: SystemTime, client:
 /// client, and nothing watches the file while RoALT is closed). A client RoALT started that
 /// closes later saves its own again; the watcher puts the user's back when RoALT next starts.
 pub fn restore(db: &Db) {
+    #[cfg(not(windows))]
+    let _ = db;
+    #[cfg(windows)]
     if let Some(file) = file() {
         restore_at(db, &file);
     }
@@ -496,6 +512,12 @@ fn settle(db: &Db, file: &Path) -> bool {
 
 /// Watches the file for the app's lifetime: `settle` when it changed and no launch holds `LOCK`.
 pub fn spawn(app: AppHandle) {
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        return;
+    }
+    #[cfg(windows)]
     let watching = std::thread::Builder::new().name("client-settings".into()).spawn(move || {
         let mut seen = None;
         loop {
@@ -511,6 +533,7 @@ pub fn spawn(app: AppHandle) {
             }
         }
     });
+    #[cfg(windows)]
     if let Err(e) = watching {
         log::warn!("Roblox settings watcher not running: {e}");
     }

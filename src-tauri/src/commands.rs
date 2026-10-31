@@ -166,6 +166,8 @@ async fn add_account(app: &AppHandle, s: &App, cookie: Secret) -> Result<Account
         status: AccountStatus::Valid,
         checked_at: Some(now_ms()),
     })?;
+    #[cfg(not(windows))]
+    crate::launcher::client::ensure_profile(user.id);
     accounts_changed(app);
     s.db.account(id)
 }
@@ -768,7 +770,7 @@ pub async fn launch(
     let fps_cap = launch_fps(fps_cap)?;
     // Launches go strictly one at a time (DESIGN §6).
     let _single = s.bulk.begin_single_launch()?;
-    Ok(launch_tracked(&app, &s, account_id, target, favourite_id, None, fps_cap, true).await?.0)
+    Ok(launch_tracked(&app, &s, account_id, target, favourite_id, None, fps_cap, true, None).await?.0)
 }
 
 /// Why launches are refused while `roblox_install` runs.
@@ -796,12 +798,14 @@ pub(crate) async fn launch_tracked(
     delay_ms: Option<u32>,
     fps_cap: Option<u32>,
     hold: bool,
+    headless: Option<bool>,
 ) -> Result<(LaunchInfo, Instance)> {
     let kills = s.bulk.kills();
     let killed = || AppError::Invalid(tr!("Launch cancelled by Stop all."));
     // Claimed until the client is tracked, so a launch from another path (rejoin, tray,
     // batch) can't start the same account meanwhile.
-    let Some(_claim) = s.tracker.claim(account_id) else {
+    let user_id = s.db.account(account_id).ok().map(|a| a.user_id);
+    let Some(_claim) = s.tracker.claim_for(account_id, user_id) else {
         let name = s.db.account(account_id).map(|a| crate::launcher::bulk::name_of(&a)).ok().filter(|n| !n.is_empty());
         let name = name.unwrap_or_else(|| tr!("This account"));
         return Err(AppError::Wait(tr!("{name} is already running. Close its client first.", name = name)));
@@ -829,7 +833,7 @@ pub(crate) async fn launch_tracked(
     retake_multi(s, &v);
     // Holds the shared files until the client is tracked (the poll releases them when idle).
     let launching = s.multi.launching(v.multi_instance && v.protect_shared_login);
-    let info = match crate::launcher::launch(s, account_id, &target, fps_cap).await {
+    let info = match crate::launcher::launch(s, account_id, &target, fps_cap, headless.unwrap_or(v.headless)).await {
         Ok(info) => info,
         Err(e) => {
             log::warn!("launch failed for account {account_id}: {e}");
@@ -1058,7 +1062,8 @@ fn shutdown_secs(at_ms: Option<i64>, in_secs: Option<u32>, now_ms: i64) -> Resul
     Ok(secs as u32)
 }
 
-/// Runs System32\shutdown.exe without a window: its exit code and what it printed.
+/// Runs the platform's shutdown command without a window: its exit code and what it printed.
+#[cfg(windows)]
 fn shutdown_exe(args: &[&str]) -> Result<(i32, String)> {
     use std::os::windows::process::CommandExt;
     let root = std::env::var_os("SystemRoot").map(std::path::PathBuf::from).unwrap_or_else(|| r"C:\Windows".into());
@@ -1067,6 +1072,18 @@ fn shutdown_exe(args: &[&str]) -> Result<(i32, String)> {
     let code = out.status.code().unwrap_or(-1);
     if code != 0 {
         log::warn!("shutdown.exe {} exited {code}: {}", args.join(" "), text.chars().take(300).collect::<String>());
+    }
+    Ok((code, text))
+}
+
+/// `shutdown` from util-linux on Linux; `-h +N` schedules minutes ahead, `-c` cancels.
+#[cfg(not(windows))]
+fn shutdown_exe(args: &[&str]) -> Result<(i32, String)> {
+    let out = std::process::Command::new("shutdown").args(args).output()?;
+    let text = String::from_utf8_lossy(&out.stderr).trim().to_owned();
+    let code = out.status.code().unwrap_or(-1);
+    if code != 0 {
+        log::warn!("shutdown {} exited {code}: {}", args.join(" "), text.chars().take(300).collect::<String>());
     }
     Ok((code, text))
 }
@@ -1090,9 +1107,15 @@ pub fn shutdown_schedule(app: AppHandle, s: State<'_, App>, at_ms: Option<i64>, 
     let secs = shutdown_secs(at_ms, in_secs, now_ms())?;
     let mut at = s.shutdown.lock().unwrap_or_else(|e| e.into_inner());
     if at.take().is_some() {
+        #[cfg(windows)]
         shutdown_exe(&["/a"])?;
+        #[cfg(not(windows))]
+        shutdown_exe(&["-c"])?;
     }
+    #[cfg(windows)]
     let (code, text) = shutdown_exe(&["/s", "/t", &secs.to_string()])?;
+    #[cfg(not(windows))]
+    let (code, text) = shutdown_exe(&["-h", &format!("+{}", secs.div_ceil(60))])?;
     if code != 0 {
         // 1190: a shutdown is already scheduled (by another app or by hand).
         return Err(AppError::Invalid(tr!("Windows wouldn't schedule the shutdown: {text}", text = text)));
@@ -1123,7 +1146,10 @@ pub fn shutdown_cancel(s: State<'_, App>) -> Result<Option<i64>> {
     let mut at = s.shutdown.lock().unwrap_or_else(|e| e.into_inner());
     if at.is_some() {
         // 1116: none is scheduled any more (called off outside RoALT).
+        #[cfg(windows)]
         let (code, text) = shutdown_exe(&["/a"])?;
+        #[cfg(not(windows))]
+        let (code, text) = shutdown_exe(&["-c"])?;
         if code != 0 && code != 1116 {
             return Err(AppError::Invalid(tr!("Windows wouldn't call off the shutdown: {text}", text = text)));
         }
@@ -1511,44 +1537,146 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> 
 /// top-down. Empty while it is minimized, has no window yet or is still behind its bootstrapper.
 #[tauri::command]
 pub async fn instance_thumbnail(s: State<'_, App>, id: String, max_w: u32) -> Result<tauri::ipc::Response> {
-    let Some(pid) = client_pid(&s, &id)? else { return Ok(tauri::ipc::Response::new(Vec::new())) };
-    let thumb = blocking(move || crate::instances::window::thumbnail(pid, max_w.clamp(16, 1280))).await?;
-    let bytes = thumb.map_or_else(Vec::new, |(t, parked)| {
-        let mut b = Vec::with_capacity(12 + t.rgba.len());
-        b.extend(t.width.to_le_bytes());
-        b.extend(t.height.to_le_bytes());
-        b.extend(u32::from(parked).to_le_bytes());
-        b.extend(t.rgba);
-        b
-    });
-    Ok(tauri::ipc::Response::new(bytes))
+    #[cfg(not(windows))]
+    {
+        let inst = s.tracker.get(&id).ok_or(AppError::NotFound)?;
+        let account = s.db.account(inst.account_id)?;
+        let Some(socket) = crate::launcher::client::devctl_socket(account.user_id) else {
+            return Ok(tauri::ipc::Response::new(Vec::new()));
+        };
+        let thumb = blocking(move || crate::instances::window::thumbnail_socket(&socket, max_w.clamp(16, 1280))).await?;
+        let bytes = thumb.map_or_else(Vec::new, |(t, parked)| {
+            let mut b = Vec::with_capacity(12 + t.rgba.len());
+            b.extend(t.width.to_le_bytes());
+            b.extend(t.height.to_le_bytes());
+            b.extend(u32::from(parked).to_le_bytes());
+            b.extend(t.rgba);
+            b
+        });
+        return Ok(tauri::ipc::Response::new(bytes));
+    }
+    #[cfg(windows)]
+    {
+        let Some(pid) = client_pid(&s, &id)? else { return Ok(tauri::ipc::Response::new(Vec::new())) };
+        let thumb = blocking(move || crate::instances::window::thumbnail(pid, max_w.clamp(16, 1280))).await?;
+        let bytes = thumb.map_or_else(Vec::new, |(t, parked)| {
+            let mut b = Vec::with_capacity(12 + t.rgba.len());
+            b.extend(t.width.to_le_bytes());
+            b.extend(t.height.to_le_bytes());
+            b.extend(u32::from(parked).to_le_bytes());
+            b.extend(t.rgba);
+            b
+        });
+        Ok(tauri::ipc::Response::new(bytes))
+    }
 }
 
-/// Brings one client's window to the front, minimizes or restores it.
-#[tauri::command]
-pub async fn instance_show(s: State<'_, App>, id: String, what: crate::instances::window::Show) -> Result<()> {
-    let pid = client_pid(&s, &id)?.ok_or_else(not_started)?;
-    let park = s.db.settings()?.park_minimized;
-    blocking(move || crate::instances::window::show(pid, what, park)).await?
+/// Linux: whether this instance has a window on the host desktop. A headless client runs inside
+/// `cage`, so it has none; a windowed one keeps its window even while hidden.
+#[cfg(not(windows))]
+fn instance_has_window(s: &App, id: &str) -> bool {
+    let pid = s.tracker.get(id).map(|i| i.pid).unwrap_or(0);
+    pid != 0 && crate::instances::window::has_window(pid)
 }
 
-/// Minimizes or restores every running client's window (focus is for one client).
+/// Linux: switch one running client between the host-window and headless forms. A headless
+/// client's window lives inside `cage` and cannot be adopted by the host, so this closes the
+/// current process and relaunches the same account/target in the requested form. Windowed to
+/// headless is the only way to actually reclaim its render/window memory.
+#[cfg(not(windows))]
+async fn set_instance_headless(app: &AppHandle, s: &App, id: &str, headless: bool) -> Result<()> {
+    let inst = s.tracker.get(id).ok_or(AppError::NotFound)?;
+    let (account_id, target) = (inst.account_id, inst.target.clone());
+    if let Some((pid, t0)) = s.tracker.mark_closing(id) {
+        let _ = close_all(vec![(pid, t0)], false, grace(s)).await?;
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    while std::time::Instant::now() < deadline {
+        if s.tracker.get(id).is_none_or(|i| i.state == InstanceState::Exited) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    launch_tracked(app, s, account_id, target, None, None, None, true, Some(headless)).await?;
+    Ok(())
+}
+
+/// Brings one client's window to the front, minimizes or restores it. On Linux, minimizing a
+/// windowed client relaunches it headless; restoring/clicking a headless client relaunches it
+/// with a window.
 #[tauri::command]
-pub async fn instances_show_all(s: State<'_, App>, what: crate::instances::window::Show) -> Result<()> {
+pub async fn instance_show(app: AppHandle, s: State<'_, App>, id: String, what: crate::instances::window::Show) -> Result<()> {
+    #[cfg(not(windows))]
+    {
+        let has = instance_has_window(&s, &id);
+        return match what {
+            crate::instances::window::Show::Minimize if has => {
+                set_instance_headless(&app, &s, &id, true).await
+            }
+            crate::instances::window::Show::Minimize => Ok(()),
+            crate::instances::window::Show::Focus | crate::instances::window::Show::Restore if has => {
+                let pid = client_pid(&s, &id)?.ok_or_else(not_started)?;
+                let park = s.db.settings()?.park_minimized;
+                blocking(move || crate::instances::window::show(pid, what, park)).await?
+            }
+            crate::instances::window::Show::Focus | crate::instances::window::Show::Restore => {
+                set_instance_headless(&app, &s, &id, false).await
+            }
+        };
+    }
+    #[cfg(windows)]
+    {
+        let pid = client_pid(&s, &id)?.ok_or_else(not_started)?;
+        let park = s.db.settings()?.park_minimized;
+        blocking(move || crate::instances::window::show(pid, what, park)).await?
+    }
+}
+
+/// Minimizes or restores every running client's window (focus is for one client). On Linux,
+/// minimize switches every windowed client to headless and restore brings every headless client
+/// back to a window; already-headless/already-windowed clients are left alone.
+#[tauri::command]
+pub async fn instances_show_all(app: AppHandle, s: State<'_, App>, what: crate::instances::window::Show) -> Result<()> {
     if what == crate::instances::window::Show::Focus {
         return Err(AppError::Invalid(tr!("Only one client can be in front.")));
     }
-    let pids: Vec<u32> = s.tracker.clients().into_iter().map(|c| c.1).collect();
-    let park = s.db.settings()?.park_minimized;
-    // One without a window yet has nothing to show or hide.
-    blocking(move || {
-        for pid in pids {
-            if let Err(e) = crate::instances::window::show(pid, what, park) {
-                log::debug!("show all: client {pid}: {e}");
+    #[cfg(not(windows))]
+    {
+        let ids: Vec<String> = s
+            .tracker
+            .list()
+            .into_iter()
+            .filter(|i| i.state != InstanceState::Exited)
+            .map(|i| i.id)
+            .collect();
+        for id in ids {
+            let has = instance_has_window(&s, &id);
+            match what {
+                crate::instances::window::Show::Minimize if has => {
+                    set_instance_headless(&app, &s, &id, true).await?;
+                }
+                crate::instances::window::Show::Restore if !has => {
+                    set_instance_headless(&app, &s, &id, false).await?;
+                }
+                _ => {}
             }
         }
-    })
-    .await
+        return Ok(());
+    }
+    #[cfg(windows)]
+    {
+        let pids: Vec<u32> = s.tracker.clients().into_iter().map(|c| c.1).collect();
+        let park = s.db.settings()?.park_minimized;
+        // One without a window yet has nothing to show or hide.
+        blocking(move || {
+            for pid in pids {
+                if let Err(e) = crate::instances::window::show(pid, what, park) {
+                    log::debug!("show all: client {pid}: {e}");
+                }
+            }
+        })
+        .await
+    }
 }
 
 /// Makes one client's window small (`window::MICRO` client area) or puts it back as it was.
@@ -1580,11 +1708,18 @@ fn check_window_size((w, h): (u32, u32)) -> Result<()> {
 pub async fn instances_tile(app: AppHandle, s: State<'_, App>, micro: bool) -> Result<usize> {
     let clients: Vec<(String, u32)> = s.tracker.clients().into_iter().map(|c| (c.0, c.1)).collect();
     // As a number: a window handle can't cross threads.
+    #[cfg(windows)]
     let near = app.get_webview_window("main").and_then(|w| w.hwnd().ok()).map_or(0, |h| h.0 as isize);
+    #[cfg(not(windows))]
+    let near = app.get_webview_window("main").map_or(0, |_| 0);
     let v = s.db.settings()?;
     let size = micro.then_some((v.micro_width, v.micro_height));
     let tiled = blocking(move || {
-        crate::instances::window::tile(&clients, windows::Win32::Foundation::HWND(near as *mut _), size)
+        #[cfg(windows)]
+        let tiled = crate::instances::window::tile(&clients, windows::Win32::Foundation::HWND(near as *mut _), size);
+        #[cfg(not(windows))]
+        let tiled = crate::instances::window::tile(&clients, near, size);
+        tiled
     })
     .await?;
     for id in &tiled {
@@ -1813,18 +1948,36 @@ async fn close_roblox(s: &App, force: bool, keep_closing: bool) -> Result<MultiI
 /// Clients that crashed, were disconnected or hung, newest first (the last 200).
 /// What a diagnostics report reads: the header now, the logs named for a background thread.
 fn diagnostics_sources(s: &App) -> Result<crate::diagnostics::Sources> {
-    use windows::Win32::System::Registry::HKEY_LOCAL_MACHINE;
-    let reg = |value| crate::launcher::client::reg_string(HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion", Some(value)).unwrap_or_default();
     let v = s.db.settings()?;
-    let head = format!(
-        "RoALT {} on {} {} (build {})\nMulti-instance: {}\nPerformance: {}\n",
-        env!("CARGO_PKG_VERSION"),
-        reg("ProductName"),
-        reg("DisplayVersion"),
-        reg("CurrentBuildNumber"),
-        v.multi_instance,
-        crate::performance::of(&v, None, now_ms()),
-    );
+    #[cfg(windows)]
+    let head = {
+        use windows::Win32::System::Registry::HKEY_LOCAL_MACHINE;
+        let reg = |value| crate::launcher::client::reg_string(HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion", Some(value)).unwrap_or_default();
+        format!(
+            "RoALT {} on {} {} (build {})\nMulti-instance: {}\nPerformance: {}\n",
+            env!("CARGO_PKG_VERSION"),
+            reg("ProductName"),
+            reg("DisplayVersion"),
+            reg("CurrentBuildNumber"),
+            v.multi_instance,
+            crate::performance::of(&v, None, now_ms()),
+        )
+    };
+    #[cfg(not(windows))]
+    let head = {
+        let os = std::fs::read_to_string("/etc/os-release")
+            .ok()
+            .and_then(|t| t.lines().find_map(|l| l.strip_prefix("PRETTY_NAME=").map(|v| v.trim_matches('"').to_owned())))
+            .unwrap_or_else(|| std::env::consts::OS.to_owned());
+        format!(
+            "RoALT {} on {} ({})\nMulti-instance: {}\nPerformance: {}\n",
+            env!("CARGO_PKG_VERSION"),
+            os,
+            std::env::consts::ARCH,
+            v.multi_instance,
+            crate::performance::of(&v, None, now_ms()),
+        )
+    };
     let mut names: Vec<String> = s.db.accounts()?.into_iter().flat_map(|a| [a.username, a.display_name, a.alias]).collect();
     names.extend(s.db.favourites()?.into_iter().map(|f| f.name));
     let mut roblox_logs = s.tracker.live_logs();
@@ -2185,6 +2338,8 @@ pub async fn backup_import(app: AppHandle, s: State<'_, App>, path: String, pass
             status: AccountStatus::Unknown,
             checked_at: None,
         })?;
+        #[cfg(not(windows))]
+        crate::launcher::client::ensure_profile(a.user_id);
         s.db.set_meta(id, &AccountMeta { alias: a.alias.clone(), notes: a.notes.clone(), color: a.color.clone(), favourite: a.favourite })?;
         let gids = a.groups.iter().map(|n| s.db.group_by_name_or_create(n, None)).collect::<Result<Vec<_>>>()?;
         s.db.set_account_groups(id, &gids)?;
@@ -2262,6 +2417,8 @@ pub(crate) fn apply_performance(v: &mut Settings, patch: &SettingsPatch) -> Resu
     if let Some(l) = patch.lighter_rendering { v.lighter_rendering = l }
     if let Some(r) = patch.render_flags { v.render_flags = r }
     if let Some(p) = patch.park_minimized { v.park_minimized = p }
+    if let Some(h) = patch.headless { v.headless = h }
+    if let Some(k) = patch.keep_running_on_close { v.keep_running_on_close = k }
     if let Some(m) = patch.minimize_on_launch { v.minimize_on_launch = m }
     if let Some(t) = patch.tiny_on_launch { v.tiny_on_launch = t }
     if patch.micro_width.is_some() || patch.micro_height.is_some() {

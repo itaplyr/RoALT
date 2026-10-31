@@ -213,6 +213,12 @@ export function SettingsView({ vault, settings, onPerformance, onRecoveryCode }:
             onCommit={(s) => set.mutate({ launchDelayMs: Math.round(s * 1000) })}
           />
         </Row>
+        <Row title={t("settings.headless")} hint={t("settings.headlessHint")}>
+          <Switch label={t("settings.headless")} checked={settings.headless} onChange={(headless) => set.mutate({ headless })} />
+        </Row>
+        <Row title={t("settings.keepRunning")} hint={t("settings.keepRunningHint")}>
+          <Switch label={t("settings.keepRunning")} checked={settings.keepRunningOnClose} onChange={(keepRunningOnClose) => set.mutate({ keepRunningOnClose })} />
+        </Row>
         <Row title={t("settings.performanceMoved")} hint={t("settings.performanceMovedHint")}>
           <button className="btn" onClick={onPerformance}>
             {t("settings.openPerformance")}

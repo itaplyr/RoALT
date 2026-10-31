@@ -258,6 +258,12 @@ pub struct Settings {
     pub micro_height: u32,
     /// Each new client goes tiny as soon as it has a window, unless its account is Full quality.
     pub tiny_on_launch: bool,
+    /// Linux/Cordial: start the client under `cage` with no game window (`cordial-run --headless`).
+    /// It keeps running in the background; close it from RoALT. Needs `cage` installed.
+    pub headless: bool,
+    /// Linux/Cordial: closing the game window leaves the client running in the background
+    /// (`CORDIAL_NO_CLOSE_EXIT=1`). Close it from RoALT when done.
+    pub keep_running_on_close: bool,
     /// Launch on a Public network too (`network`); off: refused. On by default.
     pub allow_public_networks: bool,
     /// UI and message language (`i18n::LANGS`), or "" to follow Windows' display language.
@@ -475,6 +481,8 @@ impl Default for Settings {
             micro_width: 320,
             micro_height: 240,
             tiny_on_launch: false,
+            headless: false,
+            keep_running_on_close: false,
             allow_public_networks: true,
             language: String::new(),
         }
@@ -561,6 +569,10 @@ pub struct SettingsPatch {
     pub micro_height: Option<u32>,
     #[ts(optional)]
     pub tiny_on_launch: Option<bool>,
+    #[ts(optional)]
+    pub headless: Option<bool>,
+    #[ts(optional)]
+    pub keep_running_on_close: Option<bool>,
     #[ts(optional)]
     pub allow_public_networks: Option<bool>,
     #[ts(optional)]

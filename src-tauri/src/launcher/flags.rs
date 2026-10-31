@@ -11,6 +11,8 @@
 //! or crash meanwhile loses nothing: `restore` at start and exit, or the next `apply`, puts it back.
 //! Not under a bootstrapper: Bloxstrap and the like copy their own file over this one at every
 //! launch.
+#![cfg_attr(not(windows), allow(dead_code))]
+
 
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -138,15 +140,20 @@ impl Undo {
 /// launch may still be waiting for its client), in every build: a launch can use another than
 /// `client::find`'s.
 pub fn restore() {
-    for dir in super::client::versions_dirs() {
-        for build in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-            let _ = put_back_at(&build.path().join("ClientSettings").join("ClientAppSettings.json"));
-        }
-    }
-    if let Ok(exe) = super::client::find()
-        && let Some(dir) = exe.path.parent()
+    #[cfg(not(windows))]
+    return;
+    #[cfg(windows)]
     {
-        let _ = put_back_at(&dir.join("ClientSettings").join("ClientAppSettings.json"));
+        for dir in super::client::versions_dirs() {
+            for build in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                let _ = put_back_at(&build.path().join("ClientSettings").join("ClientAppSettings.json"));
+            }
+        }
+        if let Ok(exe) = super::client::find()
+            && let Some(dir) = exe.path.parent()
+        {
+            let _ = put_back_at(&dir.join("ClientSettings").join("ClientAppSettings.json"));
+        }
     }
 }
 
@@ -154,6 +161,19 @@ pub fn restore() {
 /// back once it has started, None when nothing was written. Failures are logged and never stop the
 /// launch.
 pub fn apply(exe: &Path, render: &RenderFlags) -> Option<Undo> {
+    #[cfg(not(windows))]
+    {
+        let _ = (exe, render);
+        None
+    }
+    #[cfg(windows)]
+    {
+        apply_windows(exe, render)
+    }
+}
+
+#[cfg(windows)]
+fn apply_windows(exe: &Path, render: &RenderFlags) -> Option<Undo> {
     let file = exe.parent()?.join("ClientSettings").join("ClientAppSettings.json");
     // A launch cut short: the user's own file first, or these flags would pass for it and the only
     // copy of it would be lost.
@@ -193,7 +213,7 @@ pub fn apply(exe: &Path, render: &RenderFlags) -> Option<Undo> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use super::*;
 

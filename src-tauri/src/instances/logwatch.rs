@@ -68,9 +68,17 @@ fn client_initiated(line: &str) -> bool {
         || msg.split(|c: char| !c.is_ascii_digit()).any(|n| n == "285" || n == "273")
 }
 
-/// `%LOCALAPPDATA%\Roblox\logs`.
+/// `%LOCALAPPDATA%\Roblox\logs` on Windows; RoALT's own client-log folder on Linux.
+#[cfg(windows)]
 pub fn logs_dir() -> Option<PathBuf> {
     std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Roblox").join("logs"))
+}
+
+/// Linux: the launcher writes each Cordial client's output here (`<btid>_Player_last.log`).
+#[cfg(not(windows))]
+pub fn logs_dir() -> Option<PathBuf> {
+    let data = std::env::var_os("ROALT_DATA_DIR").map(PathBuf::from).unwrap_or_else(crate::default_dir);
+    Some(data.join("logs").join("clients"))
 }
 
 /// The `_Player_` log (not `_CrashHandler_`) modified since `since` whose first lines name
@@ -230,6 +238,36 @@ pub fn parse_line(line: &str, facts: &mut LogFacts) {
     }
     if let Some(id) = tracker_id(line) {
         facts.browser_tracker_id = Some(id);
+    } else if let Some(rest) = line.split_once("[cordial] game: joining server ").map(|(_, r)| r) {
+        if let Some((job, after)) = rest.split_once(" of place ")
+            && is_guid(job)
+        {
+            facts.job_id = Some(job.to_owned());
+            facts.place_id = number_after(after, "");
+            facts.in_game = false;
+            facts.teleporting = false;
+            facts.disconnected = false;
+            facts.left = false;
+            facts.reason = None;
+        }
+    } else if let Some(rest) = line.split_once("[cordial] game: joined place ").map(|(_, r)| r) {
+        if let Some(place) = number_after(rest, "") {
+            facts.place_id = Some(place);
+            facts.in_game = true;
+            facts.teleporting = false;
+            facts.disconnected = false;
+            facts.left = false;
+            facts.reason = None;
+        }
+        if let Some(user) = line.split_once(" as ").and_then(|(_, tail)| number_after(tail, "")) {
+            facts.user_id = Some(user);
+        }
+    } else if line.contains("[cordial] game: left") {
+        facts.disconnected = true;
+        facts.left = true;
+        facts.in_game = false;
+        facts.reason = Some("left".into());
+
     } else if let Some(i) = joining {
         if let Some((job, rest)) = line[i + JOINING.len()..].split_once('\'')
             && is_guid(job)
@@ -302,10 +340,15 @@ fn is_guid(s: &str) -> bool {
 }
 
 fn open_shared(path: &Path) -> std::io::Result<File> {
-    use std::os::windows::fs::OpenOptionsExt;
-    // FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE: Roblox keeps writing (and may
-    // delete) the file while it is open here.
-    std::fs::OpenOptions::new().read(true).share_mode(0x1 | 0x2 | 0x4).open(path)
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE: Roblox keeps writing (and may
+        // delete) the file while it is open here.
+        return std::fs::OpenOptions::new().read(true).share_mode(0x1 | 0x2 | 0x4).open(path);
+    }
+    #[cfg(not(windows))]
+    std::fs::OpenOptions::new().read(true).open(path)
 }
 
 #[cfg(test)]
@@ -359,6 +402,17 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("roalt-logwatch-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn cordial_game_lines_drive_the_same_facts() {
+        let mut f = LogFacts::default();
+        parse_line(&format!("[cordial] game: joining server {JOB} of place {PLACE}"), &mut f);
+        assert_eq!((f.job_id.as_deref(), f.place_id, f.in_game), (Some(JOB), Some(PLACE), false));
+        parse_line(&format!("[cordial] game: joined place {PLACE} (universe 1069) as {USER}"), &mut f);
+        assert_eq!((f.in_game, f.place_id, f.user_id), (true, Some(PLACE), Some(USER)));
+        parse_line("[cordial] game: left", &mut f);
+        assert!(f.disconnected && f.left && !f.in_game);
     }
 
     #[test]

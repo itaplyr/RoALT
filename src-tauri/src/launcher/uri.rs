@@ -70,6 +70,35 @@ pub fn player_uri(ticket: &Secret, launch_time_ms: i64, p: &PlaceLaunch, product
     Secret::new(s)
 }
 
+/// The engine's own mobile game-link form, `roblox://experiences/start?placeId=…`, carrying a
+/// server when the target names one. Cordial passes this shape straight to the engine; the
+/// desktop `roblox-player:` form has to be translated first and is more fragile. None for a
+/// follow-user target, which has no place to name.
+pub fn mobile_join_url(join: &Join) -> Option<String> {
+    let place = join.place_id()?;
+    let mut s = format!("roblox://experiences/start?placeId={place}");
+    match join {
+        Join::Game { launch_data, .. } => {
+            if let Some(data) = launch_data.as_deref().filter(|d| !d.is_empty()) {
+                let _ = write!(s, "&launchData={}", encode(data));
+            }
+        }
+        Join::Job { job_id, .. } => {
+            let _ = write!(s, "&gameInstanceId={}", encode(job_id));
+        }
+        Join::Private { link_code, access_code, .. } => {
+            if let Some(code) = access_code.as_deref().filter(|c| !c.is_empty()) {
+                let _ = write!(s, "&accessCode={}", encode(code));
+            }
+            if let Some(code) = link_code.as_deref().filter(|c| !c.is_empty()) {
+                let _ = write!(s, "&linkCode={}", encode(code));
+            }
+        }
+        Join::Follow { .. } => return None,
+    }
+    Some(s)
+}
+
 /// A random 16-digit browser tracker id, unique per launch (the client log names it, which is
 /// how a client is tied back to its account). Kept at or below 2^53 - 1 so JavaScript holds it exactly.
 pub fn new_browser_tracker_id() -> i64 {
@@ -147,6 +176,18 @@ mod tests {
         assert!(place_launcher_url(&launch(&both)).contains("placeId=1&accessCode=x&linkCode=2&joinAttemptId="));
         let empty = Join::Private { place_id: 1, link_code: Some(String::new()), access_code: None };
         assert!(place_launcher_url(&launch(&empty)).contains("placeId=1&joinAttemptId="));
+    }
+
+    #[test]
+    fn mobile_links_carry_the_server() {
+        let job = Join::Job { place_id: 1, job_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into() };
+        assert_eq!(
+            mobile_join_url(&job).as_deref(),
+            Some("roblox://experiences/start?placeId=1&gameInstanceId=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        );
+        let private = Join::Private { place_id: 2, link_code: Some("123".into()), access_code: None };
+        assert_eq!(mobile_join_url(&private).as_deref(), Some("roblox://experiences/start?placeId=2&linkCode=123"));
+        assert_eq!(mobile_join_url(&Join::Follow { user_id: 1 }), None);
     }
 
     #[test]

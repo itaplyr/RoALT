@@ -40,6 +40,16 @@ pub fn roblox_processes() -> Vec<ProcInfo> {
     named(CLIENT_EXE)
 }
 
+/// Windows has no Cordial/cage profiles to scan.
+pub fn profile_of(_pid: u32) -> Option<i64> {
+    None
+}
+
+/// Windows has no Cordial/cage profiles to scan.
+pub fn profiles_by_user() -> Option<std::collections::HashSet<i64>> {
+    None
+}
+
 /// Whether Roblox's own installer runs: it updates the client, then starts it again.
 pub fn installer_running() -> bool {
     !named(INSTALLER_EXE).is_empty()

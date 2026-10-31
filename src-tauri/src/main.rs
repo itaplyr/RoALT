@@ -9,15 +9,31 @@ mod error;
 mod instances;
 mod launcher;
 mod model;
+#[cfg(windows)]
+mod network;
+#[cfg(not(windows))]
+#[path = "network_linux.rs"]
 mod network;
 mod performance;
 mod roblox_api;
 mod rpc;
+#[cfg(windows)]
 mod self_update;
+#[cfg(not(windows))]
+#[path = "self_update_linux.rs"]
+mod self_update;
+#[cfg(windows)]
+mod splash;
+#[cfg(not(windows))]
+#[path = "splash_linux.rs"]
 mod splash;
 mod storage;
 mod tray;
 mod vault;
+#[cfg(windows)]
+mod webview;
+#[cfg(not(windows))]
+#[path = "webview_linux.rs"]
 mod webview;
 
 use std::io::ErrorKind;
@@ -94,9 +110,20 @@ pub struct Location {
     pub moved_from: Option<PathBuf>,
 }
 
-/// `%LOCALAPPDATA%\RoALT`: the data folder unless moved, and where location.json lives.
+/// The data folder unless moved, and where location.json lives.
+#[cfg(windows)]
 pub fn default_dir() -> PathBuf {
     std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join("RoALT")
+}
+
+/// `$XDG_DATA_HOME/roalt` (usually `~/.local/share/roalt`).
+#[cfg(not(windows))]
+pub fn default_dir() -> PathBuf {
+    std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share")))
+        .unwrap_or_else(std::env::temp_dir)
+        .join("roalt")
 }
 
 /// A test run (`ROALT_DATA_DIR`): its data folder can't be moved.
@@ -150,10 +177,25 @@ pub fn write_location(l: &Location) -> std::io::Result<()> {
     std::fs::rename(tmp, dir.join(LOCATION))
 }
 
-/// A path as Windows compares it: absolute, `..` resolved, by component, ignoring case.
-fn path_key(p: &Path) -> Vec<String> {
+/// An absolute path with `.` and `..` resolved lexically (no filesystem or symlink lookup).
+fn normalized(p: &Path) -> PathBuf {
     let p = std::path::absolute(p).unwrap_or_else(|_| p.to_owned());
-    p.components().map(|c| c.as_os_str().to_string_lossy().to_lowercase()).collect()
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            _ => out.push(c.as_os_str()),
+        }
+    }
+    out
+}
+
+/// A path as the app compares it: absolute, `..` resolved, by component, ignoring case.
+fn path_key(p: &Path) -> Vec<String> {
+    normalized(p).components().map(|c| c.as_os_str().to_string_lossy().to_lowercase()).collect()
 }
 
 /// The same folder: judged on disk when both exist (junctions, short names), else by path.
@@ -172,7 +214,7 @@ pub fn move_target(current: &Path, path: &str) -> Result<PathBuf> {
     if !path.is_absolute() {
         return refuse(tr!("Pick a full folder path, like D:\\RoALT."));
     }
-    let target = std::path::absolute(path)?;
+    let target = normalized(path);
     if same_dir(&target, current) {
         return refuse(tr!("RoALT already keeps its data there."));
     }
@@ -271,6 +313,7 @@ fn in_app(url: &url::Url) -> bool {
 
 /// Keeps a folder RoALT creates from being writable by other users of the PC: what lands in it
 /// includes the UI's WebView2 profile. A drive without permissions (exFAT) can't, and is left so.
+#[cfg(windows)]
 pub fn restrict_to_user(dir: &Path) {
     use std::os::windows::process::CommandExt;
     let root = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| r"C:\Windows".into());
@@ -284,6 +327,14 @@ pub fn restrict_to_user(dir: &Path) {
         Ok(o) if o.status.success() => {}
         Ok(o) => log::warn!("could not restrict the data folder: icacls exit {:?}", o.status.code()),
         Err(e) => log::warn!("could not restrict the data folder: {e}"),
+    }
+}
+
+#[cfg(not(windows))]
+pub fn restrict_to_user(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Err(e) = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)) {
+        log::warn!("could not restrict {}: {e}", dir.display());
     }
 }
 
@@ -324,6 +375,7 @@ fn spawn_auto_lock(handle: AppHandle) {
 static LOG_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
 /// A startup failure the user must see: there is no window to show it in.
+#[cfg(windows)]
 fn fatal(message: &str) -> ! {
     use std::io::Write;
     use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
@@ -336,6 +388,23 @@ fn fatal(message: &str) -> ! {
     }
     // SAFETY: a plain modal message box with no owner window.
     unsafe { MessageBoxW(None, &windows::core::HSTRING::from(message), windows::core::w!("RoALT"), MB_ICONERROR | MB_OK) };
+    std::process::exit(1)
+}
+
+/// A startup failure on Linux: stderr, the log, and a desktop dialog when one is available.
+#[cfg(not(windows))]
+fn fatal(message: &str) -> ! {
+    use std::io::Write;
+    log::error!("{message}");
+    eprintln!("RoALT: {message}");
+    if let Some(dir) = LOG_DIR.get()
+        && let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("roalt.log"))
+    {
+        let _ = writeln!(f, "[fatal] {message}");
+    }
+    if std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        let _ = std::process::Command::new("zenity").args(["--error", "--title=RoALT", "--text", message]).status();
+    }
     std::process::exit(1)
 }
 
@@ -719,9 +788,12 @@ mod tests {
         assert!(matches!(move_target(&current, ""), Err(AppError::Invalid(_))));
         assert!(refused(&current));
         assert!(refused(&tmp.join("current")));
-        assert!(refused(&tmp.join(r"current\.\")));
+        #[cfg(windows)]
+        {
+            assert!(refused(&tmp.join(r"current\.\")));
+            assert!(refused(&tmp.join(r"other\..\CURRENT\sub")));
+        }
         assert!(refused(&current.join("sub")));
-        assert!(refused(&tmp.join(r"other\..\CURRENT\sub")));
         for f in DB_FILES {
             let taken = tmp.join(format!("taken-{f}"));
             touch(&taken.join(f));
@@ -729,7 +801,10 @@ mod tests {
         }
 
         // A new folder, or an existing one without a database (other files are fine).
+        #[cfg(windows)]
         let new = tmp.join(r"a\..\new");
+        #[cfg(not(windows))]
+        let new = tmp.join("a").join("..").join("new");
         assert_eq!(move_target(&current, &format!("  {}  ", new.display())).unwrap(), tmp.join("new"));
         let existing = tmp.join("existing");
         touch(&existing.join("notes.txt"));
@@ -754,11 +829,14 @@ mod tests {
         assert_eq!(left(&new), DB_FILES.len());
 
         // Still open elsewhere (no delete sharing, like SQLite's): reported, so it is retried.
-        use std::os::windows::fs::OpenOptionsExt;
-        let held = std::fs::File::options().read(true).share_mode(1).open(old.join(DB_FILE)).unwrap();
-        assert!(!remove_old_db(&new, &old));
-        assert_eq!(left(&old), 1);
-        drop(held);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            let held = std::fs::File::options().read(true).share_mode(1).open(old.join(DB_FILE)).unwrap();
+            assert!(!remove_old_db(&new, &old));
+            assert_eq!(left(&old), 1);
+            drop(held);
+        }
 
         assert!(remove_old_db(&new, &old));
         assert_eq!(left(&old), 0);

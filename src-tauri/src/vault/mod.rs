@@ -11,7 +11,15 @@
 //! Switching mode only re-wraps the data key.
 
 pub mod backup;
+#[cfg(windows)]
 mod dpapi;
+#[cfg(not(windows))]
+#[path = "dpapi_linux.rs"]
+mod dpapi;
+#[cfg(windows)]
+mod hello;
+#[cfg(not(windows))]
+#[path = "hello_linux.rs"]
 mod hello;
 pub mod master;
 

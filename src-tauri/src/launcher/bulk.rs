@@ -64,7 +64,12 @@ fn launching() -> String {
 }
 /// How often a wait looks at the clients and the cancel flag.
 const TICK: Duration = Duration::from_millis(500);
+/// The Windows client's log binding is quick. Cordial/Sober logs use a different format, so on
+/// Linux there is nothing to wait for and the stagger alone spaces launches out.
+#[cfg(windows)]
 const BIND_WAIT: Duration = Duration::from_secs(30);
+#[cfg(not(windows))]
+const BIND_WAIT: Duration = Duration::ZERO;
 const FOLLOW_WAIT: Duration = Duration::from_secs(90);
 const SETTLE_WAIT: Duration = Duration::from_secs(120);
 
@@ -261,7 +266,7 @@ pub fn start(app: AppHandle, mut req: BulkRequest) -> Result<String> {
         if let Some(why) = cant_launch(a.status) {
             return Err(AppError::Invalid(tr!("{name} can't launch: {why}", name = name, why = why)));
         }
-        if s.tracker.has_live_client(id) {
+        if s.tracker.has_live_client_for(id, Some(a.user_id)) {
             return Err(AppError::Invalid(tr!("{name} is already running. Untick it or close its client first.", name = name)));
         }
         accounts.push(Account { id, user_id: a.user_id, name, allow_disconnect: a.allow_disconnect });
@@ -425,7 +430,7 @@ impl Run {
             self.set_stage(i, BulkStage::Ticket);
             let target = target_for(&req.target, server.as_ref());
             let favourite = if started { None } else { req.favourite_id };
-            match crate::commands::launch_tracked(&self.app, &s, a.id, target, favourite, Some(req.delay_ms), req.fps_cap, true).await {
+            match crate::commands::launch_tracked(&self.app, &s, a.id, target, favourite, Some(req.delay_ms), req.fps_cap, true, None).await {
                 Ok((info, inst)) => {
                     started = true;
                     self.update(|p| {

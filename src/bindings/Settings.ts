@@ -11,154 +11,164 @@ import type { Theme } from "./Theme";
  * App settings, stored as one JSON value. New fields need `#[serde(default)]` semantics,
  * which the struct-level default gives.
  */
-export type Settings = { theme: Theme, 
+export type Settings = { theme: Theme,
 /**
  * `#rrggbb`, or "" for the theme's own lime.
  */
-accent: string, 
+accent: string,
 /**
  * How much of the theme's background covers a custom background image, 0-95 %.
  */
-backgroundDim: number, density: Density, 
+backgroundDim: number, density: Density,
 /**
  * Master-password mode only.
  */
-autoLockMinutes: number, clipboardClearSeconds: number, 
+autoLockMinutes: number, clipboardClearSeconds: number,
 /**
  * How long account info is reused before Roblox is asked again.
  */
-cacheMinutes: number, 
+cacheMinutes: number,
 /**
  * Hold Roblox's single-instance lock so several clients can run.
  */
-multiInstance: boolean, 
+multiInstance: boolean,
 /**
  * While multi-instance is on, lock Roblox's shared login files so clients can't
  * overwrite each other's session (teleport error 773, wrong account shown).
  */
-protectSharedLogin: boolean, 
+protectSharedLogin: boolean,
 /**
  * Bulk launch: wait between two launches (±1 s jitter is added), 2 000..=60 000.
  */
-launchDelayMs: number, 
+launchDelayMs: number,
 /**
  * Relaunch a client Roblox disconnects (kicked, server shut down, connection lost; not the
  * player's own Leave or a sign-in elsewhere) into the same target, within the breaker.
  */
-autoRejoin: boolean, 
+autoRejoin: boolean,
 /**
  * Relaunch a client that ended without RoALT closing it or stopped responding (a window
  * closed by hand looks the same, so it is opt-in), within the breaker.
  */
-autoRestartOnCrash: boolean, 
+autoRestartOnCrash: boolean,
 /**
  * Crash breaker: at most this many rejoins and restarts of one account (1..=20) ...
  */
-breakerMax: number, 
+breakerMax: number,
 /**
  * ... within this many minutes (1..=240); then RoALT gives up on it.
  */
-breakerWindowMin: number, 
+breakerWindowMin: number,
 /**
  * How long a closed client gets to exit before it is terminated, 1..=60 s.
  */
-closeGraceS: number, 
+closeGraceS: number,
 /**
  * Extra client arguments after the launch URI (`launcher::launch_args` rules); "" for none.
  */
-launchArgs: string, 
+launchArgs: string,
 /**
  * Closing the window hides it; the tray icon brings it back or quits.
  */
-closeToTray: boolean, 
+closeToTray: boolean,
 /**
  * Open at full size, without the start-up animation (`splash`); from the next start.
  */
-skipSplash: boolean, 
+skipSplash: boolean,
 /**
  * Restart a client whose private memory stays over this many MB (3 samples, 10 s apart),
  * within the breaker; 0: off, else 512..=65 536.
  */
-memRestartMb: number, 
+memRestartMb: number,
 /**
  * Hold a client to a CPU cap (lowering its frame rate) while its private memory is over a limit.
  */
-memThrottle: MemThrottle, 
+memThrottle: MemThrottle,
 /**
  * Trim each client's working set this often (minutes, 0: off) unless its own limits say.
  */
-trimEveryMin: number, 
+trimEveryMin: number,
 /**
  * Give each client its own share of the CPU cores (round-robin) unless its limits say.
  */
-autoSpread: boolean, adaptive: Adaptive, 
+autoSpread: boolean, adaptive: Adaptive,
 /**
  * Outbound limit for all Roblox clients together (a Windows QoS policy, set with admin
  * rights by `bandwidth_apply`, which alone changes this); 0: none.
  */
-bandwidthKbps: number, antiAfk: AntiAfk, 
+bandwidthKbps: number, antiAfk: AntiAfk,
 /**
  * Which events go to the Discord webhook (the webhook itself is in the vault).
  */
-discord: DiscordEvents, 
+discord: DiscordEvents,
 /**
  * Install a new Roblox version on its own once no client runs and no launch or batch does
  * (never over a bootstrapper; the installer is signature-checked as always).
  */
-autoUpdate: boolean, 
+autoUpdate: boolean,
 /**
  * Ask GitHub for a newer RoALT at start and every 6 hours (`self_update`); it is offered,
  * never installed without a click.
  */
-selfUpdate: boolean, 
+selfUpdate: boolean,
 /**
  * Discord rich presence through the Discord app on this PC (`rpc`): "Playing RoALT" with
  * the game and how many alts run.
  */
-discordPresence: boolean, 
+discordPresence: boolean,
 /**
  * Minimize each client (without taking the focus) once, when its window first appears.
  */
-minimizeOnLaunch: boolean, 
+minimizeOnLaunch: boolean,
 /**
  * System-wide key combination for Kill all, like "Ctrl+Shift+F12"; "" for none.
  */
-panicHotkey: string, 
+panicHotkey: string,
 /**
  * Delete old or huge Roblox client logs at start and every hour (`logwatch::clean`).
  */
-cleanLogs: boolean, 
+cleanLogs: boolean,
 /**
  * FPS cap given to each client a launch starts (Roblox's own Maximum Frame Rate,
  * `launcher::client_settings`), unless the account has its own; 0: leave Roblox alone, else 5..=360.
  */
-fpsCap: number, 
+fpsCap: number,
 /**
  * Start clients at Roblox's lowest graphics quality (`launcher::client_settings`).
  */
-lowGraphics: boolean, 
+lowGraphics: boolean,
 /**
  * Start clients with Roblox's allowed lightweight rendering flags (`launcher::flags`): low
  * geometry detail and what `render_flags` picks.
  */
-lighterRendering: boolean, renderFlags: RenderFlags, 
+lighterRendering: boolean, renderFlags: RenderFlags,
 /**
  * RoALT's minimize moves a client off-screen instead (`instances::window`): its preview stays
  * live, but it keeps using the GPU, which a minimized client doesn't.
  */
-parkMinimized: boolean, 
+parkMinimized: boolean,
 /**
  * Width and height "Make it tiny" and "Tile tiny windows" use.
  */
-microWidth: number, microHeight: number, 
+microWidth: number, microHeight: number,
 /**
  * Each new client goes tiny as soon as it has a window, unless its account is Full quality.
  */
-tinyOnLaunch: boolean, 
+tinyOnLaunch: boolean,
+/**
+ * Linux/Cordial: start the client under `cage` with no game window (`cordial-run --headless`).
+ * It keeps running in the background; close it from RoALT. Needs `cage` installed.
+ */
+headless: boolean,
+/**
+ * Linux/Cordial: closing the game window leaves the client running in the background
+ * (`CORDIAL_NO_CLOSE_EXIT=1`). Close it from RoALT when done.
+ */
+keepRunningOnClose: boolean,
 /**
  * Launch on a Public network too (`network`); off: refused. On by default.
  */
-allowPublicNetworks: boolean, 
+allowPublicNetworks: boolean,
 /**
  * UI and message language (`i18n::LANGS`), or "" to follow Windows' display language.
  */

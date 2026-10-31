@@ -2,12 +2,21 @@
 //! resolve the target with that account's cookie, get an authentication ticket, build the
 //! `roblox-player:` URI and start the client. Tickets and URIs are secrets: never logged.
 
+#[cfg(windows)]
 pub mod authenticode;
 pub mod bulk;
+#[cfg(windows)]
+pub mod client;
+#[cfg(not(windows))]
+#[path = "client_linux.rs"]
 pub mod client;
 pub mod client_settings;
 pub mod flags;
 pub mod target;
+#[cfg(windows)]
+pub mod update;
+#[cfg(not(windows))]
+#[path = "update_linux.rs"]
 pub mod update;
 pub mod uri;
 
@@ -144,7 +153,13 @@ fn args_for(s: &App, account_id: i64) -> Result<Vec<String>> {
 /// once the client has started; a task keeps `client_settings::LOCK` until the client has read
 /// the file and the user's own are back, so the next launch waits for that, not the caller.
 /// `AppError::Locked` when the vault is locked; cookie errors as the API client maps them.
-pub async fn launch(s: &App, account_id: i64, target: &LaunchTarget, fps_cap: Option<u32>) -> Result<LaunchInfo> {
+pub async fn launch(
+    s: &App,
+    account_id: i64,
+    target: &LaunchTarget,
+    fps_cap: Option<u32>,
+    headless: bool,
+) -> Result<LaunchInfo> {
     // First: the previous launch's client may still be reading the settings file, and this
     // launch's exe, ticket and start time should come after that wait, not before it.
     let held = client_settings::LOCK.lock().await;
@@ -185,7 +200,22 @@ pub async fn launch(s: &App, account_id: i64, target: &LaunchTarget, fps_cap: Op
         }
     };
     let since = std::time::SystemTime::now();
-    let started = client::start(&exe, &uri::player_uri(&ticket, started_at, &place, production), &args);
+    let mobile = uri::mobile_join_url(&join);
+    let started = client::start(
+        &exe,
+        &uri::player_uri(&ticket, started_at, &place, production),
+        mobile.as_deref(),
+        &args,
+        account_id,
+        account.user_id,
+        &account.username,
+        &account.display_name,
+        &cookie,
+        browser_tracker_id,
+        headless,
+        settings.keep_running_on_close,
+        fps,
+    );
     match &started {
         Ok((pid, pid_start)) if waiting => {
             // A bootstrapper's own process exits by design: only the log tells then.

@@ -329,7 +329,7 @@ async fn attempt(app: &AppHandle, s: &App, r: &Rejoin, user_id: Option<i64>, kil
     }
     // The launch's own FPS cap carries over.
     let fps_cap = s.tracker.get(&r.from).and_then(|i| i.fps_cap);
-    match commands::launch_tracked(app, s, r.account_id, r.target.clone(), None, None, fps_cap, !*closed).await {
+    match commands::launch_tracked(app, s, r.account_id, r.target.clone(), None, None, fps_cap, !*closed, None).await {
         // Close all pressed during the launch: this client goes too.
         Ok((_, inst)) if !s.tracker.is_relaunching(&r.from) => {
             log::debug!("auto-{again} of instance {} dropped during the launch: closing {}", r.from, inst.id);
