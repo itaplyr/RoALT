@@ -85,7 +85,7 @@ export function JoinDialog({ open, onClose, account, accounts, onPick }: {
 
 function Row({ c, account, onPick }: { c: JoinCandidate; account?: AccountSummary; onPick: () => void }) {
   return (
-    <button className="flex items-center gap-3 w-full h-[52px] px-4 border-b border-line text-left hover:bg-hover focus-visible:-outline-offset-2" onClick={onPick}>
+    <button className="flex items-center gap-3 w-full h-[52px] px-4 border-b border-line text-start hover:bg-hover focus-visible:-outline-offset-2" onClick={onPick}>
       {account ? (
         <Avatar account={account} size={28} />
       ) : (

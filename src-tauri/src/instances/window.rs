@@ -1,27 +1,35 @@
-//! A client's window as the dashboard sees it: a small picture of it (`thumbnail`, through
+//! A client's window as the dashboard sees it: a small picture of it (`preview`, through
 //! Windows.Graphics.Capture, `capture`, which copies what the compositor already has, so
 //! nothing is read from the client's memory) and showing, minimizing or bringing it to the front
 //! (`show`), making it small (`micro`, back with the window placement it had) and laying all
 //! of them out in a grid (`tile`). Window calls only (`SetWindowPos` and friends, as dragging a
-//! window's edge does); a minimized client draws nothing and has no picture. `free_resize` gets
-//! past the minimum size Roblox holds its window to; `resize` makes that work for a drag.
+//! window's edge does). `free_resize` gets past the minimum size Roblox holds its window to;
+//! `resize` makes that work for a drag.
+//!
+//! Hiding a client makes it a ghost (`ghost`): it stays where it is, invisible and click-through,
+//! and goes on drawing, so its preview stays live. A minimized client draws nothing, so one nobody
+//! watches goes to sleep that way (`sweep`) and comes back when its preview is asked for (`wake`).
+//! The user gets one back from Home, the taskbar or Alt-Tab (`resize`). A ghost left by a hard kill
+//! stays invisible until RoALT starts again (`recover`).
 
-use std::sync::{Mutex, MutexGuard};
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::Foundation::{COLORREF, HWND, RECT};
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GWL_STYLE, GetClientRect, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, IsIconic, IsZoomed, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_MINIMIZE, SW_RESTORE, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SW_SHOWMINNOACTIVE,
-    SW_SHOWNOACTIVATE, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow, ShowWindowAsync, WINDOWPLACEMENT, WPF_RESTORETOMAXIMIZED,
-    WS_CAPTION, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+    GW_HWNDNEXT, GW_OWNER, GWL_EXSTYLE, GWL_STYLE, GetClientRect, GetForegroundWindow, GetLayeredWindowAttributes, GetShellWindow, GetWindow, GetWindowLongPtrW, GetWindowPlacement,
+    GetWindowRect, HWND_BOTTOM, HWND_TOP, IsIconic, IsWindow, IsWindowVisible, IsZoomed, LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, SetLayeredWindowAttributes,
+    SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow, ShowWindowAsync, WINDOWPLACEMENT, WPF_RESTORETOMAXIMIZED, WS_CAPTION, WS_EX_LAYERED, WS_EX_TRANSPARENT,
+    WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
 };
 
 use super::{afk, process};
 use crate::error::{AppError, Result};
 
 /// One picture: `width` × `height` pixels, RGBA, rows top-down (as canvas `ImageData` wants).
-#[derive(Clone)]
 pub struct Thumb {
     pub width: u32,
     pub height: u32,
@@ -32,129 +40,498 @@ pub struct Thumb {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Show {
-    /// Restored if minimized, then brought to the front.
+    /// Shown if hidden or minimized, then brought to the front.
     Focus,
+    /// Hidden: a ghost, not really minimized (`ghost`).
     Minimize,
+    /// Shown if hidden or minimized, without taking the focus.
     Restore,
 }
 
-/// The client's window at most `max_w` pixels wide (its aspect kept), and whether it is parked
-/// off-screen; None while it is minimized, has no window yet or can't be captured.
-pub fn thumbnail(pid: u32, max_w: u32) -> Option<(Thumb, bool)> {
-    let (hwnd, minimized) = process::main_window(pid)?;
-    if minimized {
-        return None;
+/// A window's newest picture: which one (`seq`, never 0) and when it was taken.
+#[derive(Clone)]
+pub struct Shot {
+    pub thumb: Arc<Thumb>,
+    pub seq: u32,
+    pub at: Instant,
+}
+
+/// Where a client's preview stands; the number is what the dashboard gets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Status {
+    /// It has a window and a picture. The picture may be old: the dashboard gets its age.
+    Live = 0,
+    /// Really minimized (`IsIconic`) and not coming back for now: it isn't responding, or capturing
+    /// doesn't work here. It draws nothing.
+    Minimized = 1,
+    NoWindow = 2,
+    /// It has a window but no picture yet.
+    Pending = 3,
+    /// No picture, and capturing doesn't work here.
+    Unsupported = 4,
+}
+
+/// `minimized`: None without a window (pure).
+pub fn status_of(minimized: Option<bool>, has_shot: bool, unsupported: bool) -> Status {
+    match (minimized, has_shot, unsupported) {
+        (None, ..) => Status::NoWindow,
+        (Some(true), ..) => Status::Minimized,
+        (Some(false), true, _) => Status::Live,
+        (Some(false), false, true) => Status::Unsupported,
+        (Some(false), false, false) => Status::Pending,
     }
-    Some((super::capture::picture(hwnd, max_w)?, is_parked(hwnd)))
 }
 
-/// Where a parked window goes: past any monitor, and not where Windows puts minimized ones.
-const PARK_AT: i32 = -30_000;
-
-/// Where each parked window was (pid, x, y, maximized). In memory only: after RoALT restarts, a
-/// parked client is still recognized by its position (`is_parked`) and comes back at `UNPARK_AT`.
-static PARKED: Mutex<Vec<(u32, i32, i32, bool)>> = Mutex::new(Vec::new());
-const UNPARK_AT: (i32, i32) = (100, 100);
-
-/// A left edge this far out is a parked window, not one on a monitor (pure).
-fn parked_left(left: i32) -> bool {
-    left <= PARK_AT / 2
+pub struct Preview {
+    pub status: Status,
+    pub hidden: bool,
+    pub shot: Option<Shot>,
 }
 
-fn is_parked(hwnd: HWND) -> bool {
-    let mut r = RECT::default();
-    // SAFETY: reads one window's state, its rectangle into a local.
-    unsafe { !IsIconic(hwnd).as_bool() && GetWindowRect(hwnd, &mut r).is_ok() && parked_left(r.left) }
-}
-
-/// Moves the window off-screen instead of minimizing it: it keeps drawing, so its preview stays
-/// live (and it keeps using the GPU). Queued, like a minimize; a hung client is minimized instead,
-/// since getting it out of maximized or minimized would wait for it.
-fn park(pid: u32, hwnd: HWND) {
-    if is_parked(hwnd) {
-        return;
+impl Preview {
+    /// Width, height, status, 1 if hidden else 0, picture number and its age in ms (u32
+    /// little-endian each; the size, number and age are 0 without a picture), then RGBA rows
+    /// top-down, unless the picture is `known` already.
+    pub fn to_bytes(&self, known: u32) -> Vec<u8> {
+        let (w, h, seq, age) = self.shot.as_ref().map_or((0, 0, 0, 0), |s| {
+            (s.thumb.width, s.thumb.height, s.seq, u32::try_from(s.at.elapsed().as_millis()).unwrap_or(u32::MAX))
+        });
+        let rgba = self.shot.as_ref().filter(|s| s.seq != known).map_or(&[][..], |s| &s.thumb.rgba);
+        let mut b = Vec::with_capacity(24 + rgba.len());
+        for v in [w, h, self.status as u32, u32::from(self.hidden), seq, age] {
+            b.extend(v.to_le_bytes());
+        }
+        b.extend_from_slice(rgba);
+        b
     }
+}
+
+/// The client's preview, asking for a newer picture at most `max_w` pixels wide (its aspect kept).
+/// Never waits, for the capture or the client. A minimized client that is asked for comes back as
+/// a ghost (`wake`), and until then shows its last picture; only one that can't (hung, or capturing
+/// doesn't work here, so waking it would buy nothing) says minimized. `pid`: None while only its
+/// bootstrapper is seen.
+pub fn preview(pid: Option<u32>, max_w: u32) -> Preview {
+    let Some((pid, hwnd, iconic)) = pid.and_then(|pid| process::main_window(pid).map(|(hwnd, iconic)| (pid, hwnd, iconic))) else {
+        return Preview { status: status_of(None, false, false), hidden: false, shot: None };
+    };
+    wanted().insert(hwnd.0 as isize, Instant::now());
+    let unsupported = super::capture::unsupported();
+    let waking = iconic && may_wake(pid);
+    if waking {
+        wake(pid, hwnd, false);
+    } else if !iconic {
+        super::capture::request(hwnd, max_w);
+    }
+    let shot = super::capture::last(hwnd);
+    Preview { status: status_of(Some(iconic && !waking), shot.is_some(), unsupported), hidden: is_hidden(hwnd), shot }
+}
+
+/// A ghost: on-screen but drawn at alpha 1 of 255, clicks going through. It keeps drawing, so its
+/// preview stays live (an off-screen client stops delivering pictures; measured).
+const GHOST: u32 = WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0;
+const GHOST_ALPHA: u8 = 1;
+/// An older RoALT parked clients this far left. Only ever read, to bring them back.
+const OLD_PARK_LEFT: i32 = -15_000;
+const OLD_PARK_BACK: (i32, i32) = (100, 100);
+/// A hidden client with no preview request for this long goes to sleep (really minimized).
+const WATCH: Duration = Duration::from_secs(5);
+/// After a minimize starts it may still land, so a restore is sent this many times, this far apart.
+const RESTORE_TRIES: u32 = 3;
+const RESTORE_GAP: Duration = Duration::from_millis(30);
+/// Then this many more gaps for the client to answer before giving up (about 2 s).
+const RESTORE_WAITS: u32 = 66;
+/// Clients coming back to drawing at one time; the rest wait for their next preview request.
+/// ponytail: a client that freezes mid-wake holds its place until it answers; a queue if that bites.
+const MOST_WAKING: usize = 4;
+/// How long Minimize all and Restore all hold their answer back; the clients go on regardless.
+const SHOW_ALL_WAIT: Duration = Duration::from_secs(3);
+
+/// When each window's preview was last asked for, by window.
+static WANTED: LazyLock<Mutex<HashMap<isize, Instant>>> = LazyLock::new(Mutex::default);
+/// Windows `wake` is at, so a client that answers late doesn't get a thread per preview request.
+static WAKING: Mutex<Vec<isize>> = Mutex::new(Vec::new());
+/// The client-area size of each client that is tiny (pid, size): coming back from a minimize
+/// grows it to Roblox's minimum (816 x 638, measured), so it is made tiny again.
+static TINY: Mutex<Vec<(u32, (u32, u32))>> = Mutex::new(Vec::new());
+
+fn wanted() -> MutexGuard<'static, HashMap<isize, Instant>> {
+    WANTED.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn tiny() -> MutexGuard<'static, Vec<(u32, (u32, u32))>> {
+    TINY.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn set_tiny(pid: u32, size: Option<(u32, u32)>) {
+    let mut t = tiny();
+    t.retain(|e| e.0 != pid);
+    if let Some(size) = size {
+        t.push((pid, size));
+    }
+}
+
+/// These extended style bits and this alpha are a ghost's (pure).
+fn ghostly(ex: u32, alpha: u8) -> bool {
+    ex & GHOST == GHOST && alpha == GHOST_ALPHA
+}
+
+/// Both ghost bits, whatever the alpha: a ghost half made (or half undone) draws nothing or takes no
+/// clicks too, so what brings clients back goes by this.
+fn has_ghost_bits(hwnd: HWND) -> bool {
+    // SAFETY: reads one window's style; no message reaches the client.
+    unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & GHOST == GHOST }
+}
+
+/// Whether the window is a ghost, asleep or not. Read from the window itself, so it survives a
+/// restart of RoALT.
+pub fn is_hidden(hwnd: HWND) -> bool {
+    let (mut alpha, mut flags) = (0u8, LAYERED_WINDOW_ATTRIBUTES_FLAGS(0));
+    // SAFETY: reads one window's style and layering into locals; no message reaches the client.
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        ex & GHOST == GHOST
+            && GetLayeredWindowAttributes(hwnd, None, Some(&mut alpha), Some(&mut flags)).is_ok()
+            && flags.0 & LWA_ALPHA.0 != 0
+            && ghostly(ex, alpha)
+    }
+}
+
+/// Makes the window a ghost, at the bottom of the z-order. Changing the style waits for the client.
+/// False if it couldn't be: then it is really minimized, never half a ghost.
+fn ghost(hwnd: HWND) -> bool {
+    if is_hidden(hwnd) {
+        return true;
+    }
+    let_go_of_focus(hwnd);
+    // SAFETY: window-manager calls on a top-level window.
+    unsafe {
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 | GHOST) as isize);
+        if let Err(e) = SetLayeredWindowAttributes(hwnd, COLORREF(0), GHOST_ALPHA, LWA_ALPHA) {
+            log::debug!("ghost: alpha not set: {e}");
+            clear_ghost(hwnd);
+            let _ = ShowWindowAsync(hwnd, SW_SHOWMINNOACTIVE);
+            return false;
+        }
+    }
+    sink(hwnd);
+    true
+}
+
+/// To the bottom of the z-order, so that nothing lands on it when the window above goes away.
+fn sink(hwnd: HWND) {
+    // SAFETY: a window-manager call on a top-level window; queued.
+    let _ = unsafe { SetWindowPos(hwnd, Some(HWND_BOTTOM), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS) };
+}
+
+/// A ghost that came up in the z-order or to the front (anti-AFK, Windows activating the next
+/// window) goes back down and gives up the focus. Nothing for any other window.
+pub fn back_down(hwnd: HWND) {
+    if is_hidden(hwnd) {
+        let_go_of_focus(hwnd);
+        sink(hwnd);
+    }
+}
+
+/// Fully drawn again, whatever becomes of the ghost bits. Doesn't wait for the client (a test says
+/// so), which is why a RoALT that is ending does this first.
+fn opaque(hwnd: HWND) {
+    // SAFETY: a window-manager call on a top-level layered window.
+    if let Err(e) = unsafe { SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA) } {
+        log::debug!("alpha not reset: {e}");
+    }
+}
+
+/// Takes both ghost bits off, leaving the rest of the style. Waits for the client.
+fn clear_ghost(hwnd: HWND) {
+    // SAFETY: changes one top-level window's extended style.
+    unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & !GHOST) as isize) };
+}
+
+/// A ghost that holds the focus would swallow what the user types: the focus goes to the next
+/// ordinary window down, or the desktop if there is none. ponytail: a cloaked window counts as ordinary, then the focus just stays.
+fn let_go_of_focus(hwnd: HWND) {
+    // SAFETY: reads windows' state only.
+    unsafe {
+        if GetForegroundWindow() != hwnd {
+            return;
+        }
+        let mut next = GetWindow(hwnd, GW_HWNDNEXT);
+        while let Ok(w) = next {
+            if IsWindowVisible(w).as_bool() && !IsIconic(w).as_bool() && GetWindow(w, GW_OWNER).is_err() && !is_hidden(w) {
+                afk::to_front(w);
+                return;
+            }
+            next = GetWindow(w, GW_HWNDNEXT);
+        }
+        let desktop = GetShellWindow();
+        if !desktop.is_invalid() {
+            afk::to_front(desktop);
+        }
+    }
+}
+
+/// Hides the client. One that doesn't respond is minimized instead, since changing its style would
+/// wait until it does.
+fn hide(pid: u32, hwnd: HWND) {
     if process::hung(pid) {
         // SAFETY: a window-manager call on a top-level window; posted.
         let _ = unsafe { ShowWindowAsync(hwnd, SW_SHOWMINNOACTIVE) };
         return;
     }
+    ghost(hwnd);
+}
+
+/// Whether a minimized client should come back for its preview: one not responding couldn't, and
+/// where capturing doesn't work it would buy nothing.
+fn may_wake(pid: u32) -> bool {
+    !super::capture::unsupported() && !process::hung(pid)
+}
+
+/// Out of minimized without taking the focus, as it was before (maximized stays so), then waits
+/// for the client. `landing`: a minimize has only just started, so a window that isn't minimized yet
+/// is watched for the first tries and sent the restore as soon as it is.
+fn un_iconify(hwnd: HWND, landing: bool) {
+    for n in 0..RESTORE_TRIES + RESTORE_WAITS {
+        let trying = n < RESTORE_TRIES;
+        // SAFETY: reads one window's state, and a window-manager call on it; posted.
+        unsafe {
+            let iconic = IsIconic(hwnd).as_bool();
+            if !iconic && !(landing && trying) {
+                return;
+            }
+            if iconic && trying {
+                let _ = ShowWindowAsync(hwnd, SW_SHOWNOACTIVATE);
+            }
+        }
+        std::thread::sleep(RESTORE_GAP);
+    }
+}
+
+/// The user sized a tiny client by hand: that is its tiny size now, so coming back doesn't undo it.
+pub fn user_sized(pid: u32, hwnd: HWND) {
     // SAFETY: reads one window's state.
-    let zoomed = unsafe { IsZoomed(hwnd) }.as_bool();
-    normal(hwnd, false);
+    if unsafe { IsIconic(hwnd).as_bool() || IsZoomed(hwnd).as_bool() } {
+        return;
+    }
+    if let Some(size) = client_size(hwnd)
+        && let Some(e) = tiny().iter_mut().find(|e| e.0 == pid)
+    {
+        e.1 = size;
+    }
+}
+
+/// Back to the size "Make it tiny" gave it, unless the user maximized it since. Waits for the client.
+fn back_to_tiny(pid: u32, hwnd: HWND) {
+    let Some(size) = tiny().iter().find(|e| e.0 == pid).map(|e| e.1) else { return };
+    // SAFETY: reads one window's state.
+    if unsafe { IsIconic(hwnd).as_bool() || IsZoomed(hwnd).as_bool() } || client_size(hwnd) == Some(size) {
+        return;
+    }
+    let (fw, fh) = frame(hwnd).unwrap_or((0, 0));
+    free_resize(hwnd, (0, 0, size.0 as i32 + fw, size.1 as i32 + fh), true);
+}
+
+fn waking() -> MutexGuard<'static, Vec<isize>> {
+    WAKING.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Brings a minimized client back to drawing, as a ghost first so that it can't flash on screen.
+/// On a thread of its own: this waits for the client, and a preview request must not. `landing`: see
+/// `un_iconify`. `unhide` takes a window out of `WAKING`: if the user asked for it while the style
+/// change waited, the user wins.
+pub fn wake(pid: u32, hwnd: HWND, landing: bool) {
+    let h = hwnd.0 as isize;
+    {
+        let mut w = waking();
+        if w.contains(&h) || w.len() >= MOST_WAKING {
+            return;
+        }
+        w.push(h);
+    }
+    std::thread::spawn(move || {
+        let hwnd = HWND(h as *mut _);
+        if may_wake(pid) && ghost(hwnd) {
+            let still = waking().contains(&h);
+            if still {
+                un_iconify(hwnd, landing);
+                back_to_tiny(pid, hwnd);
+            } else {
+                clear_ghost(hwnd);
+            }
+        }
+        waking().retain(|w| *w != h);
+    });
+}
+
+/// Whether someone looked at this window's preview lately.
+pub fn watched(hwnd: HWND) -> bool {
+    asked_within(wanted().get(&(hwnd.0 as isize)).copied())
+}
+
+/// `at` is less than `WATCH` ago.
+fn asked_within(at: Option<Instant>) -> bool {
+    at.is_some_and(|t| t.elapsed() < WATCH)
+}
+
+/// One round of the tracker's sweep over its clients (pid, tiny size if it is tiny): hidden clients
+/// nobody watches go to sleep. Not on the poll's thread.
+pub fn sweep(clients: &[(u32, Option<(u32, u32)>)]) {
+    {
+        let mut t = tiny();
+        t.retain(|e| clients.iter().any(|c| c.0 == e.0 && c.1.is_some()));
+        for &(pid, size) in clients {
+            // A size of its own (`micro`) stays; else it is a client from before RoALT restarted.
+            if let Some(size) = size
+                && !t.iter().any(|e| e.0 == pid)
+            {
+                t.push((pid, size));
+            }
+        }
+    }
+    // SAFETY: only asks whether a handle still is a window.
+    wanted().retain(|h, _| unsafe { IsWindow(Some(HWND(*h as *mut _))) }.as_bool());
+    for &(pid, _) in clients {
+        if let Some((hwnd, iconic)) = process::main_window(pid)
+            && !iconic
+            && is_hidden(hwnd)
+            && !watched(hwnd)
+            // SAFETY: reads which window is in front.
+            && unsafe { GetForegroundWindow() } != hwnd
+        {
+            // SAFETY: a window-manager call on a top-level window; posted.
+            let _ = unsafe { ShowWindowAsync(hwnd, SW_SHOWMINNOACTIVE) };
+        }
+    }
+}
+
+/// Shows a client that may be hidden or minimized, without taking the focus. Doing it twice is
+/// doing it once. Waits for the client, except one not responding: what it can't do yet is left
+/// to a thread, which finishes when the client answers.
+pub fn unhide(pid: u32, hwnd: HWND) {
+    waking().retain(|w| *w != hwnd.0 as isize);
+    // SAFETY: reads one window's state.
+    let iconic = unsafe { IsIconic(hwnd) }.as_bool();
+    if !iconic && !has_ghost_bits(hwnd) {
+        return;
+    }
+    if process::hung(pid) {
+        if iconic {
+            // SAFETY: a window-manager call on a top-level window; posted.
+            let _ = unsafe { ShowWindowAsync(hwnd, SW_SHOWNOACTIVATE) };
+        }
+        let h = hwnd.0 as isize;
+        std::thread::spawn(move || clear_ghost(HWND(h as *mut _)));
+        return;
+    }
+    // In this order: a preview asked for a minimized client that is no ghost makes it one again,
+    // and a tiny one comes back big and shrinks while it still can't be seen.
+    un_iconify(hwnd, false);
+    back_to_tiny(pid, hwnd);
+    // Once more: a preview may have started a wake while it was still minimized.
+    waking().retain(|w| *w != hwnd.0 as isize);
+    clear_ghost(hwnd);
+    // SAFETY: a window-manager call on a top-level window; queued.
+    let _ = unsafe { SetWindowPos(hwnd, Some(HWND_TOP), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS) };
+}
+
+/// Runs `each` for every item, each on a thread of its own: a client that doesn't answer holds up
+/// only itself. True if all were done within `limit`; the rest go on regardless.
+fn all_at_once<T: Send + 'static>(items: Vec<T>, limit: Duration, each: fn(T)) -> bool {
+    let (done, finished) = std::sync::mpsc::channel();
+    let left = items.len();
+    for item in items {
+        let done = done.clone();
+        std::thread::spawn(move || {
+            each(item);
+            let _ = done.send(());
+        });
+    }
+    let until = Instant::now() + limit;
+    (0..left).all(|_| finished.recv_timeout(until.saturating_duration_since(Instant::now())).is_ok())
+}
+
+/// Hides or restores these clients (Minimize all, Restore all).
+pub fn show_all(pids: &[u32], what: Show) {
+    let items: Vec<(u32, Show)> = pids.iter().map(|&pid| (pid, what)).collect();
+    all_at_once(items, SHOW_ALL_WAIT, |(pid, what)| {
+        if let Err(e) = show(pid, what) {
+            log::debug!("show all: client {pid}: {e}");
+        }
+    });
+}
+
+/// RoALT is ending: nothing else could find these clients. All are drawn again at once, which needs
+/// no answer from them; a client that answers within `limit` also takes clicks again. Sleeping ones
+/// stay minimized, for the taskbar to bring back.
+pub fn unhide_quickly(pids: &[u32], limit: Duration) {
+    let ghosts: Vec<isize> = pids
+        .iter()
+        .filter_map(|&pid| process::main_window(pid))
+        .filter(|(hwnd, _)| has_ghost_bits(*hwnd))
+        .map(|(hwnd, _)| {
+            opaque(hwnd);
+            hwnd.0 as isize
+        })
+        .collect();
+    if !all_at_once(ghosts, limit, |h| clear_ghost(HWND(h as *mut _))) {
+        log::warn!("a hidden client didn't answer: it takes no clicks until RoALT starts again");
+    }
+}
+
+/// At startup, for what a crash or a kill left behind: ghosts not followed again (`followed`: their
+/// pids) and half-made ones are made plain, and clients an older RoALT parked off-screen come back,
+/// followed or not, since nothing else here could. Each waits for its own client only.
+pub fn recover(followed: &[u32]) {
+    let clients: Vec<(u32, bool)> = process::roblox_processes().into_iter().map(|p| (p.pid, followed.contains(&p.pid))).collect();
+    all_at_once(clients, Duration::ZERO, recover_one);
+}
+
+fn recover_one((pid, followed): (u32, bool)) {
+    let Some((hwnd, iconic)) = process::main_window(pid) else { return };
+    if has_ghost_bits(hwnd) && !(followed && is_hidden(hwnd)) {
+        log::info!("client {pid} was left hidden: showing it");
+        clear_ghost(hwnd);
+    }
+    if iconic {
+        // A minimized window's rectangle says nothing: where it comes back to is in its placement.
+        let mut wp = WINDOWPLACEMENT { length: size_of::<WINDOWPLACEMENT>() as u32, ..Default::default() };
+        // SAFETY: reads and sets one window's placement, through a local with length set.
+        unsafe {
+            if GetWindowPlacement(hwnd, &mut wp).is_ok() && wp.rcNormalPosition.left <= OLD_PARK_LEFT {
+                log::info!("client {pid} would come back off-screen: moving it back");
+                wp.rcNormalPosition = back_from_park(wp.rcNormalPosition);
+                wp.showCmd = SW_SHOWMINNOACTIVE.0 as u32;
+                let _ = SetWindowPlacement(hwnd, &wp);
+            }
+        }
+        return;
+    }
     let mut r = RECT::default();
     // SAFETY: reads one window's rectangle into a local.
-    let (x, y) = match unsafe { GetWindowRect(hwnd, &mut r) } {
-        Ok(()) => (r.left, r.top),
-        Err(e) => {
-            log::debug!("park: client {pid}'s position unreadable: {e}");
-            UNPARK_AT
-        }
-    };
-    {
-        let mut parked = PARKED.lock().unwrap_or_else(|e| e.into_inner());
-        parked.retain(|p| p.0 != pid);
-        parked.push((pid, x, y, zoomed));
-    }
-    // SAFETY: a window-manager call on a top-level window; queued, so a busy client holds up nothing.
-    if let Err(e) = unsafe { SetWindowPos(hwnd, None, PARK_AT, PARK_AT, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS) } {
-        log::debug!("park: client {pid} not moved: {e}");
+    if unsafe { GetWindowRect(hwnd, &mut r) }.is_ok() && r.left <= OLD_PARK_LEFT {
+        log::info!("client {pid} was left off-screen: moving it back");
+        // SAFETY: a window-manager call on a top-level window; queued.
+        let _ = unsafe { SetWindowPos(hwnd, None, OLD_PARK_BACK.0, OLD_PARK_BACK.1, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS) };
     }
 }
 
-/// Brings a parked window back where it was; false if it wasn't parked.
-fn unpark(pid: u32, hwnd: HWND) -> bool {
-    if !is_parked(hwnd) {
-        return false;
-    }
-    let was = {
-        let mut parked = PARKED.lock().unwrap_or_else(|e| e.into_inner());
-        parked.iter().position(|p| p.0 == pid).map(|i| parked.remove(i))
-    };
-    let (x, y, zoomed) = was.map_or((UNPARK_AT.0, UNPARK_AT.1, false), |p| (p.1, p.2, p.3));
-    // SAFETY: window-manager calls on a top-level window; queued.
-    unsafe {
-        if let Err(e) = SetWindowPos(hwnd, None, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS) {
-            log::debug!("unpark: client {pid} not moved: {e}");
-        }
-        if zoomed {
-            let _ = ShowWindowAsync(hwnd, SW_SHOWMAXIMIZED);
-        }
-    }
-    true
+/// The same size where a parked window comes back to (pure).
+fn back_from_park(r: RECT) -> RECT {
+    let (x, y) = OLD_PARK_BACK;
+    RECT { left: x, top: y, right: x + r.right - r.left, bottom: y + r.bottom - r.top }
 }
 
-/// Brings the client back if it is parked (RoALT is closing: nothing could find it otherwise).
-pub fn unpark_client(pid: u32) {
-    if let Some((hwnd, _)) = process::main_window(pid) {
-        unpark(pid, hwnd);
-    }
-}
-
-/// Shows, minimizes or focuses the client's window. Minimize and Restore are queued, so a
-/// busy or hung client holds up nothing; Focus waits, and refuses a client not responding.
-/// `park`: Minimize moves it off-screen instead (`park`), so its preview stays live.
-pub fn show(pid: u32, what: Show, park_it: bool) -> Result<()> {
-    let (hwnd, minimized) = process::main_window(pid).ok_or_else(|| AppError::Invalid(tr!("That client has no window yet.")))?;
-    let queue = |cmd| {
-        // SAFETY: a window-manager call on a top-level window; posted, its return the old visibility.
-        let _ = unsafe { ShowWindowAsync(hwnd, cmd) };
-    };
+/// Hides, shows or focuses the client's window. Hide and Restore hold nothing up for a client that
+/// doesn't respond; Focus refuses one.
+pub fn show(pid: u32, what: Show) -> Result<()> {
+    let (hwnd, _) = process::main_window(pid).ok_or_else(|| AppError::Invalid(tr!("That client has no window yet.")))?;
     match what {
-        Show::Minimize if park_it => park(pid, hwnd),
-        Show::Minimize => queue(SW_MINIMIZE),
-        Show::Restore => {
-            if !unpark(pid, hwnd) {
-                queue(SW_RESTORE);
-            }
-        }
+        Show::Minimize => hide(pid, hwnd),
+        Show::Restore => unhide(pid, hwnd),
         Show::Focus => {
             let hwnd = window_to_change(pid)?;
-            unpark(pid, hwnd);
-            if minimized {
-                // SAFETY: as above; waits, so the window is back before it is brought to the front.
-                let _ = unsafe { ShowWindow(hwnd, SW_RESTORE) };
-            }
+            unhide(pid, hwnd);
             if !afk::to_front(hwnd) {
                 return Err(AppError::Invalid(tr!("Windows didn't let RoALT bring that client to the front.")));
             }
@@ -172,16 +549,11 @@ fn saved() -> MutexGuard<'static, Vec<(String, u32, WINDOWPLACEMENT)>> {
     SAVED.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Minimizes the client without taking the focus (Minimize on launch), or parks it (`park`);
-/// nothing if it has no window or is minimized already.
-pub fn minimize_quietly(pid: u32, park_it: bool) {
+/// Hides the client without taking the focus (Minimize on launch); nothing if it has no window or
+/// is minimized already. Waits for the client.
+pub fn hide_on_launch(pid: u32) {
     if let Some((hwnd, false)) = process::main_window(pid) {
-        if park_it {
-            return park(pid, hwnd);
-        }
-        // SAFETY: a window-manager call on a top-level window; posted (the tracker's poll must not
-        // wait on a client still loading), its return the old visibility.
-        let _ = unsafe { ShowWindowAsync(hwnd, SW_SHOWMINNOACTIVE) };
+        hide(pid, hwnd);
     }
 }
 
@@ -236,7 +608,8 @@ pub fn free_resize(hwnd: HWND, (x, y, w, h): (i32, i32, i32, i32), keep_place: b
 }
 
 /// `on`: remembers where the window is (once per client), then sets its client area to `size`;
-/// off: puts back what was remembered. Returns the client area it ended up with: Roblox may still
+/// off: puts back what was remembered, or 1280 x 720 for a hidden client when nothing was (it stays
+/// hidden). Returns the client area it ended up with: Roblox may still
 /// resize itself, and then it stays bigger than asked; the caller says so.
 pub fn micro(id: &str, pid: u32, on: bool, size: (u32, u32)) -> Result<(u32, u32)> {
     let hwnd = window_to_change(pid)?;
@@ -245,7 +618,11 @@ pub fn micro(id: &str, pid: u32, on: bool, size: (u32, u32)) -> Result<(u32, u32
         normal(hwnd, false);
         let (fw, fh) = frame(hwnd).unwrap_or((0, 0));
         free_resize(hwnd, (0, 0, size.0 as i32 + fw, size.1 as i32 + fh), true);
+        // Only now: until the tracker has it as tiny too, `sweep` would drop it.
+        set_tiny(pid, Some(size));
     } else {
+        set_tiny(pid, None);
+        let hidden = is_hidden(hwnd);
         let before = {
             let mut s = saved();
             let at = s.iter().position(|(i, p, ..)| i == id && *p == pid);
@@ -255,8 +632,17 @@ pub fn micro(id: &str, pid: u32, on: bool, size: (u32, u32)) -> Result<(u32, u32
             wp.showCmd = restore_cmd(wp.showCmd, (wp.flags & WPF_RESTORETOMAXIMIZED).0 != 0);
             // SAFETY: `wp` was filled by GetWindowPlacement for this window, its length set.
             unsafe { SetWindowPlacement(hwnd, &wp) }.map_err(|e| AppError::Internal(tr!("Could not resize that window: {why}", why = e.message())))?;
-        } else if (style_of(hwnd) as u32) & WS_POPUP.0 != 0 {
-            set_style(hwnd, (((style_of(hwnd) as u32) & !WS_POPUP.0) | WS_OVERLAPPEDWINDOW.0) as isize);
+            // Coming back maximized takes the focus.
+            if hidden {
+                let_go_of_focus(hwnd);
+            }
+        } else if hidden || (style_of(hwnd) as u32) & WS_POPUP.0 != 0 {
+            if hidden {
+                un_iconify(hwnd, false);
+            }
+            if (style_of(hwnd) as u32) & WS_POPUP.0 != 0 {
+                set_style(hwnd, (((style_of(hwnd) as u32) & !WS_POPUP.0) | WS_OVERLAPPEDWINDOW.0) as isize);
+            }
             // SAFETY: as above.
             let _ = unsafe { SetWindowPos(hwnd, None, 0, 0, 1280, 720, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED) };
         }
@@ -268,9 +654,9 @@ pub fn micro(id: &str, pid: u32, on: bool, size: (u32, u32)) -> Result<(u32, u32
 /// the monitor `near` is on: with `micro`, client areas of that size left to right and top to
 /// bottom (more than fit start over at the top, overlapping), each remembered as `micro` does;
 /// else cells sized so all fit, each as big as a 4:3 picture can be, and that is its normal size
-/// from then on (what `micro` remembered is dropped). Minimized clients stay
-/// minimized (Restore all first to include them), as do ones without a window or not
-/// responding. Returns the ids laid out.
+/// from then on (what `micro` remembered is dropped). Hidden and minimized clients stay so (Restore
+/// all first to include them), as do ones without a window or not responding. Returns the ids laid
+/// out.
 pub fn tile(clients: &[(String, u32)], near: HWND, micro: Option<(u32, u32)>) -> Vec<String> {
     let mut mi = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
     // SAFETY: reads the monitor nearest to a window into a local with cbSize set; with
@@ -283,7 +669,7 @@ pub fn tile(clients: &[(String, u32)], near: HWND, micro: Option<(u32, u32)>) ->
     let wins: Vec<(&str, u32, HWND)> = clients
         .iter()
         .filter_map(|(id, pid)| match process::main_window(*pid) {
-            Some((hwnd, false)) if !process::hung(*pid) => Some((id.as_str(), *pid, hwnd)),
+            Some((hwnd, false)) if !is_hidden(hwnd) && !process::hung(*pid) => Some((id.as_str(), *pid, hwnd)),
             _ => None,
         })
         .collect();
@@ -291,6 +677,7 @@ pub fn tile(clients: &[(String, u32)], near: HWND, micro: Option<(u32, u32)>) ->
     let cell = micro.and_then(|(w, h)| wins.first().and_then(|c| frame(c.2)).map(|(fw, fh)| (w as i32 + fw, h as i32 + fh)));
     let cells = grid(wins.len(), (w.left, w.top, w.right - w.left, w.bottom - w.top), cell);
     for (&(id, pid, hwnd), &(x, y, cw, ch)) in wins.iter().zip(&cells) {
+        set_tiny(pid, micro);
         if micro.is_some() {
             remember(id, pid, hwnd);
         } else {
@@ -489,11 +876,161 @@ mod tests {
     }
 
     #[test]
-    fn tells_a_parked_window_from_one_on_a_monitor() {
-        assert!(parked_left(PARK_AT));
-        assert!(!parked_left(-1920), "a monitor to the left");
-        assert!(!parked_left(-7680), "several of them");
-        assert!(!parked_left(0));
+    fn a_ghost_goes_and_comes_back_with_the_rest_of_its_style() {
+        use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, WNDCLASSW, WS_EX_TOOLWINDOW};
+        use windows::core::w;
+        unsafe extern "system" fn plain(hwnd: HWND, msg: u32, w: windows::Win32::Foundation::WPARAM, l: windows::Win32::Foundation::LPARAM) -> windows::Win32::Foundation::LRESULT {
+            // SAFETY: the default for everything.
+            unsafe { DefWindowProcW(hwnd, msg, w, l) }
+        }
+        let pid = std::process::id();
+        // SAFETY: a private hidden window of this thread, destroyed at the end.
+        unsafe {
+            let class = WNDCLASSW { lpfnWndProc: Some(plain), lpszClassName: w!("roalt-test-ghost"), ..Default::default() };
+            RegisterClassW(&class);
+            let hwnd = CreateWindowExW(WS_EX_TOOLWINDOW, w!("roalt-test-ghost"), w!("t"), WS_OVERLAPPEDWINDOW, 0, 0, 400, 300, None, None, None, None).unwrap();
+            let ex = || GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+            let before = ex();
+            assert!(!is_hidden(hwnd));
+
+            hide(pid, hwnd);
+            assert!(is_hidden(hwnd), "read from the window itself");
+            hide(pid, hwnd);
+            assert_eq!(ex(), before | GHOST, "twice is once");
+
+            unhide(pid, hwnd);
+            assert!(!is_hidden(hwnd));
+            assert_eq!(ex(), before, "the rest of its style stays");
+            unhide(pid, hwnd);
+            assert_eq!(ex(), before, "twice is once");
+
+            // Half made: nothing says hidden, and it still comes back.
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (before | GHOST) as isize);
+            assert!(!is_hidden(hwnd));
+            unhide(pid, hwnd);
+            assert_eq!(ex(), before, "by the bits alone");
+
+            // Layered for a reason of its own: no ghost.
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (before | GHOST) as isize);
+            SetLayeredWindowAttributes(hwnd, COLORREF(0), 200, LWA_ALPHA).unwrap();
+            assert!(!is_hidden(hwnd));
+            DestroyWindow(hwnd).unwrap();
+        }
+    }
+
+    #[test]
+    fn the_alpha_changes_without_the_client_answering() {
+        use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, WINDOW_EX_STYLE, WNDCLASSW};
+        use windows::core::w;
+        unsafe extern "system" fn plain(hwnd: HWND, msg: u32, w: windows::Win32::Foundation::WPARAM, l: windows::Win32::Foundation::LPARAM) -> windows::Win32::Foundation::LRESULT {
+            // SAFETY: the default for everything.
+            unsafe { DefWindowProcW(hwnd, msg, w, l) }
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        // A window whose thread pumps no messages, as a stalled client's.
+        let stalled = std::thread::spawn(move || {
+            // SAFETY: a private hidden window of this thread, destroyed at the end.
+            unsafe {
+                let class = WNDCLASSW { lpfnWndProc: Some(plain), lpszClassName: w!("roalt-test-stalled"), ..Default::default() };
+                RegisterClassW(&class);
+                let hwnd = CreateWindowExW(WINDOW_EX_STYLE(GHOST), w!("roalt-test-stalled"), w!("t"), WS_OVERLAPPEDWINDOW, 0, 0, 400, 300, None, None, None, None).unwrap();
+                SetLayeredWindowAttributes(hwnd, COLORREF(0), GHOST_ALPHA, LWA_ALPHA).unwrap();
+                tx.send(hwnd.0 as isize).unwrap();
+                std::thread::sleep(Duration::from_millis(1500));
+                DestroyWindow(hwnd).unwrap();
+            }
+        });
+        let hwnd = HWND(rx.recv().unwrap() as *mut _);
+        assert!(is_hidden(hwnd));
+        let at = Instant::now();
+        opaque(hwnd);
+        assert!(at.elapsed() < Duration::from_millis(750), "took {:?}", at.elapsed());
+        assert!(!is_hidden(hwnd) && has_ghost_bits(hwnd));
+        stalled.join().unwrap();
+    }
+
+    #[test]
+    fn one_slow_item_holds_up_only_itself() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static DONE: AtomicU32 = AtomicU32::new(0);
+        let slow = |ms: u64| {
+            std::thread::sleep(Duration::from_millis(ms));
+            DONE.fetch_add(1, Ordering::SeqCst);
+        };
+        let at = Instant::now();
+        assert!(!all_at_once(vec![1500, 0, 0, 0], Duration::from_millis(400), slow), "not all in time");
+        assert!(at.elapsed() < Duration::from_millis(1000), "the wait has a limit");
+        assert_eq!(DONE.load(Ordering::SeqCst), 3, "the others are done");
+        assert!(all_at_once(vec![0, 0], Duration::from_secs(5), slow));
+        assert!(all_at_once(Vec::<u64>::new(), Duration::ZERO, slow), "nothing to do");
+    }
+
+    #[test]
+    fn a_parked_window_comes_back_the_same_size() {
+        let r = back_from_park(RECT { left: -30_000, top: 40, right: -29_200, bottom: 640 });
+        assert_eq!((r.left, r.top, r.right, r.bottom), (100, 100, 900, 700));
+    }
+
+    #[test]
+    fn tells_a_ghost_by_both_bits_and_its_alpha() {
+        assert!(ghostly(GHOST, GHOST_ALPHA));
+        assert!(ghostly(GHOST | 0x100, GHOST_ALPHA), "whatever else it has");
+        assert!(!ghostly(WS_EX_LAYERED.0, GHOST_ALPHA));
+        assert!(!ghostly(WS_EX_TRANSPARENT.0, GHOST_ALPHA));
+        assert!(!ghostly(GHOST, 255));
+    }
+
+    #[test]
+    fn a_client_is_watched_for_a_while_after_its_preview_was_asked_for() {
+        assert!(!asked_within(None));
+        assert!(asked_within(Some(Instant::now())));
+        assert!(!asked_within(Instant::now().checked_sub(WATCH)));
+    }
+
+    #[test]
+    fn the_sweep_keeps_a_tiny_size_of_its_own_and_forgets_the_rest() {
+        // Pids no window has: nothing is touched.
+        set_tiny(4_000_001, Some((100, 80)));
+        sweep(&[(4_000_001, Some((320, 240))), (4_000_002, Some((320, 240))), (4_000_003, None)]);
+        let of = |pid| tiny().iter().find(|e| e.0 == pid).map(|e| e.1);
+        assert_eq!(of(4_000_001), Some((100, 80)), "the size it was made tiny at");
+        assert_eq!(of(4_000_002), Some((320, 240)), "from before RoALT restarted");
+        tiny().iter_mut().find(|e| e.0 == 4_000_001).unwrap().1 = (500, 400);
+        sweep(&[(4_000_001, Some((320, 240))), (4_000_002, Some((320, 240)))]);
+        assert_eq!(of(4_000_001), Some((500, 400)), "a size the user dragged it to stays too");
+        assert_eq!(of(4_000_003), None);
+        sweep(&[(4_000_001, None)]);
+        assert_eq!(of(4_000_001), None, "back to normal");
+        assert_eq!(of(4_000_002), None, "gone");
+    }
+
+    #[test]
+    fn says_why_there_is_no_live_picture() {
+        assert_eq!(status_of(None, false, true), Status::NoWindow);
+        assert_eq!(status_of(Some(true), true, false), Status::Minimized, "only a real minimize says so, old picture or not");
+        assert_eq!(status_of(Some(true), false, true), Status::Minimized);
+        assert_eq!(status_of(Some(false), true, true), Status::Live);
+        assert_eq!(status_of(Some(false), false, false), Status::Pending, "a first frame or a timeout isn't minimized");
+        assert_eq!(status_of(Some(false), false, true), Status::Unsupported);
+    }
+
+    #[test]
+    fn sends_the_pixels_only_of_a_new_picture() {
+        let at = Instant::now().checked_sub(std::time::Duration::from_secs(2)).unwrap();
+        let shot = Shot { thumb: Arc::new(Thumb { width: 1, height: 2, rgba: vec![9; 8] }), seq: 7, at };
+        let p = Preview { status: Status::Minimized, hidden: true, shot: Some(shot) };
+        let word = |b: &[u8], i: usize| u32::from_le_bytes(b[i * 4..i * 4 + 4].try_into().unwrap());
+
+        let new = p.to_bytes(6);
+        assert_eq!(new.len(), 24 + 8);
+        assert_eq!((word(&new, 0), word(&new, 1), word(&new, 2), word(&new, 3), word(&new, 4)), (1, 2, 1, 1, 7));
+        assert!(word(&new, 5) >= 2000, "the age");
+        assert_eq!(&new[24..], [9; 8]);
+
+        assert_eq!(p.to_bytes(7).len(), 24, "known: the header alone");
+        let none = Preview { status: Status::NoWindow, hidden: false, shot: None }.to_bytes(0);
+        assert_eq!(none.len(), 24);
+        assert_eq!(word(&none, 2), 2);
     }
 
     #[test]

@@ -168,15 +168,15 @@ export const api = {
   instanceTrim: (id: string) => invoke<void>("instance_trim", { id }),
   /** Opts one running client in or out of anti-AFK. */
   instanceSetAntiAfk: (id: string, enabled: boolean) => invoke<void>("instance_set_anti_afk", { id, enabled }),
-  /** A picture of the client's window at most maxW wide: width, height (u32 LE), then RGBA; empty while minimized or windowless. */
-  instanceThumbnail: (id: string, maxW: number) => invoke<ArrayBuffer>("instance_thumbnail", { id, maxW }),
+  /** The client's preview at most maxW wide: always a 24-byte header, then RGBA unless its picture number is `known` or it has no picture (`window::Preview::to_bytes`). */
+  instanceThumbnail: (id: string, maxW: number, known: number) => invoke<ArrayBuffer>("instance_thumbnail", { id, maxW, known }),
   /** Brings the client's window to the front, minimizes or restores it. */
   instanceShow: (id: string, what: WindowShow) => invoke<void>("instance_show", { id, what }),
   /** Minimizes or restores every running client's window. */
   instancesShowAll: (what: Exclude<WindowShow, "focus">) => invoke<void>("instances_show_all", { what }),
   /** Makes the client's window 320×240 (or puts it back); resolves to the client area it got, [w, h]. */
   instanceMicro: (id: string, on: boolean, size?: [number, number]) => invoke<[number, number]>("instance_micro", { id, on, size }),
-  /** Lays every running, unminimized client out in a grid on RoALT's monitor; how many it laid out. */
+  /** Lays every running client that isn't hidden or minimized out in a grid on RoALT's monitor; how many it laid out. */
   instancesTile: (micro: boolean) => invoke<number>("instances_tile", { micro }),
   /** CPU, memory and IO of each running client (sampled at most every 2 s). */
   instancesMetrics:() => invoke<ClientMetrics[]>("instances_metrics"),

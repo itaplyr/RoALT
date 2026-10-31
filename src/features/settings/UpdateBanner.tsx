@@ -45,7 +45,7 @@ export function UpdateBanner() {
   }
 
   return (
-    <div role="status" className="enter panel flex-none flex flex-wrap items-center gap-x-4 gap-y-2 mx-3 mt-1 mb-2 pl-4 pr-3 py-2">
+    <div role="status" className="enter panel flex-none flex flex-wrap items-center gap-x-4 gap-y-2 mx-3 mt-1 mb-2 ps-4 pe-3 py-2">
       <Icon name="download" />
       <span className="flex-1 min-w-0">
         {tx("settings.updateReady", { version: <span className="mono">{version}</span> })}

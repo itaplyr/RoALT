@@ -5,10 +5,12 @@ import { qk, queryClient, useAccounts, useGroups, useInstances, useSetSettings, 
 import { AccountsView } from "./features/accounts/AccountsView";
 import { AddAccountDialog, type Tab as AddTab } from "./features/accounts/AddAccountDialog";
 import { DashboardView } from "./features/dashboard/DashboardView";
+import { useHomeTabs } from "./features/dashboard/homeLayout";
 import { DiscordView } from "./features/discord/DiscordView";
 import { PerformanceView } from "./features/performance/PerformanceView";
 import { DebugView } from "./features/debug/DebugView";
 import { lastLaunchAccount, LaunchView } from "./features/launch/LaunchView";
+import { DonateDialog } from "./features/donate/DonateDialog";
 import { isLive, isRunning, KillAllButton } from "./features/launch/Running";
 import { draftFor, EMPTY_DRAFT, type Draft } from "./features/launch/target";
 import { MonitorView } from "./features/monitor/MonitorView";
@@ -178,6 +180,7 @@ function Shell({ vault, settings, onRecoveryCode }: { vault: VaultStatus; settin
   const instances = useInstances().data ?? [];
   const running = instances.filter(isRunning).length;
   const [view, setView] = useState<"dashboard" | "accounts" | "launch" | "performance" | "servers" | "monitor" | "discord" | "debug" | "settings">("dashboard");
+  const [donating, setDonating] = useState(false);
   const [group, setGroup] = useState<number | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   // The Launch view's accounts; the last one launched until something else is picked.
@@ -187,6 +190,7 @@ function Shell({ vault, settings, onRecoveryCode }: { vault: VaultStatus; settin
   });
   const [sameServer, setSameServer] = useState<SameServer>("off");
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
+  const homeTabs = useHomeTabs(accounts.data);
   // Kept here so a launch in flight survives leaving the view.
   const [launchStep, setLaunchStep] = useState<string | null>(null);
   // The game the Servers view shows.
@@ -318,7 +322,7 @@ function Shell({ vault, settings, onRecoveryCode }: { vault: VaultStatus; settin
             <span className="flex-1 min-w-0 truncate">{t("app.nav.performance")}</span>
           </button>
           <button className="nav-item" aria-expanded={showTools} onClick={() => setToolsOpen(!showTools)}>
-            <Icon name="chevron" className={showTools ? "" : "-rotate-90"} />
+            <Icon name="chevron" className={showTools ? "" : "-rotate-90 rtl:rotate-90"} />
             <span className="flex-1 min-w-0 truncate">{t("app.nav.moreTools")}</span>
           </button>
           {showTools && (
@@ -346,10 +350,11 @@ function Shell({ vault, settings, onRecoveryCode }: { vault: VaultStatus; settin
             <span className="flex-1 min-w-0 truncate">{t("app.nav.settings")}</span>
           </button>
           {view === "settings" && (
-            <div className="enter flex flex-col pl-7 pt-1">
+            <div className="enter flex flex-col ps-7 pt-1">
               {SETTINGS_SECTIONS.map(([id, label]) => (
                 <button key={id} className="sub" onClick={() => {
                   const to = document.getElementById(id);
+                  to?.closest("details")?.setAttribute("open", "");
                   to?.scrollIntoView({ block: "start" });
                   to?.setAttribute("tabindex", "-1");
                   to?.focus({ preventScroll: true });
@@ -361,6 +366,11 @@ function Shell({ vault, settings, onRecoveryCode }: { vault: VaultStatus; settin
           )}
         </div>
         <div className="flex-none flex flex-col gap-3.5 px-3 pt-3 pb-4">
+          <button className="btn w-full" onClick={() => setDonating(true)}>
+            <Icon name="heart" size={14} />
+            {t("donate.button")}
+          </button>
+          <DonateDialog open={donating} onClose={() => setDonating(false)} />
           <KillAllButton />
           <p className="flex items-center gap-2 text-[13px] text-dim" title={vault.mode === "master" ? t("app.vaultUnlockedMaster") : t("app.vaultUnlockedDpapi")}>
             <Icon name="lock" size={14} />
@@ -372,7 +382,7 @@ function Shell({ vault, settings, onRecoveryCode }: { vault: VaultStatus; settin
 
       <div className="sheet">
       {view === "dashboard" ? (
-        <DashboardView accounts={accounts.data} onLaunch={() => setView("launch")} onAdd={() => openAdd()} onImport={() => openAdd("many")} onAccounts={showAll} />
+        <DashboardView accounts={accounts.data} home={homeTabs} onLaunch={() => setView("launch")} onAdd={() => openAdd()} onImport={() => openAdd("many")} onAccounts={showAll} />
       ) : view === "accounts" ? (
         <AccountsView
           accounts={accounts.data}

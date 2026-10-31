@@ -318,13 +318,23 @@ Metrics and limits keep the handle rules of §6 Launch: each sample or change op
 checked against the client's start time, with only the right it needs: `PROCESS_QUERY_LIMITED_INFORMATION`
 for metrics (CPU from `GetProcessTimes` deltas, memory from `K32GetProcessMemoryInfo`, IO from
 `GetProcessIoCounters`, cached 2 s), `PROCESS_SET_QUOTA` for the working-set trim (`K32EmptyWorkingSet`:
-Windows pages memory out, nothing is read), `PROCESS_SET_INFORMATION` for affinity and efficiency mode.
+Windows pages memory out, nothing is read), `PROCESS_SET_INFORMATION` for affinity and efficiency mode
+(EcoQoS with timer resolution requests ignored, below-normal priority, very low memory priority).
 Never `PROCESS_VM_READ` or `PROCESS_DUP_HANDLE`; only the CPU-cap job handle is kept.
 
-Adaptive manager (opt-in): each tick the pid owning the foreground window keeps its limits lifted; every
-other client gets the background limits (default CPU cap 25 % and efficiency mode). A client with its own
-limits keeps them. The default trim interval and auto-spread affinity (cores round-robin, first 53 cores)
-fill in where a client sets nothing.
+Each tick `limits::plan` lifts some clients: the pid owning the foreground window, clients loading (up to
+120 s for a first load, 60 s for a teleport), hung ones and Full quality accounts keep only the limits set
+on them by hand. Every other client gets, where it sets nothing of its own: the adaptive manager's
+background limits (opt-in; default CPU cap 25 % and efficiency mode); the default trim, the first one 120 s
+after it is set, at most one trim per poll, and never sooner than an interval after the client's last; and
+auto-spread affinity (cores round-robin, first 64 cores), only when each client can have two cores, unless
+its CPU cap failed and a pin is all that's left. The fair CPU cap (opt-in) is `max(75/n, ⌈25/cores⌉)` percent
+of all cores for `n` clients, tightening the adaptive cap. The memory throttle (on commit size) applies on
+top of all this, lifted clients included.
+
+A job can't be reached again once RoALT's handle is gone. On exit RoALT takes its limits off; a client
+followed again after RoALT restarted gets its efficiency mode and cores reset, but after a kill or a panic
+its old CPU cap stays until it closes, with any new job nested inside it.
 
 Bandwidth limit (the one system change, opt-in): Apply runs a fixed PowerShell script elevated through
 `ShellExecuteExW` with `runas` (a UAC prompt each time; never on its own), with only the range-checked
@@ -332,8 +342,21 @@ integer rate inserted. It sets the outbound QoS policy `RoALT-Roblox` for the Ro
 so Windows drops it on restart; status can't be read back without admin, so RoALT records the boot it was
 applied in and asks the user to apply again after a restart.
 
+A hidden client (Minimize, Minimize all, Minimize on launch) is a ghost: `WS_EX_LAYERED | WS_EX_TRANSPARENT`,
+alpha 1, bottom of the z-order, in place on-screen, because a client moved off-screen stops delivering
+pictures. It draws while its preview is asked for and is really minimized 5 s after the last request. It comes
+back through Restore, Show, the taskbar or Alt-Tab, never because it came to the front by itself. A press on the
+taskbar, or on a caption-less window of the taskbar's process (the thumbnails of grouped buttons, whose class differs
+between builds), counts as asking for 1 s; minimizing the window that was in front at the press uses it up. A ghost
+that comes to the front unasked (Windows activating the next window, Win+number, keyboard Task View) goes back to the
+bottom and gives up the focus after 300 ms, so Win+number can't bring a ghost back; anti-AFK is exempt during its press
+and sinks the ghost after it. The state is read from the window, so it survives a restart of RoALT, and clean exit and
+panics clear it: alpha first, which needs no answer from the client, then the bits, each client on its own thread. A
+hard kill with RoALT not reopened leaves the client invisible until the next start, which clears ghosts it doesn't
+follow again (half-made ones too, by the bits alone).
+
 Anti-AFK (opt-in) uses `SendInput`, so it needs the client in front: it runs only after 5 s with no
-user input (`GetLastInputInfo`), skips minimized clients, and takes the focus with `SetForegroundWindow`,
+user input (`GetLastInputInfo`), skips minimized clients (hidden ones asleep too), and takes the focus with `SetForegroundWindow`,
 then `AttachThreadInput`, then after a zero-movement mouse input that lifts the foreground lock (not an
 ALT tap, which opens menus). Space goes out by scan code only while the client is confirmed in front,
 then the previous window gets the focus back. Our own injection also moves `GetLastInputInfo`, so any

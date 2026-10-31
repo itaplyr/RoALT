@@ -349,7 +349,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
               {needsSignIn > 0 && <> · <span className="text-orange">{t("accounts.toast.needSignIn", { count: needsSignIn })}</span></>}
             </p>
           </div>
-          <div className="ml-auto flex flex-wrap gap-3">
+          <div className="ms-auto flex flex-wrap gap-3">
             <button className="btn" onClick={() => !validate.isPending && validate.mutate(undefined)} disabled={validate.isPending || !accounts.length} title={t("accounts.validateAllHint", { keys: "Ctrl+R" })}>
               <Icon name="refresh" size={14} className={validate.isPending ? "spin" : ""} />
               {validate.isPending ? t("accounts.validating") : t("accounts.validateAll")}
@@ -422,12 +422,12 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
             </div>
 
             <div className="flex-[1_0_300px] min-h-0 flex">
-            <div className="panel flex-1 min-w-0 flex flex-col overflow-hidden p-2 mr-3">
+            <div className="panel flex-1 min-w-0 flex flex-col overflow-hidden p-2 me-3">
             <div className="scroll flex-1 min-h-0">
               <table className="w-full border-separate border-spacing-0">
                 <thead>
                   <tr>
-                    <th className="w-[68px] pl-[35px] rounded-tl-[14px]">
+                    <th className="w-[68px] ps-[35px] rounded-ss-[14px]">
                       <input
                         type="checkbox"
                         className="cb"
@@ -468,7 +468,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
                           setMenu({ account: a, x: e.clientX, y: e.clientY });
                         }}
                       >
-                        <td className="pl-3">
+                        <td className="ps-3">
                           <div className="flex items-center gap-[5px]">
                             <button
                               type="button"
@@ -494,7 +494,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
                             />
                           </div>
                         </td>
-                        <td className="pr-3 max-w-0">
+                        <td className="pe-3 max-w-0">
                           <div className="flex items-center gap-2.5 min-w-0">
                             <Avatar account={a} size={compact ? 22 : 28} />
                             <div className={compact ? "flex items-baseline gap-2 min-w-0" : "flex flex-col min-w-0 leading-tight"}>
@@ -509,7 +509,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
                             </div>
                           </div>
                         </td>
-                        <td className="pr-3 max-w-0 hidden @3xl:table-cell">
+                        <td className="pe-3 max-w-0 hidden @3xl:table-cell">
                           <Status
                             status={a.status}
                             presence={presence?.get(a.id)}
@@ -517,7 +517,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
                             detail={!compact && a.statusCheckedAt ? ago(a.statusCheckedAt, now) : undefined}
                           />
                         </td>
-                        <td className="pr-3 hidden @5xl:table-cell">
+                        <td className="pe-3 hidden @5xl:table-cell">
                           <div className="flex flex-wrap gap-1">
                             {a.groupIds.flatMap((gid) => groupById.get(gid) ?? []).map((g) => (
                               <span key={g.id} className="tag">
@@ -527,7 +527,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
                             ))}
                           </div>
                         </td>
-                        <td className="pr-2">
+                        <td className="pe-2">
                           <span className="flex items-center justify-end gap-1">
                             <button
                               type="button"
@@ -582,7 +582,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
 
         <footer className="h-7 flex-none flex items-center gap-4 px-3 text-xs text-dim">
           <span>{lastChecked ? t("accounts.validatedAgo", { when: ago(lastChecked, now) }) : t("accounts.notValidated")}</span>
-          <span className="mono ml-auto">v{import.meta.env.APP_VERSION}</span>
+          <span className="mono ms-auto">v{import.meta.env.APP_VERSION}</span>
         </footer>
             </div>
       {current && <Divider panel={detail} side="right" label={t("accounts.detailsWidth")} />}
@@ -594,7 +594,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
           onFocusCapture={() => setSelected(current.id)}
           aria-label={t("accounts.details")}
           style={{ width: detail.width, maxWidth: "40cqw" }}
-          className="panel scroll flex-none ml-3">
+          className="panel scroll flex-none ms-3">
           <DetailPanel
             account={current}
             groups={groups}
@@ -648,7 +648,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
               <Icon name="trash" size={14} />
               {t("common.remove")}
             </button>
-            <button className="btn ml-auto" onClick={() => setChecked(new Set())}>{t("accounts.clear")}</button>
+            <button className="btn ms-auto" onClick={() => setChecked(new Set())}>{t("accounts.clear")}</button>
           </div>
         )}
           </>

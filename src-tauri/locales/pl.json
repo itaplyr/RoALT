@@ -142,7 +142,7 @@
   "Closed unexpectedly": "Nieoczekiwanie zamknięty",
   "Not responding": "Nie odpowiada",
   "Closed": "Zamknięty",
-  "Used {mb} MB of private memory": "Zużył {mb} MB pamięci prywatnej",
+  "Commit size reached {mb} MB": "Rozmiar zatwierdzenia osiągnął {mb} MB",
   "Replaced by another Roblox client": "Zastąpiony przez inny klient Roblox",
   "That client has no window yet.": "Ten klient nie ma jeszcze okna.",
   "Windows didn't let RoALT bring that client to the front.": "Windows nie pozwolił RoALT wysunąć tego klienta na wierzch.",

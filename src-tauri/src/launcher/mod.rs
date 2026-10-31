@@ -191,7 +191,7 @@ pub async fn launch(
         (true, false) => flags::apply(&exe.path, &settings.render_flags),
     };
     let waiting = undo.is_some() || flags.is_some();
-    let put_back = move || {
+    let put_back = move |undo: Option<client_settings::Undo>| {
         if let Some(undo) = undo {
             undo.put_back();
         }
@@ -221,14 +221,24 @@ pub async fn launch(
             // A bootstrapper's own process exits by design: only the log tells then.
             let client = (!exe.bootstrapper).then_some((*pid, *pid_start));
             tauri::async_runtime::spawn(async move {
+                let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let keeping = undo.map(|undo| {
+                    let stop = stop.clone();
+                    tokio::task::spawn_blocking(move || undo.keep_until(&stop))
+                });
                 client_settings::wait_until_read(browser_tracker_id, since, client).await;
-                if let Err(e) = tokio::task::spawn_blocking(put_back).await {
+                stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                let undo = match keeping {
+                    Some(k) => k.await.inspect_err(|e| log::warn!("Roblox settings: keeping this launch's values failed: {e}")).ok(),
+                    None => None,
+                };
+                if let Err(e) = tokio::task::spawn_blocking(move || put_back(undo)).await {
                     log::warn!("Roblox settings: putting the user's own back failed: {e}");
                 }
                 drop(held);
             });
         }
-        _ => put_back(),
+        _ => put_back(undo),
     }
     let (pid, pid_start) = started?;
 

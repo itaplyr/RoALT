@@ -47,7 +47,7 @@ export function RecoveryCodeDialog({ code, onClose }: { code: string | null; onC
             {t("vault.recovery.saveFile")}
           </button>
         </div>
-        <ul className="list-disc pl-4 flex flex-col gap-1.5 text-[13px] text-dim">
+        <ul className="list-disc ps-4 flex flex-col gap-1.5 text-[13px] text-dim">
           <li>{t("vault.recovery.limitFile")}</li>
           <li>{t("vault.recovery.limitPc")}</li>
         </ul>

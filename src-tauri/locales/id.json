@@ -142,7 +142,7 @@
   "Closed unexpectedly": "Tertutup tiba-tiba",
   "Not responding": "Tidak merespons",
   "Closed": "Ditutup",
-  "Used {mb} MB of private memory": "Memakai {mb} MB memori privat",
+  "Commit size reached {mb} MB": "Ukuran commit mencapai {mb} MB",
   "Replaced by another Roblox client": "Digantikan oleh klien Roblox lain",
   "That client has no window yet.": "Klien itu belum memiliki jendela.",
   "Windows didn't let RoALT bring that client to the front.": "Windows tidak mengizinkan RoALT membawa klien itu ke depan.",

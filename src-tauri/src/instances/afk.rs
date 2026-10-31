@@ -4,8 +4,10 @@
 //! - Focus: the client is brought to the front for a moment, gets the press through `SendInput`
 //!   of Space (by scan code, as a keyboard sends it), and the window that was in front gets the focus
 //!   back. One client at a time, about 100 ms each. Only while nobody has touched the keyboard or
-//!   mouse for 5 s (`GetLastInputInfo`); otherwise it tries again 30 s later. Minimized clients
-//!   are skipped.
+//!   mouse for 5 s (`GetLastInputInfo`); otherwise it tries again 30 s later. Hidden clients
+//!   (`window`) get it, invisibly, while they draw; really minimized ones are skipped, and that
+//!   includes hidden ones asleep because nobody watches them, so Background suits many clients.
+//!   A hidden one goes back to the bottom of the z-order after its press.
 //! - Background: WM_ACTIVATE, then WM_KEYDOWN/WM_KEYUP for Tab are posted to the client's
 //!   window; the focus never moves, so it runs while the user is at the PC and in minimized
 //!   clients too. Roblox may not count posted input as activity in every game.
@@ -13,6 +15,7 @@
 //! Nothing is injected into or read from the client; auto-rejoin on the 267 kick stays the
 //! fallback.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -29,7 +32,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_ACTIVATE, WM_KEYDOWN, WM_KEYUP,
 };
 
-use super::process;
+use super::{process, window};
 use crate::App;
 use crate::commands::{instances_changed, now_ms};
 use crate::model::AfkMode;
@@ -45,6 +48,8 @@ const SPACE: u16 = 0x39;
 /// Tab, for background mode: posted Space counts as activity less reliably than Tab.
 const TAB: u16 = 0x0F;
 const VK_TAB: usize = 0x09;
+/// A press is under way: a hidden client in front is this, not something to get away from (`resize`).
+pub(super) static PRESSING: AtomicBool = AtomicBool::new(false);
 
 /// A client anti-AFK may press keys in (`Tracker::afk_clients`).
 #[derive(Clone, Debug, PartialEq)]
@@ -186,8 +191,16 @@ enum Pressed {
     Interrupted,
 }
 
-/// Space in `hwnd`, then the focus back where it was.
+/// Space in `hwnd`, then the focus back where it was, and a hidden client back down.
 fn press(hwnd: HWND) -> Pressed {
+    PRESSING.store(true, Ordering::Relaxed);
+    let pressed = press_key(hwnd);
+    window::back_down(hwnd);
+    PRESSING.store(false, Ordering::Relaxed);
+    pressed
+}
+
+fn press_key(hwnd: HWND) -> Pressed {
     // SAFETY: reads which window is in front.
     let prev = unsafe { GetForegroundWindow() };
     if !to_front(hwnd) {

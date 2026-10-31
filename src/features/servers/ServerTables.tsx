@@ -18,7 +18,7 @@ function Players({ playing, max }: { playing: number; max: number }) {
           style={{ width: `${Math.min(100, (playing / (max || 1)) * 100)}%`, background: playing >= max ? "var(--orange)" : "var(--text)" }}
         />
       </div>
-      <span className="mono text-xs w-11 text-right">{playing}/{max}</span>
+      <span className="mono text-xs w-11 text-end">{playing}/{max}</span>
     </div>
   );
 }
@@ -29,11 +29,11 @@ export function PublicTable({ servers, pick, onPick }: { servers: GameServer[]; 
     <table className="w-full min-w-[560px] border-collapse" aria-label={t("servers.publicServers")}>
       <thead>
         <tr>
-          <th className="w-12 pl-6"><span className="sr-only">{t("servers.pick")}</span></th>
+          <th className="w-12 ps-6"><span className="sr-only">{t("servers.pick")}</span></th>
           <th className="label">{t("servers.jobId")}</th>
           <th className="label w-[34%]">{t("servers.players")}</th>
-          <th className="label text-right">{t("servers.ping")}</th>
-          <th className="label text-right pr-4">FPS</th>
+          <th className="label text-end">{t("servers.ping")}</th>
+          <th className="label text-end pe-4">FPS</th>
           <th className="w-16"><span className="sr-only">{t("servers.actions")}</span></th>
         </tr>
       </thead>
@@ -42,17 +42,17 @@ export function PublicTable({ servers, pick, onPick }: { servers: GameServer[]; 
           const id = short(s.id);
           return (
             <tr key={s.id} className="row h-11 cursor-pointer" data-selected={pick === s.id || undefined} onClick={() => onPick(s.id)}>
-              <td className="pl-6">
+              <td className="ps-6">
                 <input type="radio" className="radio" name="server" aria-label={t("servers.pickServer", { id })} checked={pick === s.id} onChange={() => onPick(s.id)} />
               </td>
               <td className="mono text-xs">{id}</td>
               <td><Players playing={s.playing} max={s.maxPlayers} /></td>
-              <td className="mono text-xs text-right">{s.ping === null ? "—" : t("servers.pingMs", { ms: s.ping })}</td>
-              <td className="mono text-xs text-right pr-4">{s.fps === null ? "—" : fmtNum(s.fps, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</td>
-              <td className="pr-4">
+              <td className="mono text-xs text-end">{s.ping === null ? "—" : t("servers.pingMs", { ms: s.ping })}</td>
+              <td className="mono text-xs text-end pe-4">{s.fps === null ? "—" : fmtNum(s.fps, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</td>
+              <td className="pe-4">
                 <button
                   type="button"
-                  className="wc w-9 h-8 ml-auto"
+                  className="wc w-9 h-8 ms-auto"
                   aria-label={t("servers.copyJobIdFor", { id })}
                   title={t("servers.copyJobId")}
                   onClick={(e) => {
@@ -78,11 +78,11 @@ export function PrivateTable({ servers, pick, onPick }: { servers: PrivateServer
     <table className="w-full min-w-[560px] border-collapse" aria-label={t("servers.privateServers")}>
       <thead>
         <tr>
-          <th className="w-12 pl-6"><span className="sr-only">{t("servers.pick")}</span></th>
+          <th className="w-12 ps-6"><span className="sr-only">{t("servers.pick")}</span></th>
           <th className="label">{t("servers.name")}</th>
           <th className="label">{t("servers.owner")}</th>
           <th className="label w-[30%]">{t("servers.players")}</th>
-          <th className="label text-right pr-6">{t("servers.access")}</th>
+          <th className="label text-end pe-6">{t("servers.access")}</th>
         </tr>
       </thead>
       <tbody>
@@ -96,7 +96,7 @@ export function PrivateTable({ servers, pick, onPick }: { servers: PrivateServer
               data-selected={pick === s.vipServerId || undefined}
               onClick={() => can && onPick(s.vipServerId)}
             >
-              <td className="pl-6">
+              <td className="ps-6">
                 <input
                   type="radio"
                   className="radio"
@@ -107,10 +107,10 @@ export function PrivateTable({ servers, pick, onPick }: { servers: PrivateServer
                   onChange={() => onPick(s.vipServerId)}
                 />
               </td>
-              <td className="pr-3 max-w-0 truncate" title={name}>{name}</td>
-              <td className="pr-3 max-w-0 truncate text-dim">{s.ownerName ? `@${s.ownerName}` : "—"}</td>
+              <td className="pe-3 max-w-0 truncate" title={name}>{name}</td>
+              <td className="pe-3 max-w-0 truncate text-dim">{s.ownerName ? `@${s.ownerName}` : "—"}</td>
               <td><Players playing={s.playing} max={s.maxPlayers} /></td>
-              <td className={`text-right pr-6 ${can ? "" : "text-dim"}`}>{can ? t("servers.joinable") : t("servers.noAccess")}</td>
+              <td className={`text-end pe-6 ${can ? "" : "text-dim"}`}>{can ? t("servers.joinable") : t("servers.noAccess")}</td>
             </tr>
           );
         })}

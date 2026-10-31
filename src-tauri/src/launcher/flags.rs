@@ -65,6 +65,9 @@ fn flags_of(r: &RenderFlags) -> Vec<(&'static str, &'static str)> {
     if r.lowest_frm {
         f.push(("DFIntDebugFRMQualityLevelOverride", "1"));
     }
+    if r.pause_voxelizer {
+        f.push(("DFFlagDebugPauseVoxelizer", "True"));
+    }
     f
 }
 
@@ -249,6 +252,8 @@ mod tests {
         assert_eq!(has(RenderFlags { gray_sky: true, ..d }, "FFlagDebugSkyGray"), Some("True"));
         assert_eq!(has(RenderFlags { no_grass: false, ..d }, "FIntFRMMinGrassDistance"), None);
         assert_eq!(has(RenderFlags { lowest_frm: false, ..d }, "DFIntDebugFRMQualityLevelOverride"), None);
+        assert_eq!(has(d, "DFFlagDebugPauseVoxelizer"), None);
+        assert_eq!(has(RenderFlags { pause_voxelizer: true, ..d }, "DFFlagDebugPauseVoxelizer"), Some("True"));
         assert_eq!(has(RenderFlags { mode: RenderMode::Vulkan, ..d }, MODES[1]), Some("True"));
 
         // Only one mode: a chosen one replaces the user's own, and none leaves it.

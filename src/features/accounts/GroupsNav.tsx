@@ -46,15 +46,15 @@ export function GroupChips({ groups, accounts, active, onPick }: {
               setEditing(g.id);
             }}
           >
-            <button className="chip pr-9" aria-pressed={active === g.id} onClick={() => onPick(active === g.id ? null : g.id)}>
+            <button className="chip pe-9" aria-pressed={active === g.id} onClick={() => onPick(active === g.id ? null : g.id)}>
               <span aria-hidden="true" className="w-2.5 h-2.5 flex-none rounded-full" style={{ background: groupColor(g) }} />
               <span className="max-w-[180px] truncate">{g.name}</span>
-              <span className="mono absolute right-3 text-xs text-dim group-hover:opacity-0 group-has-[.wc:focus-visible]:opacity-0">
+              <span className="mono absolute end-3 text-xs text-dim group-hover:opacity-0 group-has-[.wc:focus-visible]:opacity-0">
                 {accounts.filter((a) => a.groupIds.includes(g.id)).length}
               </span>
             </button>
             <button
-              className="wc w-8 h-8 absolute right-1 top-1.5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+              className="wc w-8 h-8 absolute end-1 top-1.5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
               aria-label={t("accounts.groups.edit", { name: g.name })}
               title={t("accounts.groups.editHint")}
               onClick={() => setEditing(g.id)}

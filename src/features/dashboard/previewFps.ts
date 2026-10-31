@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 /** Live preview frame rates; the choice is remembered on this PC and shared by the Dashboard and
  * the Performance tab. */
-export const PREVIEW_FPS = [15, 30, 60] as const;
+export const PREVIEW_FPS = [5, 15, 30, 60] as const;
 export type PreviewFps = (typeof PREVIEW_FPS)[number];
 const KEY = "roalt.previewFps";
 const CHANGED = "roalt:previewFps";

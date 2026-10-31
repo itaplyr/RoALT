@@ -142,7 +142,7 @@
   "Closed unexpectedly": "Stängdes oväntat",
   "Not responding": "Svarar inte",
   "Closed": "Stängd",
-  "Used {mb} MB of private memory": "Använde {mb} MB privat minne",
+  "Commit size reached {mb} MB": "Allokerad storlek nådde {mb} MB",
   "Replaced by another Roblox client": "Ersatt av en annan Roblox-klient",
   "That client has no window yet.": "Klienten har inget fönster än.",
   "Windows didn't let RoALT bring that client to the front.": "Windows lät inte RoALT ta fram klienten.",

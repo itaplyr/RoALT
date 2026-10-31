@@ -187,7 +187,7 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
     <main className="scroll flex-1 min-w-0 flex flex-col">
       <div className="flex-none flex flex-wrap items-center gap-x-5 gap-y-3 px-8 pt-3 pb-4">
         {g ? <GameHead game={g} /> : <h1 className="page-title">{t("servers.title")}</h1>}
-        <form className="flex flex-col gap-1.5 ml-auto flex-[0_1_260px] min-w-[220px]" onSubmit={(e) => void load(e)}>
+        <form className="flex flex-col gap-1.5 ms-auto flex-[0_1_260px] min-w-[220px]" onSubmit={(e) => void load(e)}>
           <div className="flex gap-2">
             <label htmlFor="servers-game" className="sr-only">{t("servers.gameInput")}</label>
             <input
@@ -253,7 +253,7 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
                 </span>
               </>
             )}
-            <span className="flex items-center gap-3 ml-auto">
+            <span className="flex items-center gap-3 ms-auto">
               {list.isFetching ? (
                 <span className="mono text-xs text-dim">{t("servers.loadingLower")}</span>
               ) : (
@@ -325,7 +325,7 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace, onBa
                 <span className="text-dim">{t("servers.noValidAccount")}</span>
               )}
               <button
-                className="btn btn-primary ml-auto"
+                className="btn btn-primary ms-auto"
                 disabled={!canJoin}
                 title={target ? (blocked ?? undefined) : t("servers.pickServerFirst")}
                 onClick={() => void join()}

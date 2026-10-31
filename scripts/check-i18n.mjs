@@ -8,7 +8,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const root = join(import.meta.dirname, "..");
-const LANGS = ["bs", "de", "id", "pl", "ru", "sv", "tr"];
+const LANGS = ["ar", "bs", "de", "es", "fil", "fr", "id", "ja", "ko", "pl", "pt", "ru", "sv", "th", "tr", "vi", "zh"];
 const PLURAL = /_(zero|one|two|few|many|other)$/;
 const read = (p) => JSON.parse(readFileSync(join(root, p), "utf8"));
 const categories = (lang) => [...new Set(Array.from({ length: 200 }, (_, n) => new Intl.PluralRules(lang).select(n)))].sort();

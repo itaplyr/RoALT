@@ -143,10 +143,10 @@
   :root[data-bg] :is(.panel, .well, .btn, .field, [popover], dialog) {
     text-shadow: none;
   }
-  :root[data-bg] header .wc svg {
+  :root[data-bg] :is(header .wc, .sheet summary) svg {
     filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.8));
   }
-  :root[data-bg][data-theme="light"] header .wc svg {
+  :root[data-bg][data-theme="light"] :is(header .wc, .sheet summary) svg {
     filter: drop-shadow(0 1px 2px rgb(255 255 255 / 0.85));
   }
   :root[data-bg] :is([popover], dialog) {
@@ -277,7 +277,8 @@
     flex: 1;
     min-width: 0;
     display: flex;
-    margin: 0 10px 10px 0;
+    margin-block: 0 10px;
+    margin-inline: 0 10px;
     border: 1px solid var(--line);
     border-radius: 16px;
     background: var(--bg);
@@ -393,7 +394,7 @@
     padding: 10px 14px;
     justify-content: flex-start;
     gap: 12px;
-    text-align: left;
+    text-align: start;
     white-space: normal;
   }
   .pick:disabled {
@@ -407,7 +408,7 @@
     gap: 12px;
     padding: 18px;
     border-radius: 18px;
-    text-align: left;
+    text-align: start;
     white-space: normal;
   }
   .tick {
@@ -598,7 +599,7 @@
     content: "";
     position: absolute;
     top: 3px;
-    left: 3px;
+    inset-inline-start: 3px;
     width: 20px;
     height: 20px;
     border-radius: 50%;
@@ -616,6 +617,9 @@
     transform: translateX(22px);
     background: var(--on-ink);
     border-color: transparent;
+  }
+  :root[dir="rtl"] .switch[aria-checked="true"]::after {
+    transform: translateX(-22px);
   }
 
   .range {
@@ -706,7 +710,7 @@
     border-radius: 12px;
     color: var(--dim);
     font-weight: 500;
-    text-align: left;
+    text-align: start;
     transition:
       box-shadow 0.14s var(--ease),
       color 0.16s var(--ease);
@@ -738,7 +742,7 @@
     padding: 6px 12px;
     border-radius: 8px;
     color: var(--dim);
-    text-align: left;
+    text-align: start;
   }
   .sub:hover {
     color: var(--text);
@@ -796,7 +800,7 @@
   }
   .badge {
     position: absolute;
-    left: 14px;
+    inset-inline-start: 14px;
     top: 14px;
     padding: 2px 8px;
     border-radius: 8px;
@@ -805,6 +809,103 @@
     font-size: 12px;
     font-weight: 500;
     box-shadow: var(--raise-sm);
+  }
+  /* Tiles on Home are dragged by a grip on the picture. */
+  .tile:hover .grip {
+    opacity: 1;
+  }
+  .tile .grip {
+    position: absolute;
+    inset-inline-end: 14px;
+    top: 14px;
+    border-radius: 8px;
+    background: var(--bg);
+    box-shadow: var(--raise-sm);
+  }
+  .size-handle {
+    position: absolute;
+    inset-inline-end: 1px;
+    bottom: 1px;
+    width: 18px;
+    height: 18px;
+    display: grid;
+    place-content: center;
+    border-end-end-radius: 20px;
+    color: var(--dim);
+    opacity: 0;
+    cursor: nwse-resize;
+    touch-action: none;
+  }
+  :root[dir="rtl"] .size-handle {
+    cursor: nesw-resize;
+  }
+  :root[dir="rtl"] .size-handle svg {
+    transform: scaleX(-1);
+  }
+  .tile:hover .size-handle,
+  .size-handle:focus-visible {
+    opacity: 1;
+  }
+  .tile-drag {
+    z-index: 2;
+    opacity: 0.92;
+  }
+  .tile[data-drop]::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: var(--focus);
+  }
+  .tile[data-drop="before"]::before {
+    inset-inline-start: -13px;
+  }
+  .tile[data-drop="after"]::before {
+    inset-inline-end: -13px;
+  }
+
+  /* One row however many tabs; the padding keeps focus rings and shadows from being cut off. */
+  .tab-strip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    margin: -6px;
+    padding: 6px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  /* Home's tabs: opaque faces, so they read over a background picture. */
+  .tab {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    max-width: 240px;
+    min-height: 40px;
+    border: 1px solid var(--line-strong);
+    border-radius: 10px;
+    background: var(--face);
+    color: var(--text);
+    box-shadow: var(--raise-sm);
+  }
+  .tab:has([aria-selected="true"]) {
+    background: var(--bg);
+    color: var(--accent-text);
+    border-color: var(--accent-text);
+    box-shadow: var(--press);
+  }
+  .tab > [role="tab"] {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    min-height: 38px;
+    padding: 0 12px;
+    border-radius: inherit;
+    color: inherit;
+    font-weight: 500;
   }
 
   /* Dials and meters */
@@ -857,7 +958,7 @@
     background: var(--panel);
   }
   .linkbtn {
-    text-align: left;
+    text-align: start;
   }
   .linkbtn:hover {
     text-decoration: underline;
@@ -891,6 +992,9 @@
   .step-live {
     background: linear-gradient(90deg, var(--accent-text) 50%, var(--line) 50%);
     box-shadow: none;
+  }
+  :root[dir="rtl"] .step-live {
+    background: linear-gradient(-90deg, var(--accent-text) 50%, var(--line) 50%);
   }
   .step-fail {
     background: var(--orange);
@@ -941,10 +1045,12 @@
     border-color: transparent;
   }
   .row > td:first-child {
-    border-radius: 14px 0 0 14px;
+    border-start-start-radius: 14px;
+    border-end-start-radius: 14px;
   }
   .row > td:last-child {
-    border-radius: 0 14px 14px 0;
+    border-start-end-radius: 14px;
+    border-end-end-radius: 14px;
   }
   .compact .row {
     height: 44px;
@@ -988,7 +1094,7 @@
     background: var(--raised);
     border-bottom: 1px solid var(--line);
     color: var(--dim);
-    text-align: left;
+    text-align: start;
   }
 
   /* Native <dialog>: fades and rises in, and out again (allow-discrete keeps it in the top layer). */
@@ -1078,7 +1184,7 @@
     min-height: 40px;
     padding: 0 10px;
     border-radius: 10px;
-    text-align: left;
+    text-align: start;
   }
   .menu-item:hover:not(:disabled) {
     background: var(--hover);
@@ -1092,7 +1198,8 @@
     align-items: flex-start;
     gap: 10px;
     width: 340px;
-    padding: 12px 8px 12px 14px;
+    padding-block: 12px;
+    padding-inline: 14px 8px;
     border: 1px solid var(--line-strong);
     border-radius: 14px;
     background: var(--raised);
@@ -1117,6 +1224,9 @@
     opacity: 0;
     transform: translateX(12px);
   }
+  :root[dir="rtl"] .toast-leave {
+    transform: translateX(-12px);
+  }
 
   /* Windows contrast themes drop shadows and author colours, which is how states show here. */
   @media (forced-colors: active) {
@@ -1134,6 +1244,7 @@
     /* Adjust none: else the browser puts its own Canvas plate behind the text. */
     .seg[aria-pressed="true"],
     .seg[aria-checked="true"],
+    .tab:has([aria-selected="true"]),
     .chip[aria-pressed="true"],
     .chip[data-on],
     .nav-item[aria-current="page"],
@@ -1270,6 +1381,59 @@
   transform-origin: left;
   animation: drain 20s linear forwards;
 }
+:root[dir="rtl"] .drain {
+  transform-origin: right;
+}
+/* Numbers, IDs and links read left to right in every language. */
+.mono {
+  unicode-bidi: plaintext;
+}
+input.mono,
+textarea.mono {
+  direction: ltr;
+  text-align: left;
+}
+/* "Hold to stop all": fills with a bright edge, its label presses in and trembles near the end, and
+   it drains if let go. The label and not the button: a moving edge would slip out from under the
+   pointer and end the hold. */
+.hold-label {
+  display: inline-block;
+}
+.hold-btn[data-held] .hold-label {
+  animation: hold-tremble var(--hold) linear forwards;
+}
+.hold-fill {
+  position: absolute;
+  inset: 0;
+  transform: scaleX(0);
+  transform-origin: left;
+  background: linear-gradient(to right, color-mix(in srgb, var(--err) 22%, transparent) 88%, color-mix(in srgb, var(--err) 70%, transparent));
+  transition: transform 0.22s var(--ease);
+}
+:root[dir="rtl"] .hold-fill {
+  transform-origin: right;
+  background: linear-gradient(to left, color-mix(in srgb, var(--err) 22%, transparent) 88%, color-mix(in srgb, var(--err) 70%, transparent));
+}
+.hold-btn[data-held] .hold-fill {
+  transform: scaleX(1);
+  transition: transform var(--hold) linear;
+}
+.hold-btn[data-busy] .hold-fill {
+  transform: scaleX(1);
+  animation: hold-busy 0.9s ease-in-out infinite;
+}
+@keyframes hold-tremble {
+  0%, 64% { transform: scale(0.975); }
+  70% { transform: scale(0.975) translateX(-0.5px); }
+  76% { transform: scale(0.975) translateX(0.5px); }
+  82% { transform: scale(0.97) translateX(-1px); }
+  88% { transform: scale(0.97) translateX(1px); }
+  94% { transform: scale(0.965) translateX(-1.5px); }
+  100% { transform: scale(0.965) translateX(1.5px); }
+}
+@keyframes hold-busy {
+  50% { opacity: 0.45; }
+}
 
 /* Not the start-up splash: it plays whatever Windows' animation effects are set to. */
 @media (prefers-reduced-motion: reduce) {
@@ -1282,5 +1446,9 @@
   }
   .scroll {
     scroll-behavior: auto;
+  }
+  /* How far the hold has got isn't decoration. */
+  .hold-btn[data-held] .hold-fill {
+    transition: transform var(--hold) linear !important;
   }
 }

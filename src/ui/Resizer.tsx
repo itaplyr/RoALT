@@ -1,5 +1,5 @@
 import { useEffect, useState, type KeyboardEvent, type PointerEvent } from "react";
-import { t } from "../i18n";
+import { isRtl, t } from "../i18n";
 
 const KEY = "roalt.width.";
 
@@ -33,7 +33,8 @@ export function Divider({ panel, side, label }: {
   side: "left" | "right";
   label: string;
 }) {
-  const sign = side === "left" ? 1 : -1;
+  // `side` as in a left-to-right language; right to left, the layout has mirrored.
+  const sign = (side === "left") !== isRtl() ? 1 : -1;
   // A view switch mid-drag removes this before the pointer comes up.
   useEffect(() => () => void (document.body.style.cursor = ""), []);
 
@@ -74,7 +75,7 @@ export function Divider({ panel, side, label }: {
       onPointerDown={drag}
       onDoubleClick={panel.reset}
       onKeyDown={key}
-      className="relative z-10 w-0 flex-none outline-none cursor-col-resize before:absolute before:inset-y-0 before:-left-[3px] before:w-[6px] before:content-[''] hover:before:bg-line-strong focus-visible:before:bg-accent-text"
+      className="relative z-10 w-0 flex-none outline-none cursor-col-resize before:absolute before:inset-y-0 before:-start-[3px] before:w-[6px] before:content-[''] hover:before:bg-line-strong focus-visible:before:bg-accent-text"
     />
   );
 }

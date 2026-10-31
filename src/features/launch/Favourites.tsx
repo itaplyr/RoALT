@@ -54,12 +54,12 @@ export function FavouritesRow({ accounts, active, onPick }: {
             openMenu(f);
           }}
         >
-          <button className="btn max-w-full pr-10" aria-pressed={active === f.id} onClick={() => onPick(f)}>
+          <button className="btn max-w-full pe-10" aria-pressed={active === f.id} onClick={() => onPick(f)}>
             <Icon name="star" size={14} fill />
             <span className="truncate max-w-[260px]" title={f.name}>{f.name}</span>
           </button>
           <button
-            className="wc w-8 h-8 absolute right-1.5 top-1.5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+            className="wc w-8 h-8 absolute end-1.5 top-1.5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
             aria-label={t("launch.fav.renameOrDeleteName", { name: f.name })}
             title={t("launch.fav.renameOrDelete")}
             onClick={() => openMenu(f)}

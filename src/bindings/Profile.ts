@@ -6,7 +6,7 @@ import type { RenderFlags } from "./RenderFlags";
 /**
  * The settings a profile carries; None: not in it (left as it is).
  */
-export type Profile = { fpsCap?: number, lowGraphics?: boolean, lighterRendering?: boolean, renderFlags?: RenderFlags, minimizeOnLaunch?: boolean, parkMinimized?: boolean, microWidth?: number, microHeight?: number, tinyOnLaunch?: boolean, memRestartMb?: number, memThrottle?: MemThrottle, trimEveryMin?: number, autoSpread?: boolean, adaptive?: Adaptive, 
+export type Profile = { fpsCap?: number, lowGraphics?: boolean, lighterRendering?: boolean, renderFlags?: RenderFlags, minimizeOnLaunch?: boolean, microWidth?: number, microHeight?: number, tinyOnLaunch?: boolean, memRestartMb?: number, memThrottle?: MemThrottle, trimEveryMin?: number, autoSpread?: boolean, fairCap?: boolean, adaptive?: Adaptive,
 /**
  * The Dashboard's preview frame rate (this PC's UI keeps it, not the settings).
  */

@@ -23,10 +23,11 @@ export function TitleBar({ dark, onToggleTheme, onLock, onRefresh }: {
   }, [win]);
 
   return (
-    <header data-tauri-drag-region="deep" className="h-11 flex-none flex items-center gap-2.5 pl-[18px]">
+    // Left to right in every language: the window's keys stay where Windows has them.
+    <header dir="ltr" data-tauri-drag-region="deep" className="h-11 flex-none flex items-center gap-2.5 ps-[18px]">
       <Logo />
       <span className="font-bold tracking-[0.02em]">RoALT</span>
-      <div className="ml-auto flex items-center">
+      <div className="ms-auto flex items-center">
         {onRefresh && (
           <button className="wc" aria-label={t("ui.refresh")} title={t("ui.refreshKey", { key: "F5" })} onClick={onRefresh}>
             <Icon name="refresh" className={fetching ? "spin" : ""} />

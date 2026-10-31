@@ -86,7 +86,7 @@ impl Sampler {
                 instance_id: id.clone(),
                 pid: *pid,
                 cpu_pct: rate(|r| r.cpu).map(|t| (t / hz / cores * 100.0).min(100.0)),
-                working_set_mb: r.working_set as f64 / MB,
+                memory_mb: r.working_set as f64 / MB,
                 private_mb: r.private as f64 / MB,
                 read_bps: rate(|r| r.read),
                 write_bps: rate(|r| r.write),

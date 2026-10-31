@@ -142,7 +142,7 @@
   "Closed unexpectedly": "Beklenmedik şekilde kapandı",
   "Not responding": "Yanıt vermiyor",
   "Closed": "Kapatıldı",
-  "Used {mb} MB of private memory": "{mb} MB özel bellek kullandı",
+  "Commit size reached {mb} MB": "Yürütme boyutu {mb} MB'a ulaştı",
   "Replaced by another Roblox client": "Başka bir Roblox istemcisi yerini aldı",
   "That client has no window yet.": "Bu istemcinin henüz penceresi yok.",
   "Windows didn't let RoALT bring that client to the front.": "Windows, RoALT'ın bu istemciyi öne getirmesine izin vermedi.",

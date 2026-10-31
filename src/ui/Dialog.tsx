@@ -77,7 +77,7 @@ export function Dialog({ open, onClose, title, width = 420, describedBy, childre
         }
       }}
     >
-      <div className="flex items-center gap-3 pl-5 pr-2.5 pt-2.5 pb-2 min-h-14">
+      <div className="flex items-center gap-3 ps-5 pe-2.5 pt-2.5 pb-2 min-h-14">
         <h2 id={titleId} className="flex-1 text-lg font-semibold tracking-[-0.01em]">{shown.title}</h2>
         <button type="button" className="wc w-10 h-10" aria-label={t("common.close")} onClick={onClose}>
           <Icon name="x" size={14} />

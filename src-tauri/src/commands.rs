@@ -1474,9 +1474,8 @@ pub async fn instance_set_limits(app: AppHandle, s: State<'_, App>, id: String, 
             log::warn!("could not read settings for the limits of {id}; using defaults: {e}");
             Default::default()
         });
-        let fg = if v.adaptive.enabled { crate::instances::process::foreground_pid() } else { None };
         let held = s.tracker.throttle(v.mem_throttle.mb).0;
-        let plan = crate::instances::limits::plan(&s.tracker.clients(), &v, fg, cores(), &held);
+        let plan = crate::instances::limits::plan_now(&s, &v, &s.tracker.clients(), &held);
         match plan.into_iter().find(|c| c.0 == id) {
             Some((_, pid, t0, l)) => s.limiter.apply(&id, pid, t0, l).map_err(|e| (id, e)),
             None => Ok(()),
@@ -1532,43 +1531,14 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> 
     tauri::async_runtime::spawn_blocking(f).await.map_err(|e| AppError::Internal(e.to_string()))
 }
 
-/// A picture of one client's window at most `max_w` (16..=1280) pixels wide, as raw bytes:
-/// width, height and 1 if it is parked off-screen, else 0 (u32 little-endian each), then RGBA rows
-/// top-down. Empty while it is minimized, has no window yet or is still behind its bootstrapper.
+/// One client's preview as raw bytes, at most `max_w` (16..=1280) pixels wide: a 24-byte header
+/// (`window::Preview::to_bytes`), then the picture's RGBA unless `known` is its number already.
+/// Answers at once with the newest picture there is.
 #[tauri::command]
-pub async fn instance_thumbnail(s: State<'_, App>, id: String, max_w: u32) -> Result<tauri::ipc::Response> {
-    #[cfg(not(windows))]
-    {
-        let inst = s.tracker.get(&id).ok_or(AppError::NotFound)?;
-        let account = s.db.account(inst.account_id)?;
-        let Some(socket) = crate::launcher::client::devctl_socket(account.user_id) else {
-            return Ok(tauri::ipc::Response::new(Vec::new()));
-        };
-        let thumb = blocking(move || crate::instances::window::thumbnail_socket(&socket, max_w.clamp(16, 1280))).await?;
-        let bytes = thumb.map_or_else(Vec::new, |(t, parked)| {
-            let mut b = Vec::with_capacity(12 + t.rgba.len());
-            b.extend(t.width.to_le_bytes());
-            b.extend(t.height.to_le_bytes());
-            b.extend(u32::from(parked).to_le_bytes());
-            b.extend(t.rgba);
-            b
-        });
-        return Ok(tauri::ipc::Response::new(bytes));
-    }
-    #[cfg(windows)]
-    {
-        let Some(pid) = client_pid(&s, &id)? else { return Ok(tauri::ipc::Response::new(Vec::new())) };
-        let thumb = blocking(move || crate::instances::window::thumbnail(pid, max_w.clamp(16, 1280))).await?;
-        let bytes = thumb.map_or_else(Vec::new, |(t, parked)| {
-            let mut b = Vec::with_capacity(12 + t.rgba.len());
-            b.extend(t.width.to_le_bytes());
-            b.extend(t.height.to_le_bytes());
-            b.extend(u32::from(parked).to_le_bytes());
-            b.extend(t.rgba);
-            b
-        });
-        Ok(tauri::ipc::Response::new(bytes))
-    }
+pub async fn instance_thumbnail(s: State<'_, App>, id: String, max_w: u32, known: u32) -> Result<tauri::ipc::Response> {
+    let pid = client_pid(&s, &id)?;
+    let preview = blocking(move || crate::instances::window::preview(pid, max_w.clamp(16, 1280))).await?;
+    Ok(tauri::ipc::Response::new(preview.to_bytes(known)))
 }
 
 /// Linux: whether this instance has a window on the host desktop. A headless client runs inside
@@ -1616,8 +1586,7 @@ pub async fn instance_show(app: AppHandle, s: State<'_, App>, id: String, what: 
             crate::instances::window::Show::Minimize => Ok(()),
             crate::instances::window::Show::Focus | crate::instances::window::Show::Restore if has => {
                 let pid = client_pid(&s, &id)?.ok_or_else(not_started)?;
-                let park = s.db.settings()?.park_minimized;
-                blocking(move || crate::instances::window::show(pid, what, park)).await?
+                blocking(move || crate::instances::window::show(pid, what)).await?
             }
             crate::instances::window::Show::Focus | crate::instances::window::Show::Restore => {
                 set_instance_headless(&app, &s, &id, false).await
@@ -1627,8 +1596,7 @@ pub async fn instance_show(app: AppHandle, s: State<'_, App>, id: String, what: 
     #[cfg(windows)]
     {
         let pid = client_pid(&s, &id)?.ok_or_else(not_started)?;
-        let park = s.db.settings()?.park_minimized;
-        blocking(move || crate::instances::window::show(pid, what, park)).await?
+        blocking(move || crate::instances::window::show(pid, what)).await?
     }
 }
 
@@ -1666,16 +1634,8 @@ pub async fn instances_show_all(app: AppHandle, s: State<'_, App>, what: crate::
     #[cfg(windows)]
     {
         let pids: Vec<u32> = s.tracker.clients().into_iter().map(|c| c.1).collect();
-        let park = s.db.settings()?.park_minimized;
         // One without a window yet has nothing to show or hide.
-        blocking(move || {
-            for pid in pids {
-                if let Err(e) = crate::instances::window::show(pid, what, park) {
-                    log::debug!("show all: client {pid}: {e}");
-                }
-            }
-        })
-        .await
+        blocking(move || crate::instances::window::show_all(&pids, what)).await
     }
 }
 
@@ -2416,7 +2376,6 @@ pub(crate) fn apply_performance(v: &mut Settings, patch: &SettingsPatch) -> Resu
     if let Some(l) = patch.low_graphics { v.low_graphics = l }
     if let Some(l) = patch.lighter_rendering { v.lighter_rendering = l }
     if let Some(r) = patch.render_flags { v.render_flags = r }
-    if let Some(p) = patch.park_minimized { v.park_minimized = p }
     if let Some(h) = patch.headless { v.headless = h }
     if let Some(k) = patch.keep_running_on_close { v.keep_running_on_close = k }
     if let Some(m) = patch.minimize_on_launch { v.minimize_on_launch = m }
@@ -2448,6 +2407,7 @@ pub(crate) fn apply_performance(v: &mut Settings, patch: &SettingsPatch) -> Resu
         v.trim_every_min = m;
     }
     if let Some(a) = patch.auto_spread { v.auto_spread = a }
+    if let Some(f) = patch.fair_cap { v.fair_cap = f }
     if let Some(a) = patch.adaptive {
         check_limits(&a.background)?;
         v.adaptive = a;
@@ -2569,12 +2529,12 @@ pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> 
         set_panic_hotkey(&app, &had, k)?;
         v.panic_hotkey = k.to_owned();
     }
-    let rest = (|| {
+    let rest = {
         if let Some(a) = patch.allow_public_networks {
             v.allow_public_networks = a;
         }
         s.db.save_settings(&v)
-    })();
+    };
     if rest.is_err()
         && v.panic_hotkey != had
         && let Err(e) = set_panic_hotkey(&app, &v.panic_hotkey, &had)

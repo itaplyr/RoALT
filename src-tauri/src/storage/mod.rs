@@ -285,6 +285,13 @@ impl Db {
         Ok(self.conn().query_row(&format!("{ACCOUNT_SELECT} WHERE a.id = ?1"), [id], account_row)?)
     }
 
+    /// The accounts marked Full quality (read every poll: only their ids).
+    pub fn full_quality_accounts(&self) -> Result<Vec<i64>> {
+        let c = self.conn();
+        let mut st = c.prepare("SELECT id FROM accounts WHERE full_quality = 1")?;
+        Ok(st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
+    }
+
     pub fn account_id_for_user(&self, user_id: i64) -> Result<Option<i64>> {
         let sql = "SELECT id FROM accounts WHERE user_id = ?1";
         Ok(self.conn().query_row(sql, [user_id], |r| r.get(0)).optional()?)
@@ -1221,6 +1228,16 @@ mod tests {
     }
 
     #[test]
+    fn stored_settings_with_park_minimized_still_load() {
+        let db = Db::open_in_memory().unwrap();
+        db.save_settings(&Settings { auto_lock_minutes: 3, ..Settings::default() }).unwrap();
+        db.conn().execute("UPDATE settings SET value = json_set(value, '$.parkMinimized', 1) WHERE key = 'settings'", []).unwrap();
+        let raw: String = db.conn().query_row("SELECT value FROM settings WHERE key = 'settings'", [], |r| r.get(0)).unwrap();
+        assert!(raw.contains("parkMinimized"));
+        assert_eq!(db.settings().unwrap().auto_lock_minutes, 3);
+    }
+
+    #[test]
     fn settings_default_and_round_trip() {
         let db = Db::open_in_memory().unwrap();
         assert_eq!(db.settings().unwrap(), Settings::default());
@@ -1289,6 +1306,7 @@ mod tests {
         assert!(!db.account(id).unwrap().full_quality);
         db.update_account(id, &patch(|p| p.full_quality = Some(true))).unwrap();
         assert!(db.account(id).unwrap().full_quality);
+        assert_eq!(db.full_quality_accounts().unwrap(), [id]);
     }
 
     #[test]

@@ -29,13 +29,23 @@ const pickerFilter = () => [{ name: t("settings.images"), extensions: ["png", "j
 
 export const SETTINGS_SECTIONS: readonly (readonly [string, Key])[] = [
   ["general", "settings.section.general"],
-  ["launching", "settings.section.launching"],
   ["automation", "settings.section.automation"],
   ["security", "settings.section.security"],
   ["data", "settings.section.data"],
-  ["shortcuts", "settings.section.shortcuts"],
   ["about", "settings.section.about"],
+  ["launching", "settings.section.launching"],
+  ["shortcuts", "settings.section.shortcuts"],
 ];
+
+const CLOSED_KEY = "roalt.settingsClosed";
+/** The sections folded on this PC; all open on first run. When this PC keeps no storage, they last until RoALT closes. */
+const closed = (() => {
+  try {
+    return new Set<string>(JSON.parse(localStorage.getItem(CLOSED_KEY) ?? "[]"));
+  } catch {
+    return new Set<string>();
+  }
+})();
 
 const SHORTCUTS: [Key, string][] = [
   ["settings.shortcut.dashboard", "Ctrl 1"],
@@ -125,7 +135,7 @@ export function SettingsView({ vault, settings, onPerformance, onRecoveryCode }:
 
   return (
     <main className="scroll flex-1 min-w-0 px-8 pt-5 pb-12">
-      <div className="enter max-w-[860px] flex flex-col">
+      <div className="enter max-w-[1400px] flex flex-col">
         <header className="flex flex-wrap items-start justify-between gap-3 mb-2">
           <h1 className="page-title">{t("settings.title")}</h1>
           <dl aria-label={t("settings.section.about")} className="panel grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 px-3.5 py-2 text-[13px] max-w-[280px]">
@@ -136,8 +146,9 @@ export function SettingsView({ vault, settings, onPerformance, onRecoveryCode }:
           </dl>
         </header>
 
-        <Heading id="general">{t("settings.section.general")}</Heading>
-        <div className="panel px-5 py-1 mt-3 [&>*:last-child]:border-b-0">
+        <div className="grid items-start gap-8 mt-5" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(440px, 100%), 1fr))" }}>
+        <div className="flex flex-col gap-8 min-w-0">
+        <Section id="general" title={t("settings.section.general")}>
         <Row title={t("settings.theme")} hint={t("settings.themeHint")}>
           <Segmented
             label={t("settings.theme")}
@@ -180,10 +191,133 @@ export function SettingsView({ vault, settings, onPerformance, onRecoveryCode }:
         <Row title={t("settings.skipSplash")} hint={t("settings.skipSplashHint")}>
           <Switch label={t("settings.skipSplash")} checked={settings.skipSplash} onChange={(skipSplash) => set.mutate({ skipSplash })} />
         </Row>
-        </div>
+        </Section>
 
-        <Heading id="launching">{t("settings.section.launching")}</Heading>
-        <div className="panel px-5 py-1 mt-3 [&>*:last-child]:border-b-0">
+        <Section id="automation" title={t("settings.section.automation")}>
+        <Row
+          title={t("settings.panic")}
+          hint={t("settings.panicHint")}
+        >
+          <TextField
+            label={t("settings.panic")}
+            className="w-48"
+            placeholder={t("settings.placeholderOff")}
+            value={settings.panicHotkey}
+            onCommit={(panicHotkey) => set.mutateAsync({ panicHotkey })}
+          />
+        </Row>
+        <ShutdownRow />
+        <Row
+          title={t("settings.cleanLogs")}
+          hint={t("settings.cleanLogsHint")}
+        >
+          <div className="flex items-center gap-3">
+            <CleanLogsButton />
+            <Switch label={t("settings.cleanLogs")} checked={settings.cleanLogs} onChange={(cleanLogs) => set.mutate({ cleanLogs })} />
+          </div>
+        </Row>
+        </Section>
+
+        <Section id="security" title={t("settings.section.security")}>
+        <Row
+          title={t("settings.encryption")}
+          hint={
+            master
+              ? t("settings.encryptionHintMaster")
+              : t("settings.encryptionHintDpapi")
+          }
+        >
+          <Segmented
+            label={t("settings.encryption")}
+            value={vault.mode}
+            options={[{ value: "dpapi", label: t("settings.encryptionDpapi") }, { value: "master", label: t("settings.masterPassword") }]}
+            onChange={(m) => setDlg(m === "master" ? "set" : "remove")}
+          />
+        </Row>
+        {master && (
+          <>
+            <Row title={t("settings.masterPassword")} hint={t("settings.masterPasswordHint")}>
+              <button className="btn" onClick={() => setDlg("change")}>{t("settings.change")}</button>
+            </Row>
+            <Row title={t("vault.recovery.code")} hint={vault.hasRecovery ? t("vault.recovery.rowHintOn") : t("vault.recovery.rowHintOff")}>
+              <button className="btn" onClick={() => setRecoveryAsk("create")}>
+                {vault.hasRecovery ? t("vault.recovery.replace") : t("vault.recovery.create")}
+              </button>
+            </Row>
+            <Row title={t("settings.autoLock")} hint={t("settings.autoLockHint")}>
+              <Segmented
+                label={t("settings.autoLockLabel")}
+                mono
+                value={settings.autoLockMinutes}
+                options={[0, 5, 15, 30, 60].map((m) => ({ value: m, label: m ? t("settings.minutes", { n: m }) : t("common.off") }))}
+                onChange={(autoLockMinutes) => set.mutate({ autoLockMinutes })}
+              />
+            </Row>
+          </>
+        )}
+        <Row
+          title={t("settings.clipboard")}
+          hint={master ? t("settings.clipboardHintMaster") : t("settings.clipboardHintHello")}
+        >
+          <NumberField
+            unit={t("settings.unit.seconds")}
+            short={t("settings.unit.s")}
+            min={5}
+            max={300}
+            value={settings.clipboardClearSeconds}
+            onCommit={(clipboardClearSeconds) => set.mutate({ clipboardClearSeconds })}
+          />
+        </Row>
+        <PublicNetworkRow settings={settings} />
+        </Section>
+
+        <Section id="data" title={t("settings.section.data")}>
+        <Row title={t("settings.dataFolder")} hint={dataDir ? <PathHint path={dataDir.path} /> : ""}>
+          <div className="flex flex-wrap gap-2">
+            <button className="btn" onClick={() => api.dataDirOpen().catch(toastError)}>{t("common.open")}</button>
+            <button className="btn" title={t("settings.openLogsHint")} onClick={() => api.logsOpen().catch(toastError)}>{t("settings.openLogs")}</button>
+            {dataDir && !dataDir.overridden && <button className="btn" onClick={pickDataDir}>{t("settings.moveEllipsis")}</button>}
+          </div>
+        </Row>
+        <Row
+          title={t("settings.cache")}
+          hint={t("settings.cacheHint")}
+        >
+          <NumberField
+            unit={t("settings.unit.minutes")}
+            short={t("settings.unit.min")}
+            min={1}
+            max={1440}
+            value={settings.cacheMinutes}
+            onCommit={(cacheMinutes) => set.mutate({ cacheMinutes })}
+          />
+        </Row>
+        <Row title={t("settings.backup")} hint={t("settings.backupHint")}>
+          <div className="flex flex-wrap gap-2">
+            <button className="btn" onClick={pickImport}>
+              <Icon name="upload" size={14} />
+              {t("settings.importEllipsis")}
+            </button>
+            <button className="btn btn-primary" onClick={() => setDlg("export")}>
+              <Icon name="download" size={14} />
+              {t("settings.exportEllipsis")}
+            </button>
+          </div>
+        </Row>
+        </Section>
+
+        <Section id="about" title={t("settings.section.about")}>
+        <SelfUpdateRow on={settings.selfUpdate} onChange={(selfUpdate) => set.mutate({ selfUpdate })} />
+        <Row title={<>RoALT <span className="mono">{import.meta.env.APP_VERSION}</span></>} hint={t("settings.aboutHint")} last>
+          <button className="btn" onClick={() => openUrl(RELEASES).catch(toastError)}>
+            {t("settings.openReleases")}
+            <Icon name="external" size={12} />
+          </button>
+        </Row>
+        </Section>
+        </div>
+        <div className="flex flex-col gap-8 min-w-0">
+        <Section id="launching" title={t("settings.section.launching")}>
         <Row
           title={t("settings.multi")}
           hint={t("settings.multiHint")}
@@ -314,147 +448,21 @@ export function SettingsView({ vault, settings, onPerformance, onRecoveryCode }:
         >
           <Switch label={t("settings.autoUpdate")} checked={settings.autoUpdate} onChange={(autoUpdate) => set.mutate({ autoUpdate })} />
         </Row>
-        </div>
+        </Section>
 
-        <Heading id="automation">{t("settings.section.automation")}</Heading>
-        <div className="panel px-5 py-1 mt-3 [&>*:last-child]:border-b-0">
-        <Row
-          title={t("settings.panic")}
-          hint={t("settings.panicHint")}
-        >
-          <TextField
-            label={t("settings.panic")}
-            className="w-48"
-            placeholder={t("settings.placeholderOff")}
-            value={settings.panicHotkey}
-            onCommit={(panicHotkey) => set.mutateAsync({ panicHotkey })}
-          />
-        </Row>
-        <ShutdownRow />
-        <Row
-          title={t("settings.cleanLogs")}
-          hint={t("settings.cleanLogsHint")}
-        >
-          <div className="flex items-center gap-3">
-            <CleanLogsButton />
-            <Switch label={t("settings.cleanLogs")} checked={settings.cleanLogs} onChange={(cleanLogs) => set.mutate({ cleanLogs })} />
-          </div>
-        </Row>
-        </div>
-
-        <Heading id="security">{t("settings.section.security")}</Heading>
-        <div className="panel px-5 py-1 mt-3 [&>*:last-child]:border-b-0">
-        <Row
-          title={t("settings.encryption")}
-          hint={
-            master
-              ? t("settings.encryptionHintMaster")
-              : t("settings.encryptionHintDpapi")
-          }
-        >
-          <Segmented
-            label={t("settings.encryption")}
-            value={vault.mode}
-            options={[{ value: "dpapi", label: t("settings.encryptionDpapi") }, { value: "master", label: t("settings.masterPassword") }]}
-            onChange={(m) => setDlg(m === "master" ? "set" : "remove")}
-          />
-        </Row>
-        {master && (
-          <>
-            <Row title={t("settings.masterPassword")} hint={t("settings.masterPasswordHint")}>
-              <button className="btn" onClick={() => setDlg("change")}>{t("settings.change")}</button>
-            </Row>
-            <Row title={t("vault.recovery.code")} hint={vault.hasRecovery ? t("vault.recovery.rowHintOn") : t("vault.recovery.rowHintOff")}>
-              <button className="btn" onClick={() => setRecoveryAsk("create")}>
-                {vault.hasRecovery ? t("vault.recovery.replace") : t("vault.recovery.create")}
-              </button>
-            </Row>
-            <Row title={t("settings.autoLock")} hint={t("settings.autoLockHint")}>
-              <Segmented
-                label={t("settings.autoLockLabel")}
-                mono
-                value={settings.autoLockMinutes}
-                options={[0, 5, 15, 30, 60].map((m) => ({ value: m, label: m ? t("settings.minutes", { n: m }) : t("common.off") }))}
-                onChange={(autoLockMinutes) => set.mutate({ autoLockMinutes })}
-              />
-            </Row>
-          </>
-        )}
-        <Row
-          title={t("settings.clipboard")}
-          hint={master ? t("settings.clipboardHintMaster") : t("settings.clipboardHintHello")}
-        >
-          <NumberField
-            unit={t("settings.unit.seconds")}
-            short={t("settings.unit.s")}
-            min={5}
-            max={300}
-            value={settings.clipboardClearSeconds}
-            onCommit={(clipboardClearSeconds) => set.mutate({ clipboardClearSeconds })}
-          />
-        </Row>
-        <PublicNetworkRow settings={settings} />
-        </div>
-
-        <Heading id="data">{t("settings.section.data")}</Heading>
-        <div className="panel px-5 py-1 mt-3 [&>*:last-child]:border-b-0">
-        <Row title={t("settings.dataFolder")} hint={dataDir ? <PathHint path={dataDir.path} /> : ""}>
-          <div className="flex flex-wrap gap-2">
-            <button className="btn" onClick={() => api.dataDirOpen().catch(toastError)}>{t("common.open")}</button>
-            <button className="btn" title={t("settings.openLogsHint")} onClick={() => api.logsOpen().catch(toastError)}>{t("settings.openLogs")}</button>
-            {dataDir && !dataDir.overridden && <button className="btn" onClick={pickDataDir}>{t("settings.moveEllipsis")}</button>}
-          </div>
-        </Row>
-        <Row
-          title={t("settings.cache")}
-          hint={t("settings.cacheHint")}
-        >
-          <NumberField
-            unit={t("settings.unit.minutes")}
-            short={t("settings.unit.min")}
-            min={1}
-            max={1440}
-            value={settings.cacheMinutes}
-            onCommit={(cacheMinutes) => set.mutate({ cacheMinutes })}
-          />
-        </Row>
-        <Row title={t("settings.backup")} hint={t("settings.backupHint")}>
-          <div className="flex flex-wrap gap-2">
-            <button className="btn" onClick={pickImport}>
-              <Icon name="upload" size={14} />
-              {t("settings.importEllipsis")}
-            </button>
-            <button className="btn btn-primary" onClick={() => setDlg("export")}>
-              <Icon name="download" size={14} />
-              {t("settings.exportEllipsis")}
-            </button>
-          </div>
-        </Row>
-        </div>
-
-        <Heading id="shortcuts">{t("settings.section.shortcuts")}</Heading>
-        <div className="panel px-5 py-1 mt-3 [&>*:last-child]:border-b-0">
+        <Section id="shortcuts" title={t("settings.section.shortcuts")}>
         <table className="w-full border-collapse mt-2">
           <tbody>
             {SHORTCUTS.map(([what, key]) => (
               <tr key={key} className="h-10 border-b border-line">
                 <td>{t(what)}</td>
-                <td className="text-right"><span className="kbd">{key}</span></td>
+                <td className="text-end"><span className="kbd">{key}</span></td>
               </tr>
             ))}
           </tbody>
         </table>
+        </Section>
         </div>
-
-        <Heading id="about">{t("settings.section.about")}</Heading>
-        <div className="panel px-5 py-1 mt-3 [&>*:last-child]:border-b-0">
-        <SelfUpdateRow on={settings.selfUpdate} onChange={(selfUpdate) => set.mutate({ selfUpdate })} />
-        <Row title={<>RoALT <span className="mono">{import.meta.env.APP_VERSION}</span></>} hint={t("settings.aboutHint")} last>
-          <button className="btn" onClick={() => openUrl(RELEASES).catch(toastError)}>
-            {t("settings.openReleases")}
-            <Icon name="external" size={12} />
-          </button>
-        </Row>
         </div>
       </div>
 
@@ -575,7 +583,7 @@ function ImportDialog({ open, path, onClose }: { open: boolean; path: string; on
         <div className="enter flex flex-col">
           <div className="grid grid-cols-4 border-b border-line">
             {(["added", "updated", "skipped", "failed"] as const).map((k) => (
-              <div key={k} className="px-5 py-4 border-r border-line last:border-r-0">
+              <div key={k} className="px-5 py-4 border-e border-line last:border-e-0">
                 <div className="label">{t(({ added: "settings.importAdded", updated: "settings.importUpdated", skipped: "settings.importSkipped", failed: "settings.importFailed" } as const)[k])}</div>
                 <div className="mono text-[22px] font-medium mt-0.5">{report[k]}</div>
               </div>
@@ -830,6 +838,29 @@ function CleanLogsButton() {
 
 export function Heading({ id, children }: { id: string; children: ReactNode }) {
   return <h2 id={id} className="section-title mt-8 first-of-type:mt-5 scroll-mt-3">{children}</h2>;
+}
+
+/** A section that folds. Native <details> keeps its children mounted, so an install's progress and
+ * half-typed fields survive folding. The sidebar's jump opens it from outside; onToggle hears that too. */
+function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
+  const toggled = (open: boolean) => {
+    if (open) closed.delete(id);
+    else closed.add(id);
+    try {
+      localStorage.setItem(CLOSED_KEY, JSON.stringify([...closed]));
+    } catch {
+      // No storage: kept in `closed`.
+    }
+  };
+  return (
+    <details className="group" open={!closed.has(id)} onToggle={(e) => toggled(e.currentTarget.open)}>
+      <summary className="flex items-center gap-2 w-fit cursor-pointer">
+        <h2 id={id} className="section-title scroll-mt-3">{title}</h2>
+        <Icon name="chevron" size={14} className="text-dim -rotate-90 rtl:rotate-90 group-open:rotate-0 rtl:group-open:rotate-0" />
+      </summary>
+      <div className="panel px-5 py-1 mt-3 [&>*:last-child]:border-b-0">{children}</div>
+    </details>
+  );
 }
 
 function PathHint({ path }: { path: string }) {

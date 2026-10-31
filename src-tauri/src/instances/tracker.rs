@@ -45,6 +45,8 @@ pub fn closed() -> String {
 }
 /// Polls (about seconds) a client's window must be not responding in a row to count as hung.
 const HANG_POLLS: u32 = 30;
+/// Polls a client's window must be not responding in a row for its limits to come off.
+const HANG_FREE_POLLS: u32 = 5;
 
 pub struct Tracker {
     inner: Mutex<Vec<Entry>>,
@@ -131,6 +133,8 @@ struct Entry {
     rejoin_seen: bool,
     /// Unix ms a teleport was first seen under way.
     teleport_at: Option<i64>,
+    /// Unix ms it last entered Starting or Joining; None once it is in a game.
+    loading_since: Option<i64>,
     /// The server last handed out by `take_servers`.
     server_seen: Option<String>,
     /// Memory samples in a row over `Settings.mem_restart_mb` (`check_memory`).
@@ -167,6 +171,7 @@ impl Entry {
             gone_at: None,
             rejoin_seen: false,
             teleport_at: None,
+            loading_since: None,
             server_seen: None,
             mem_strikes: 0,
             mem_mb: 0,
@@ -178,6 +183,13 @@ impl Entry {
 
     fn hung(&self) -> bool {
         self.hung_polls >= HANG_POLLS
+    }
+
+    /// Loading (for as long as a first load or a teleport may take: one stuck there is limited
+    /// again) or not responding: limits would only slow that down (`limits::plan`).
+    fn runs_free(&self, now: i64) -> bool {
+        let may_take = if self.in_game_at.is_none() { REBIND_MS } else { TELEPORT_MS };
+        self.hung_polls >= HANG_FREE_POLLS || self.loading_since.is_some_and(|t| now - t < may_take)
     }
 
     /// Over the memory limit long enough to be restarted.
@@ -542,6 +554,16 @@ impl Tracker {
             .collect()
     }
 
+    /// The running clients `limits::plan` lifts, besides the one in front: `runs_free` ones and
+    /// those of the `full_quality` accounts.
+    pub fn free(&self, full_quality: &[i64], now: i64) -> Vec<String> {
+        self.entries()
+            .iter()
+            .filter(|e| e.inst.state != InstanceState::Exited && (e.runs_free(now) || full_quality.contains(&e.inst.account_id)))
+            .map(|e| e.inst.id.clone())
+            .collect()
+    }
+
     /// Still a rejoin case (`wants_rejoin`), checked again after the launch delay: false once
     /// the user closed it, it reconnected, responds again or was cleared.
     pub fn still_wants_rejoin(&self, id: &str) -> bool {
@@ -690,12 +712,15 @@ impl Tracker {
     /// `instances://changed` whenever an entry changes. The bootstrapper case
     /// (`via_bootstrapper`): the started PID is the bootstrapper; bind to the client by log.
     /// Each poll also brings the clients to their limits (`limits::plan`: the adaptive manager
-    /// by the window in front, default trim, auto-spread), and every 10 s samples their memory
+    /// by the window in front, fair cap, default trim, auto-spread), and every 10 s samples their memory
     /// for the memory restart (not while a launch or batch runs). With `clean_logs`, Roblox's old
     /// logs go hourly (`logwatch::clean`).
     pub fn spawn(app: AppHandle) {
         restore(&app);
         super::resize::start();
+        let followed: Vec<u32> = app.state::<crate::App>().tracker.clients().into_iter().map(|c| c.1).collect();
+        // Not on this thread: changing a window waits for its client.
+        std::thread::spawn(move || super::window::recover(&followed));
         tauri::async_runtime::spawn(async move {
             let mut tick: u64 = 0;
             loop {
@@ -742,15 +767,14 @@ impl Tracker {
                     super::resize::set_clients(clients.iter().map(|c| c.1).collect());
                     let (held, throttle_moved) = s.tracker.throttle(v.mem_throttle.mb);
                     if !clients.is_empty() {
-                        let fg = if v.adaptive.enabled { process::foreground_pid() } else { None };
-                        s.limiter.sync(&super::limits::plan(&clients, &v, fg, crate::commands::cores(), &held));
+                        s.limiter.sync(&super::limits::plan_now(&s, &v, &clients, &held));
                     }
-                    // Once per client, without taking the focus (anti-AFK then skips it).
+                    // Once per client, without taking the focus.
                     for pid in s.tracker.first_windows(&|pid| process::main_window(pid).is_some()) {
                         let id = clients.iter().find(|c| c.1 == pid).map(|c| c.0.clone());
-                        let keeps_size = |id: &str| s.tracker.get(id).and_then(|i| s.db.account(i.account_id).ok()).is_some_and(|a| a.full_quality);
-                        let tiny = id.filter(|id| v.tiny_on_launch && !keeps_size(id) && s.tracker.set_micro(id, true));
-                        let (size, minimize, park) = ((v.micro_width, v.micro_height), v.minimize_on_launch, v.park_minimized);
+                        let full_quality = id.as_deref().and_then(|id| s.tracker.get(id)).and_then(|i| s.db.account(i.account_id).ok()).is_some_and(|a| a.full_quality);
+                        let tiny = id.filter(|id| v.tiny_on_launch && !full_quality && s.tracker.set_micro(id, true));
+                        let (size, minimize) = ((v.micro_width, v.micro_height), v.minimize_on_launch && !full_quality);
                         // Not on this thread: a busy client's ShowWindow would stop every poll.
                         tauri::async_runtime::spawn_blocking(move || {
                             if let Some(id) = tiny
@@ -759,8 +783,18 @@ impl Tracker {
                                 log::debug!("instance {id}: not made tiny at launch: {e}");
                             }
                             if minimize {
-                                super::window::minimize_quietly(pid, park);
+                                super::window::hide_on_launch(pid);
                             }
+                        });
+                    }
+                    // Hidden clients nobody watches go to sleep. One round at a time, off this thread.
+                    static SWEEPING: AtomicBool = AtomicBool::new(false);
+                    if !clients.is_empty() && !SWEEPING.swap(true, Ordering::Relaxed) {
+                        let size = (v.micro_width, v.micro_height);
+                        let list: Vec<_> = clients.iter().map(|c| (c.1, s.tracker.get(&c.0).is_some_and(|i| i.micro).then_some(size))).collect();
+                        tauri::async_runtime::spawn_blocking(move || {
+                            super::window::sweep(&list);
+                            SWEEPING.store(false, Ordering::Relaxed);
                         });
                     }
                     // Skipped (not reset) while a launch, batch or rejoin runs.
@@ -918,6 +952,9 @@ fn restore(app: &AppHandle) {
     *s.tracker.persisted.lock().unwrap_or_else(|e| e.into_inner()) = saved.clone();
     let total = saved.len();
     let found = s.tracker.readopt(saved, &process::roblox_processes());
+    for &(pid, t0) in &found {
+        super::limits::reset_followed(pid, t0);
+    }
     s.multi.adopt(&found);
     log::info!("following {} client(s) from before RoALT restarted", found.len());
     if total > found.len() {
@@ -1007,7 +1044,7 @@ fn ended(e: &Entry, kind: CrashKind, now: i64) -> Ended {
         uptime_ms: (now - e.inst.started_at).max(0),
         reason: match kind {
             CrashKind::Hang => Some(hung()),
-            CrashKind::Mem => Some(tr!("Used {mb} MB of private memory", mb = e.mem_mb)),
+            CrashKind::Mem => Some(tr!("Commit size reached {mb} MB", mb = e.mem_mb)),
             _ => e.facts.reason.clone(),
         },
         place_id: e.inst.place_id,
@@ -1135,6 +1172,8 @@ fn adopt(e: &mut Entry, p: ProcInfo, taken: &mut Vec<u32>) {
     e.start_time = Some(p.start_time);
     e.adopted = true;
     e.alive = true;
+    // Its load starts now, not with the bootstrapper or the client it replaces.
+    e.loading_since = None;
     taken.push(p.pid);
 }
 
@@ -1206,6 +1245,11 @@ fn settle(e: &mut Entry, now: i64) -> Option<CrashKind> {
     }
     e.inst.state = state;
     e.inst.note = note;
+    if matches!(state, InstanceState::Starting | InstanceState::Joining) {
+        e.loading_since.get_or_insert(now);
+    } else {
+        e.loading_since = None;
+    }
     if e.facts.place_id.is_some() {
         e.inst.place_id = e.facts.place_id;
     }
@@ -1245,7 +1289,7 @@ fn state_of(facts: &LogFacts, bound: bool, ended: bool, closing: bool, expected_
     } else {
         InstanceState::Starting
     };
-    (state, problem.map(Into::into))
+    (state, problem)
 }
 
 /// Keeps the newest `MAX_ENDED` ended entries, and those still being relaunched.
@@ -1358,6 +1402,65 @@ mod tests {
         assert!(t.claim(2).is_some());
         t.entries().iter_mut().find(|e| e.inst.id == id).unwrap().inst.state = Disconnected;
         assert!(!t.has_live_client(1) && t.claim(1).is_some());
+    }
+
+    #[test]
+    fn a_client_taken_over_is_timed_from_then() {
+        let t = Tracker::new();
+        let start = now_ms();
+        t.register(&LaunchInfo { pid_start: Some(50), ..info(900, start, false) }, target());
+        let mut entries = t.entries();
+        let e = &mut entries[0];
+        settle(e, start);
+        let later = start + 100_000;
+        adopt(e, ProcInfo { pid: 901, start_time: 60 }, &mut Vec::new());
+        settle(e, later);
+        assert!(e.runs_free(later + REBIND_MS - 1), "its whole load is free");
+        assert!(!e.runs_free(later + REBIND_MS));
+    }
+
+    #[test]
+    fn loading_hung_and_full_quality_clients_run_free() {
+        let t = Tracker::new();
+        let start = now_ms();
+        let a = t.register(&LaunchInfo { pid_start: Some(50), ..info(900, start, false) }, target()).id;
+        let free = |now| t.free(&[], now);
+        let set = |f: &dyn Fn(&mut Entry)| f(t.entries().iter_mut().find(|e| e.inst.id == a).unwrap());
+        let settled = |now| set(&|e| _ = settle(e, now));
+        assert!(free(start).is_empty(), "not seen by a poll yet");
+
+        // A first load: free from the poll that sees it, for as long as a load may take.
+        settled(start);
+        assert_eq!(free(start + REBIND_MS - 1), std::slice::from_ref(&a));
+        assert!(free(start + REBIND_MS).is_empty(), "stuck loading: limited again");
+
+        // In a game: limited.
+        set(&|e| e.facts.in_game = true);
+        settled(start + 200_000);
+        assert_eq!(t.get(&a).unwrap().state, InGame);
+        assert!(free(start + 200_000).is_empty());
+
+        // A teleport is timed from itself, not from the launch.
+        let tp = start + 3_600_000;
+        set(&|e| e.facts.teleporting = true);
+        settled(tp);
+        assert_eq!(t.get(&a).unwrap().state, Joining);
+        assert_eq!(free(tp + TELEPORT_MS - 1), std::slice::from_ref(&a));
+        assert!(free(tp + TELEPORT_MS).is_empty());
+        settled(tp + TELEPORT_MS);
+        assert_eq!(t.get(&a).unwrap().state, InGame, "the teleport gave up");
+        assert!(free(tp + TELEPORT_MS).is_empty());
+
+        // Not responding: free well before it counts as hung.
+        let later = tp + 100_000;
+        set(&|e| e.hung_polls = HANG_FREE_POLLS - 1);
+        assert!(free(later).is_empty());
+        set(&|e| e.hung_polls = HANG_FREE_POLLS);
+        assert_eq!(free(later), std::slice::from_ref(&a));
+        set(&|e| e.hung_polls = 0);
+
+        assert_eq!(t.free(&[1], later), std::slice::from_ref(&a), "Full quality");
+        assert!(t.free(&[2], later).is_empty(), "another account");
     }
 
     #[test]
@@ -2115,7 +2218,7 @@ mod tests {
         t.poll(None, &procs, &user_of, start + 3_000);
         assert_eq!(state(&t, &id).1, note("Closed"));
         let ended = t.take_crashes();
-        assert_eq!((ended.len(), ended[0].kind, ended[0].reason.as_deref()), (1, CrashKind::Mem, Some("Used 5000 MB of private memory")));
+        assert_eq!((ended.len(), ended[0].kind, ended[0].reason.as_deref()), (1, CrashKind::Mem, Some("Commit size reached 5000 MB")));
     }
 
     #[test]

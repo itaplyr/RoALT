@@ -142,7 +142,7 @@
   "Closed unexpectedly": "Neočekivano zatvoren",
   "Not responding": "Ne odgovara",
   "Closed": "Zatvoren",
-  "Used {mb} MB of private memory": "Koristio {mb} MB privatne memorije",
+  "Commit size reached {mb} MB": "Commit veličina je dostigla {mb} MB",
   "Replaced by another Roblox client": "Zamijenio ga je drugi Roblox klijent",
   "That client has no window yet.": "Taj klijent još nema prozor.",
   "Windows didn't let RoALT bring that client to the front.": "Windows nije dozvolio RoALT-u da dovede taj klijent u prvi plan.",

@@ -541,7 +541,7 @@ async fn queue_status(app: &AppHandle) {
         Vec::new()
     });
     if !m.is_empty() {
-        let ram_mb = m.iter().map(|c| c.working_set_mb).sum();
+        let ram_mb = m.iter().map(|c| c.memory_mb).sum();
         // CPU needs an earlier sample of the same client; without one it's left out, not 0%.
         let cpu: Vec<f64> = m.iter().filter_map(|c| c.cpu_pct).collect();
         let cpu_pct = (!cpu.is_empty()).then(|| cpu.iter().sum());

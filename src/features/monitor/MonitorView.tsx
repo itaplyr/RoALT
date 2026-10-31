@@ -5,7 +5,7 @@ import { accountName, Avatar } from "../accounts/shared";
 import { isRunning, STATES, uptime, useNow } from "../launch/Running";
 import { fmtNum, t } from "../../i18n";
 
-/** Samples kept per line: two minutes at one every 2 s. */
+/** Samples kept per line: two minutes at one every 2 s, longer when reading them is slow (`metrics`). */
 const KEEP = 60;
 
 type Series = { cpu: number[]; mem: number[] };
@@ -21,7 +21,7 @@ function rate(bps: number | null) {
 }
 const push = (list: number[], v: number) => [...list, v].slice(-KEEP);
 
-/** One series over the last two minutes: a 2px line with a faint wash under it, the latest
+/** One series over its last `KEEP` samples: a 2px line with a faint wash under it, the latest
  * value marked. Its title reads out the range, the table cell beside it the current value. */
 function Sparkline({ values, floor, zero, label, format }: {
   values: number[];
@@ -43,7 +43,7 @@ function Sparkline({ values, floor, zero, label, format }: {
   const y = (v: number) => h - pad - ((v - base) / (max - base)) * (h - 2 * pad);
   const pts = values.map((v, i) => `${x(i + offset).toFixed(1)},${y(v).toFixed(1)}`);
   const last = values[values.length - 1];
-  const range = t("monitor.range", { label, min: format(Math.min(...values)), max: format(Math.max(...values)), m: Math.round((values.length * 2) / 60) || 1, now: format(last) });
+  const range = t("monitor.range", { label, min: format(Math.min(...values)), max: format(Math.max(...values)), now: format(last) });
   return (
     <svg width={w} height={h} role="img" aria-label={range} className="flex-none">
       <title>{range}</title>
@@ -77,24 +77,24 @@ export function MonitorView({ accounts }: { accounts: AccountSummary[] }) {
   const byInst = new Map<string, ClientMetrics>(list.map((m) => [m.instanceId, m]));
 
   // One point per new sample; clients that ended drop out.
-  const { data, dataUpdatedAt } = metrics;
+  const { data } = metrics;
   useEffect(() => {
     if (!data) return;
     setHist((old) => {
       const per = new Map<string, Series>();
       for (const m of data) {
         const s = old.per.get(m.instanceId) ?? { cpu: [], mem: [] };
-        per.set(m.instanceId, { cpu: m.cpuPct === null ? s.cpu : push(s.cpu, m.cpuPct), mem: push(s.mem, m.privateMb) });
+        per.set(m.instanceId, { cpu: m.cpuPct === null ? s.cpu : push(s.cpu, m.cpuPct), mem: push(s.mem, m.memoryMb) });
       }
       const cpu = data.reduce((n, m) => n + (m.cpuPct ?? 0), 0);
-      const mem = data.reduce((n, m) => n + m.privateMb, 0);
+      const mem = data.reduce((n, m) => n + m.memoryMb, 0);
       if (!data.length) return { per, totals: { cpu: [], mem: [] } };
       return { per, totals: { cpu: push(old.totals.cpu, cpu), mem: push(old.totals.mem, mem) } };
     });
-  }, [data, dataUpdatedAt]);
+  }, [data]);
 
   const cpuNow = list.some((m) => m.cpuPct !== null) ? list.reduce((n, m) => n + (m.cpuPct ?? 0), 0) : null;
-  const memNow = list.reduce((n, m) => n + m.privateMb, 0);
+  const memNow = list.reduce((n, m) => n + m.memoryMb, 0);
   const ioNow = list.some((m) => m.readBps !== null) ? list.reduce((n, m) => n + (m.readBps ?? 0) + (m.writeBps ?? 0), 0) : null;
   const gpuMemNow = list.some((m) => m.gpuMemMb !== null) ? list.reduce((n, m) => n + (m.gpuMemMb ?? 0), 0) : null;
 
@@ -109,8 +109,8 @@ export function MonitorView({ accounts }: { accounts: AccountSummary[] }) {
           <Tile label={t("monitor.cpuAll")} value={pct(cpuNow)}>
             {list.length > 0 && <Sparkline values={hist.totals.cpu} floor={10} zero label={t("monitor.cpuAll")} format={pct} />}
           </Tile>
-          <Tile label={t("monitor.privateMemory")} value={mb(memNow)}>
-            {list.length > 0 && <Sparkline values={hist.totals.mem} floor={64} label={t("monitor.privateMemoryAll")} format={mb} />}
+          <Tile label={t("monitor.memoryAll")} value={mb(memNow)}>
+            {list.length > 0 && <Sparkline values={hist.totals.mem} floor={64} label={t("monitor.memoryAll")} format={mb} />}
           </Tile>
           <Tile label={t("monitor.gpuMemory")} value={gpuMemNow === null ? "—" : mb(gpuMemNow)} />
           <Tile label={t("monitor.io")} value={rate(ioNow)} />
@@ -122,19 +122,19 @@ export function MonitorView({ accounts }: { accounts: AccountSummary[] }) {
           <div className="well scroll mt-6 p-3">
           <table className="mono w-full border-collapse text-xs">
             <thead>
-              <tr className="h-8 text-dim text-left">
+              <tr className="h-8 text-dim text-start">
                 <th className="font-normal border-b border-line">{t("monitor.account")}</th>
                 <th className="font-normal border-b border-line">{t("monitor.state")}</th>
-                <th className="font-normal border-b border-line text-right pr-3">{t("monitor.cpu")}</th>
+                <th className="font-normal border-b border-line text-end pe-3">{t("monitor.cpu")}</th>
                 <th className="font-normal border-b border-line hidden xl:table-cell"><span className="sr-only">{t("monitor.cpuTrend")}</span></th>
-                <th className="font-normal border-b border-line text-right pr-3" title={t("monitor.memoryHint")}>{t("monitor.memory")}</th>
+                <th className="font-normal border-b border-line text-end pe-3" title={t("monitor.memoryHint")}>{t("monitor.memory")}</th>
                 <th className="font-normal border-b border-line hidden xl:table-cell"><span className="sr-only">{t("monitor.memoryTrend")}</span></th>
-                <th className="font-normal border-b border-line text-right pr-3" title={t("monitor.gpuHint")}>{t("monitor.gpu")}</th>
-                <th className="font-normal border-b border-line text-right pr-3" title={t("monitor.gpuMemoryHint")}>{t("monitor.gpuMem")}</th>
-                <th className="font-normal border-b border-line text-right pr-3">{t("monitor.read")}</th>
-                <th className="font-normal border-b border-line text-right pr-3">{t("monitor.write")}</th>
-                <th className="font-normal border-b border-line text-right pr-3">{t("monitor.up")}</th>
-                <th className="font-normal border-b border-line text-right" title={t("monitor.restartsHint")}>{t("monitor.restarts")}</th>
+                <th className="font-normal border-b border-line text-end pe-3" title={t("monitor.gpuHint")}>{t("monitor.gpu")}</th>
+                <th className="font-normal border-b border-line text-end pe-3" title={t("monitor.gpuMemoryHint")}>{t("monitor.gpuMem")}</th>
+                <th className="font-normal border-b border-line text-end pe-3">{t("monitor.read")}</th>
+                <th className="font-normal border-b border-line text-end pe-3">{t("monitor.write")}</th>
+                <th className="font-normal border-b border-line text-end pe-3">{t("monitor.up")}</th>
+                <th className="font-normal border-b border-line text-end" title={t("monitor.restartsHint")}>{t("monitor.restarts")}</th>
               </tr>
             </thead>
             <tbody>
@@ -145,29 +145,29 @@ export function MonitorView({ accounts }: { accounts: AccountSummary[] }) {
                 const [label, color] = STATES[i.state];
                 return (
                   <tr key={i.id} className="h-12 border-b border-line last:border-b-0" title={`PID ${i.pid}`} style={{ fontVariantNumeric: "tabular-nums" }}>
-                    <td className="pr-3 max-w-[180px]">
+                    <td className="pe-3 max-w-[180px]">
                       <span className="flex items-center gap-2 min-w-0 font-sans">
                         {a && <Avatar account={a} size={20} />}
                         <span className="truncate min-w-[80px]">{a ? accountName(a) : t("monitor.accountId", { id: i.accountId })}</span>
                       </span>
                     </td>
-                    <td className="pr-3 whitespace-nowrap">
+                    <td className="pe-3 whitespace-nowrap">
                       <span className="flex items-baseline gap-1.5">
                         <span aria-hidden="true" className="w-2 h-2 flex-none rounded-full" style={{ background: color }} />
                         {label}
                         {i.note && <span className="text-orange truncate"> · {i.note}</span>}
                       </span>
                     </td>
-                    <td className="pr-3 text-right whitespace-nowrap">{m ? pct(m.cpuPct) : "—"}</td>
-                    <td className="pr-3 hidden xl:table-cell"><Sparkline values={h?.cpu ?? []} floor={10} zero label={t("monitor.cpu")} format={pct} /></td>
-                    <td className="pr-3 text-right" title={m ? t("monitor.workingSet", { mb: mb(m.workingSetMb) }) : undefined}>{m ? mb(m.privateMb) : "—"}</td>
-                    <td className="pr-3 hidden xl:table-cell"><Sparkline values={h?.mem ?? []} floor={64} label={t("monitor.privateMemory")} format={mb} /></td>
-                    <td className="pr-3 text-right whitespace-nowrap">{m ? pct(m.gpuPct) : "—"}</td>
-                    <td className="pr-3 text-right whitespace-nowrap">{m && m.gpuMemMb !== null ? mb(m.gpuMemMb) : "—"}</td>
-                    <td className="pr-3 text-right whitespace-nowrap">{m ? rate(m.readBps) : "—"}</td>
-                    <td className="pr-3 text-right whitespace-nowrap">{m ? rate(m.writeBps) : "—"}</td>
-                    <td className="pr-3 text-right whitespace-nowrap">{uptime(i.startedAt, now)}</td>
-                    <td className="text-right">{i.rejoins}</td>
+                    <td className="pe-3 text-end whitespace-nowrap">{m ? pct(m.cpuPct) : "—"}</td>
+                    <td className="pe-3 hidden xl:table-cell"><Sparkline values={h?.cpu ?? []} floor={10} zero label={t("monitor.cpu")} format={pct} /></td>
+                    <td className="pe-3 text-end" title={m ? t("monitor.commit", { mb: mb(m.privateMb) }) : undefined}>{m ? mb(m.memoryMb) : "—"}</td>
+                    <td className="pe-3 hidden xl:table-cell"><Sparkline values={h?.mem ?? []} floor={64} label={t("monitor.memory")} format={mb} /></td>
+                    <td className="pe-3 text-end whitespace-nowrap">{m ? pct(m.gpuPct) : "—"}</td>
+                    <td className="pe-3 text-end whitespace-nowrap">{m && m.gpuMemMb !== null ? mb(m.gpuMemMb) : "—"}</td>
+                    <td className="pe-3 text-end whitespace-nowrap">{m ? rate(m.readBps) : "—"}</td>
+                    <td className="pe-3 text-end whitespace-nowrap">{m ? rate(m.writeBps) : "—"}</td>
+                    <td className="pe-3 text-end whitespace-nowrap">{uptime(i.startedAt, now)}</td>
+                    <td className="text-end">{i.rejoins}</td>
                   </tr>
                 );
               })}

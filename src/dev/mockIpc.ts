@@ -72,11 +72,11 @@ let settings: Settings = {
   theme: "dark", accent: "", backgroundDim: 60, density: "detailed", autoLockMinutes: 15, clipboardClearSeconds: 30, cacheMinutes: 10,
   multiInstance: true, protectSharedLogin: true, launchDelayMs: 6000, autoRejoin: false, autoRestartOnCrash: false,
   breakerMax: 3, breakerWindowMin: 10, closeGraceS: 5, launchArgs: "", closeToTray: false,
-  memRestartMb: 0, memThrottle: { mb: 0, cpuCap: 10 }, trimEveryMin: 0, autoSpread: false,
+  memRestartMb: 0, memThrottle: { mb: 0, cpuCap: 10 }, trimEveryMin: 0, autoSpread: false, fairCap: false,
   adaptive: { enabled: false, background: { cpuCap: 25, eco: true, trimEveryMin: null, affinity: null } }, bandwidthKbps: 0,
   antiAfk: { enabled: false, intervalMin: 15, mode: "focus" },
   discord: { crash: true, hang: true, memRestart: true, disconnect: true, restart: true, breaker: true, batchDone: true, launch: false, statusEveryMin: 0 },
-  autoUpdate: false, selfUpdate: true, discordPresence: true, minimizeOnLaunch: false, microWidth: 320, microHeight: 240, tinyOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0, lowGraphics: true, skipSplash: false, lighterRendering: true, renderFlags: { msaa: "x1", texture: "lowest", mode: "default", graySky: false, noGrass: true, lowestFrm: true }, parkMinimized: false, headless: false, keepRunningOnClose: false,
+  autoUpdate: false, selfUpdate: true, discordPresence: true, minimizeOnLaunch: false, microWidth: 320, microHeight: 240, tinyOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0, lowGraphics: true, skipSplash: false, lighterRendering: true, renderFlags: { msaa: "x1", texture: "lowest", mode: "default", graySky: false, noGrass: true, lowestFrm: true, pauseVoxelizer: false }, headless: false, keepRunningOnClose: false,
   allowPublicNetworks: true, language: "",
 };
 
@@ -118,7 +118,7 @@ function fakeMetrics() {
     return {
       instanceId: i.id, pid: i.pid,
       cpuPct: age < 2 ? null : Math.min(capped, 2 + 9 * wave(7) + 3 * Math.random()) * (i.limits.eco ? 0.7 : 1),
-      workingSetMb: 600 + 250 * wave(23) + leak * 0.8,
+      memoryMb: 600 + 250 * wave(23) + leak * 0.8,
       privateMb: 900 + 120 * wave(31) + leak,
       readBps: age < 2 ? null : 20_000 + 400_000 * wave(5) * Math.random(),
       writeBps: age < 2 ? null : 5_000 + 60_000 * wave(9),
@@ -127,19 +127,34 @@ function fakeMetrics() {
     };
   });
 }
-/** Clients whose fake window is minimized (no picture). */
-const minimized = new Set<string>();
-/** A fake 4:3 picture of a client's window: a moving sky over a green baseplate. */
-/** Clients "parked" off-screen (`parkMinimized`): still drawing. */
-const parked = new Set<string>();
-function fakeThumb(i: Instance, w: number) {
-  const h = Math.round((w * 3) / 4);
-  const buf = new ArrayBuffer(12 + w * h * 4);
+/** Clients hidden by Minimize: still drawing, as `window::ghost`. */
+const ghosts = new Set<string>();
+let thumbSeq = 0;
+type FakeShot = { seq: number; w: number; h: number; rgba: Uint8ClampedArray; at: number };
+/** Each client's newest picture, kept like `capture::SHOTS`. */
+const shots = new Map<string, FakeShot>();
+/** To see what the mock doesn't get into by itself, from the console:
+ * `mockPreview.set(instanceId, "pending" | "unsupported" | "stale" | "minimized")`. */
+const previewForced = new Map<string, "pending" | "unsupported" | "stale" | "minimized">();
+(window as unknown as { mockPreview: typeof previewForced }).mockPreview = previewForced;
+/** As `window::Preview::to_bytes`: the header, then the pixels unless they are `known`. */
+function thumbReply(i: Instance, status: number, known: number, shot?: FakeShot) {
+  const pixels = shot && shot.seq !== known ? shot.rgba : null;
+  const buf = new ArrayBuffer(24 + (pixels?.length ?? 0));
   const head = new DataView(buf);
-  head.setUint32(0, w, true);
-  head.setUint32(4, h, true);
-  head.setUint32(8, parked.has(i.id) ? 1 : 0, true);
-  const px = new Uint8ClampedArray(buf, 12);
+  head.setUint32(0, shot?.w ?? 0, true);
+  head.setUint32(4, shot?.h ?? 0, true);
+  head.setUint32(8, status, true);
+  head.setUint32(12, ghosts.has(i.id) ? 1 : 0, true);
+  head.setUint32(16, shot?.seq ?? 0, true);
+  head.setUint32(20, shot ? Date.now() - shot.at : 0, true);
+  if (pixels) new Uint8ClampedArray(buf, 24).set(pixels);
+  return buf;
+}
+/** A fake 4:3 picture of a client's window: a moving sky over a green baseplate. */
+function fakeShot(i: Instance, w: number): FakeShot {
+  const h = Math.round((w * 3) / 4);
+  const px = new Uint8ClampedArray(w * h * 4);
   const shift = (Date.now() / 40 + i.accountId * 60) % w;
   for (let y = 0; y < h; y++)
     for (let x = 0; x < w; x++) {
@@ -151,7 +166,7 @@ function fakeThumb(i: Instance, w: number) {
       px[o + 2] = ground ? 70 : block ? 60 : 240;
       px[o + 3] = 255;
     }
-  return buf;
+  return { seq: ++thumbSeq, w, h, rgba: px, at: Date.now() };
 }
 const crashes: Crash[] = [];
 // Instances: a stranger client blocks multi-instance until "Close Roblox".
@@ -186,7 +201,7 @@ function endInstance(id: string, note: string) {
 }
 /** The last performance profile "saved" in the preview (performance_export). */
 let lastProfile: string | null = null;
-const PERF_KEYS = ["fpsCap", "lowGraphics", "lighterRendering", "renderFlags", "minimizeOnLaunch", "microWidth", "microHeight", "tinyOnLaunch", "parkMinimized", "memRestartMb", "memThrottle", "trimEveryMin", "autoSpread", "adaptive"] as const;
+const PERF_KEYS = ["fpsCap", "lowGraphics", "lighterRendering", "renderFlags", "minimizeOnLaunch", "microWidth", "microHeight", "tinyOnLaunch", "memRestartMb", "memThrottle", "trimEveryMin", "autoSpread", "fairCap", "adaptive"] as const;
 
 function perfProfile(previewFps: number) {
   const s: Record<string, unknown> = {};
@@ -212,7 +227,7 @@ function perfParse(text: string): Record<string, unknown> | string {
   if (mem && mem < 512) return "The memory limit must be 0 (off) or 512 to 65 536 MB.";
   const out: Record<string, unknown> = {};
   for (const k of PERF_KEYS) if (p[k] !== undefined && p[k] !== null) out[k] = p[k];
-  if ([15, 30, 60].includes(p.previewFps as number)) out.previewFps = p.previewFps;
+  if ([5, 15, 30, 60].includes(p.previewFps as number)) out.previewFps = p.previewFps;
   return out;
 }
 
@@ -933,32 +948,33 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     case "instance_thumbnail": {
       const i = instances.find((x) => x.id === args.id);
       if (!i) return fail("notFound", "Not found.");
-      if (i.state === "exited" || i.state === "starting" || minimized.has(i.id)) return new ArrayBuffer(0);
-      return fakeThumb(i, Math.min(args.maxW, i.micro ? 320 : 800));
+      if (i.state === "exited" || i.state === "starting") return thumbReply(i, 2, args.known);
+      const forced = previewForced.get(i.id);
+      if (forced === "pending" || forced === "unsupported") return thumbReply(i, forced === "pending" ? 3 : 4, args.known);
+      if (forced === "minimized") return thumbReply(i, 1, args.known, shots.get(i.id));
+      if (forced !== "stale") shots.set(i.id, fakeShot(i, Math.min(args.maxW, i.micro ? 320 : 800)));
+      return thumbReply(i, 0, args.known, shots.get(i.id));
     }
     case "instance_show": {
       const i = instances.find((x) => x.id === args.id && x.state !== "exited");
       if (!i) return fail("notFound", "Not found.");
-      minimized.delete(i.id);
-      parked.delete(i.id);
-      if (args.what === "minimize") (settings.parkMinimized ? parked : minimized).add(i.id);
+      if (args.what === "minimize") ghosts.add(i.id); else ghosts.delete(i.id);
       return null;
     }
     case "instances_show_all":
       if (args.what === "focus") return fail("invalid", "Only one client can be in front.");
-      for (const i of instances) if (args.what === "minimize") minimized.add(i.id); else minimized.delete(i.id);
+      for (const i of instances) if (args.what === "minimize") ghosts.add(i.id); else ghosts.delete(i.id);
       return null;
     case "instance_micro": {
       const i = instances.find((x) => x.id === args.id && x.state !== "exited");
       if (!i) return fail("notFound", "Not found.");
       if (i.state === "starting") return fail("invalid", "That client hasn't started yet, or has closed.");
       i.micro = args.on;
-      minimized.delete(i.id);
       instancesChanged();
       return args.on ? (args.size ?? [settings.microWidth, settings.microHeight]) : [800, 600];
     }
     case "instances_tile": {
-      const shown = instances.filter((i) => i.state !== "exited" && i.state !== "starting" && !minimized.has(i.id));
+      const shown = instances.filter((i) => i.state !== "exited" && i.state !== "starting" && !ghosts.has(i.id));
       if (args.micro) shown.forEach((i) => { i.micro = true; });
       instancesChanged();
       return shown.length;

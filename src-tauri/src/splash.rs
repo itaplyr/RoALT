@@ -64,7 +64,7 @@ pub fn start(app: &AppHandle, w: &WebviewWindow, skip: bool) -> tauri::Result<()
     if skip {
         w.set_size(PhysicalSize::new(rect.w as u32, rect.h as u32))?;
         w.set_position(PhysicalPosition::new(rect.x, rect.y))?;
-        settle(&w, maximized);
+        settle(w, maximized);
         w.show()?;
         let _ = w.set_focus();
         return Ok(());

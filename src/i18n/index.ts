@@ -6,30 +6,50 @@
 // language (`key_one`, `key_few`, `key_many`, `key_other`); `t(key, { count })` picks one with
 // Intl.PluralRules. `scripts/check-i18n.mjs` fails the build when a catalog misses a key.
 import { Fragment, createElement, type ReactNode } from "react";
+import ar from "./locales/ar.json";
 import bs from "./locales/bs.json";
 import de from "./locales/de.json";
 import en from "./locales/en.json";
+import es from "./locales/es.json";
+import fil from "./locales/fil.json";
+import fr from "./locales/fr.json";
 import id from "./locales/id.json";
+import ja from "./locales/ja.json";
+import ko from "./locales/ko.json";
 import pl from "./locales/pl.json";
+import pt from "./locales/pt.json";
 import ru from "./locales/ru.json";
 import sv from "./locales/sv.json";
+import th from "./locales/th.json";
 import tr from "./locales/tr.json";
+import vi from "./locales/vi.json";
+import zh from "./locales/zh.json";
 
 /** Language codes with their own name, in picker order. */
 export const LANGUAGES = [
   ["en", "English"],
+  ["ar", "العربية"],
   ["bs", "Bosanski"],
   ["de", "Deutsch"],
+  ["es", "Español"],
+  ["fil", "Filipino"],
+  ["fr", "Français"],
   ["id", "Bahasa Indonesia"],
+  ["ja", "日本語"],
+  ["ko", "한국어"],
   ["pl", "Polski"],
+  ["pt", "Português (Brasil)"],
   ["ru", "Русский"],
   ["sv", "Svenska"],
+  ["th", "ไทย"],
   ["tr", "Türkçe"],
+  ["vi", "Tiếng Việt"],
+  ["zh", "简体中文"],
 ] as const;
 export type Lang = (typeof LANGUAGES)[number][0];
 
 type Catalog = Record<string, string>;
-const catalogs: Record<Lang, Catalog> = { en, bs, de, id, pl, ru, sv, tr };
+const catalogs: Record<Lang, Catalog> = { en, ar, bs, de, es, fil, fr, id, ja, ko, pl, pt, ru, sv, th, tr, vi, zh };
 
 type PluralSuffix = "_one" | "_few" | "_many" | "_other";
 type Base<K> = K extends `${infer B}${PluralSuffix}` ? B : K;
@@ -60,9 +80,12 @@ export function setLang(pref: string | undefined) {
   rules = new Intl.PluralRules(lang);
   numbers = new Intl.NumberFormat(lang);
   document.documentElement.lang = lang;
+  document.documentElement.dir = lang === "ar" ? "rtl" : "ltr";
 }
 
 export const getLang = () => lang;
+/** The layout runs right to left: screen X in pointer and arrow-key logic is mirrored. */
+export const isRtl = () => lang === "ar";
 
 function lookup(key: Key, p?: Params): string {
   const cat = catalogs[lang];

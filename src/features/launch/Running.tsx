@@ -255,8 +255,10 @@ export function KillAllButton() {
   const [held, setHeld] = useState(false);
   const [busy, setBusy] = useState(false);
   const timer = useRef<number | undefined>(undefined);
+  const button = useRef<HTMLButtonElement>(null);
   useEffect(() => () => clearTimeout(timer.current), []);
   const fire = () => {
+    if (!matchMedia("(prefers-reduced-motion: reduce)").matches) button.current?.animate([{ filter: "brightness(1.9)" }, { filter: "none" }], { duration: 350, easing: "ease-out" });
     setHeld(false);
     setBusy(true);
     api
@@ -279,13 +281,17 @@ export function KillAllButton() {
   const key = (e: { key: string }) => e.key === " " || e.key === "Enter";
   return (
     <button
+      ref={button}
       type="button"
-      className="btn btn-danger relative overflow-hidden w-full whitespace-normal leading-tight py-1.5"
+      className="btn btn-danger hold-btn relative overflow-hidden w-full whitespace-normal leading-tight py-1.5"
+      style={{ "--hold": `${HOLD_MS}ms` } as React.CSSProperties}
+      data-held={held || undefined}
+      data-busy={busy || undefined}
       disabled={busy}
       title={t("launch.kill.hint")}
       // Screen readers and voice control activate without pressing anything to hold.
       onClick={(e) => e.detail === 0 && !busy && !held && fire()}
-      onPointerDown={start}
+      onPointerDown={(e) => e.button === 0 && start()}
       onPointerUp={stop}
       onPointerLeave={stop}
       onKeyDown={(e) => {
@@ -296,16 +302,8 @@ export function KillAllButton() {
       onKeyUp={(e) => key(e) && stop()}
       onBlur={stop}
     >
-      <span
-        aria-hidden="true"
-        className="absolute inset-y-0 left-0"
-        style={{
-          width: held ? "100%" : "0%",
-          background: "color-mix(in srgb, var(--err) 30%, transparent)",
-          transition: held ? `width ${HOLD_MS}ms linear` : "none",
-        }}
-      />
-      <span className="relative min-w-0">{busy ? t("launch.kill.killing") : held ? t("launch.kill.holding") : t("launch.kill.hold")}</span>
+      <span aria-hidden="true" className="hold-fill" />
+      <span className="hold-label relative min-w-0">{busy ? t("launch.kill.killing") : held ? t("launch.kill.holding") : t("launch.kill.hold")}</span>
     </button>
   );
 }

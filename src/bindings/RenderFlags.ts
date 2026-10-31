@@ -6,4 +6,4 @@ import type { TextureQuality } from "./TextureQuality";
 /**
  * What `lighter_rendering` writes (`launcher::flags`). The default is what it has always done.
  */
-export type RenderFlags = { msaa: Msaa, texture: TextureQuality, mode: RenderMode, graySky: boolean, noGrass: boolean, lowestFrm: boolean, };
+export type RenderFlags = { msaa: Msaa, texture: TextureQuality, mode: RenderMode, graySky: boolean, noGrass: boolean, lowestFrm: boolean, pauseVoxelizer: boolean, };

@@ -6,79 +6,110 @@ import { Segmented, Switch } from "../../ui/controls";
 import { ConfirmDialog } from "../../ui/Dialog";
 import { Icon, type IconName } from "../../ui/Icon";
 import { toast, toastError } from "../../ui/Toast";
-import { fmtList, t } from "../../i18n";
+import { fmtList, isRtl, t } from "../../i18n";
 import { accountName, Avatar } from "../accounts/shared";
 import { EndedPanel, isRunning, LimitsDialog, STATES, uptime, useNow } from "../launch/Running";
 import { launched, launchFailed } from "../launch/LaunchView";
 import { mb, pct } from "../monitor/MonitorView";
 import { menuKeys } from "../../ui/menu";
+import { AccountTabs } from "./AccountTabs";
+import { homeSorted, reordered, useHomeDetailed, useHomeOrder, useHomeSizes, type HomeTabs } from "./homeLayout";
 import { usePreviewFps, type PreviewFps } from "./previewFps";
+import { useGridDrag } from "./useGridDrag";
 
 const CAPS = [0, 50, 25, 10, 5];
 /** How often a hidden RoALT window looks again whether it is shown. */
 const HIDDEN_MS = 500;
 
-/** Draws the client's window on `canvas` `fps` times a second while the RoALT window is
- * visible, one picture in flight at a time (a slow capture lowers the rate, never queues);
- * true / false once it is known whether there is a picture (false: minimized or no window
- * yet), null before; `painted`: the canvas holds a picture, the last one while `shown` is false;
- * `parked`: it is off-screen, not minimized. */
+/** All cards together ask for at most this many pictures a second.
+ * ponytail: a guess, tune it from measurements with many clients. */
+const PICTURES_PER_SECOND = 60;
+/** A picture counts as old from this age, and only after asking this long without a break. */
+const STALE_MS = 3000;
+const STATUSES = ["live", "minimized", "noWindow", "pending", "unsupported"] as const;
+/** The cards scrolled into view, sharing `PICTURES_PER_SECOND`. */
+let cardsInView = 0;
+
+/** Draws the client's window on `canvas` up to `fps` times a second while the RoALT window is
+ * visible, one request in flight at a time; a request that gets no new picture changes nothing on
+ * the canvas. `status`: what the client's window is doing (`window::Status`), null before the first
+ * answer; `painted`: the canvas holds a picture, maybe an old one; `ghost`: RoALT hid it, and it
+ * draws while asked for; `ageS`: seconds since its picture, when it is live and that has gone on too long. */
 function useThumbnail(id: string, canvas: React.RefObject<HTMLCanvasElement | null>, fps: PreviewFps) {
-  const [shown, setShown] = useState<boolean | null>(null);
+  const [status, setStatus] = useState<(typeof STATUSES)[number] | null>(null);
   const [painted, setPainted] = useState(false);
-  const [parked, setParked] = useState(false);
+  const [ghost, setGhost] = useState(false);
+  const [ageS, setAgeS] = useState<number | null>(null);
   useEffect(() => {
     let stop = false;
     let timer: number | undefined;
-    const every = 1000 / fps;
+    let known = 0;
+    // Nothing was asked for while out of sight: a picture isn't old until asked for a while again.
+    let wasVisible = false;
+    let askingSince = 0;
+    let wasLive = false;
     // A card scrolled out of sight costs no pictures.
     let inView = true;
-    const seen = new IntersectionObserver(([e]) => void (inView = e.isIntersecting));
+    cardsInView++;
+    const seen = new IntersectionObserver((entries) => {
+      const now = entries[entries.length - 1].isIntersecting;
+      if (now !== inView) cardsInView += now ? 1 : -1;
+      inView = now;
+    });
     if (canvas.current) seen.observe(canvas.current);
     const tick = async () => {
       const started = performance.now();
       const el = canvas.current;
       const visible = document.visibilityState === "visible" && inView;
+      if (visible && !wasVisible) askingSince = started;
+      wasVisible = visible;
       if (el && visible) {
         try {
-          const buf = await api.instanceThumbnail(id, Math.min(480, Math.max(160, Math.round(el.clientWidth * devicePixelRatio))));
+          const buf = await api.instanceThumbnail(id, Math.min(960, Math.max(320, Math.round(el.clientWidth * devicePixelRatio))), known);
           if (stop) return;
-          if (buf.byteLength < 12) {
-            setShown(false);
-            setParked(false);
-          } else {
-            const head = new DataView(buf);
-            const [w, h] = [head.getUint32(0, true), head.getUint32(4, true)];
+          const head = new DataView(buf);
+          const [w, h, code, age] = [head.getUint32(0, true), head.getUint32(4, true), head.getUint32(8, true), head.getUint32(20, true)];
+          if (buf.byteLength > 24) {
             // Resizing clears the canvas and costs a reallocation: only when the size changes.
             if (el.width !== w) el.width = w;
             if (el.height !== h) el.height = h;
-            el.getContext("2d")?.putImageData(new ImageData(new Uint8ClampedArray(buf, 12, w * h * 4), w, h), 0, 0);
-            setShown(true);
+            el.getContext("2d")?.putImageData(new ImageData(new Uint8ClampedArray(buf, 24, w * h * 4), w, h), 0, 0);
+            known = head.getUint32(16, true);
             setPainted(true);
-            setParked(head.getUint32(8, true) === 1);
           }
+          setStatus(STATUSES[code]);
+          setGhost(head.getUint32(12, true) === 1);
+          // Back from minimized or no window: no picture came meanwhile, as when out of sight.
+          const live = STATUSES[code] === "live";
+          if (live && !wasLive) askingSince = performance.now();
+          wasLive = live;
+          setAgeS(live && age >= STALE_MS && performance.now() - askingSince >= STALE_MS ? Math.floor(age / 1000) : null);
         } catch {
           // Ended or not started: the card goes with the next instances list.
         }
       }
-      if (!stop) timer = window.setTimeout(tick, visible ? Math.max(0, every - (performance.now() - started)) : HIDDEN_MS);
+      const delay = Math.max(1000 / fps, (cardsInView * 1000) / PICTURES_PER_SECOND);
+      if (!stop) timer = window.setTimeout(tick, visible ? Math.max(0, delay - (performance.now() - started)) : HIDDEN_MS);
     };
     void tick();
     return () => {
       stop = true;
       clearTimeout(timer);
       seen.disconnect();
+      if (inView) cardsInView--;
     };
   }, [id, canvas, fps]);
-  return { shown, painted, parked };
+  return { status, painted, ghost, ageS };
 }
 
-/** `beside`: the left edge of the key that opened it. The menu opens left of that, not over it,
+/** `beside`: the left edge of the key that opened it, `x` its right edge. The menu opens on the
+ * side the card's text starts from (left of the key, or right of it right to left), not over it,
  * where a second click would land on an item. */
 type MenuAt = { inst: Instance; hidden: boolean; x: number; y: number; from: HTMLElement; beside?: number };
 
 const closeKey = (i: Instance) => `${i.id}:${i.pid}`;
 const capitalized = (s: string) => s.charAt(0).toLocaleUpperCase() + s.slice(1);
+const playAgain = (a: AccountSummary, i: Instance) => api.launch(a.id, i.target, undefined, i.fpsCap).then((info) => launched(a, info), launchFailed);
 
 /** The game's name for a card, from the shared game cache. */
 function GameName({ placeId }: { placeId: number | null }) {
@@ -86,29 +117,109 @@ function GameName({ placeId }: { placeId: number | null }) {
   return <span className="truncate">{placeId === null ? t("dashboard.noGameYet") : g?.name ?? t("dashboard.place", { id: placeId })}</span>;
 }
 
-/** One running client: its live picture, who, where, how long, what it uses, and its keys. */
-function ClientCard({ inst: i, account: a, metrics: m, now, afkOn, fps, closing, onMenu }: {
+/** A card's flex width: unsized cards share a row, up to a quarter over their base, so one left alone
+ * on a row looks like the rest; a sized one keeps its width unless the window is narrower. */
+const cardFlex = (width: number | undefined, detailed: boolean) => {
+  const base = detailed ? 280 : 180;
+  const minWidth = `min(${detailed ? 260 : 160}px, 100%)`;
+  return width ? { flex: `0 1 ${width}px`, minWidth } : { flex: `1 1 ${base}px`, maxWidth: base * 1.25, minWidth };
+};
+
+/** The corner that sizes a card: drag it, arrow keys step, double-click or Home goes back to the
+ * shared width. Drags change only the element, so the picture and the other cards don't re-render. */
+function SizeHandle({ name, detailed, onSize }: { name: string; detailed: boolean; onSize: (width: number | null) => void }) {
+  const from = useRef<{ x: number; y: number; w: number; moved?: boolean } | null>(null);
+  // A click, or the second of a double-click, sizes nothing. What a drag set stays, so React knows it.
+  const end = (e: { currentTarget: Element }) => {
+    if (from.current?.moved) onSize(parseFloat(tile(e).style.flexBasis));
+    from.current = null;
+  };
+  const tile = (e: { currentTarget: Element }) => e.currentTarget.closest<HTMLElement>(".tile")!;
+  const fit = (el: HTMLElement, w: number) => Math.round(Math.max(detailed ? 260 : 160, Math.min(el.parentElement!.clientWidth, w)));
+  return (
+    <button
+      type="button"
+      className="size-handle"
+      aria-label={t("dashboard.resizeCard", { name })}
+      title={t("dashboard.resizeHint")}
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        from.current = { x: e.clientX, y: e.clientY, w: tile(e).getBoundingClientRect().width };
+      }}
+      onPointerMove={(e) => {
+        const f = from.current;
+        // A hand's tremble in a click isn't a drag.
+        if (!f || (!f.moved && Math.hypot(e.clientX - f.x, e.clientY - f.y) < 4)) return;
+        f.moved = true;
+        const el = tile(e);
+        // The picture sets the height, so a drag down counts as the width that height needs.
+        const [dx, dy] = [(e.clientX - f.x) * (isRtl() ? -1 : 1), ((e.clientY - f.y) * 16) / 9];
+        const w = fit(el, f.w + (Math.abs(dx) > Math.abs(dy) ? dx : dy));
+        el.style.flex = `0 1 ${w}px`;
+        el.style.maxWidth = "none";
+      }}
+      onPointerUp={end}
+      onPointerCancel={end}
+      onDoubleClick={() => onSize(null)}
+      onKeyDown={(e) => {
+        const out = isRtl() ? -20 : 20;
+        const step = ({ ArrowLeft: -out, ArrowDown: -20, ArrowRight: out, ArrowUp: 20 } as Record<string, number>)[e.key];
+        if (e.key === "Home") onSize(null);
+        else if (step) onSize(fit(tile(e), tile(e).getBoundingClientRect().width + step));
+        else return;
+        e.preventDefault();
+      }}
+    >
+      <svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round">
+        <path d="M9 2 2 9M9 6 6 9" />
+      </svg>
+    </button>
+  );
+}
+
+/** One running client: its live picture, who, where, how long, what it uses, and its keys; with
+ * `detailed` off only the picture and the username, the rest being in the right-click menu. */
+function ClientCard({ inst: i, account: a, metrics: m, now, afkOn, defaultFps, fps, closing, detailed, width, onSize, grip, onMenu }: {
   inst: Instance;
   account: AccountSummary | undefined;
   metrics: ClientMetrics | undefined;
   now: number;
   afkOn: boolean;
+  /** Performance's FPS cap. */
+  defaultFps: number;
   fps: PreviewFps;
   closing: boolean;
+  detailed: boolean;
+  width: number | undefined;
+  onSize: (width: number | null) => void;
+  grip: ReturnType<typeof useGridDrag>["grip"];
   onMenu: (at: MenuAt) => void;
 }) {
+  const card = useRef<HTMLDivElement>(null);
+  // Rises in. Done with WAAPI because a CSS animation restarts whenever React moves the card.
+  useLayoutEffect(() => {
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    card.current?.animate([{ opacity: 0, transform: "translateY(8px)" }, { opacity: 1, transform: "none" }], { duration: 220, easing: "cubic-bezier(.2,.8,.2,1)" });
+  }, []);
   const canvas = useRef<HTMLCanvasElement>(null);
-  const { shown, painted, parked } = useThumbnail(i.id, canvas, fps);
+  const { status, painted, ghost, ageS } = useThumbnail(i.id, canvas, fps);
   // No window to show or minimize yet.
-  const noWindow = !shown && i.state === "starting";
-  const hidden = !noWindow && (shown === false || parked);
+  const noWindow = status === "noWindow" || (status === null && i.state === "starting");
+  const hidden = status === "minimized" || ghost;
   const name = a ? accountName(a) : t("dashboard.account", { id: i.accountId });
   const rejoining = i.relaunching && i.state === "disconnected";
   const [label, color] = closing ? [t("launch.running.closing"), "var(--dim)"] : rejoining ? [t("launch.state.rejoining"), "var(--orange)"] : STATES[i.state];
   const moving = i.state === "starting" || i.state === "joining" || rejoining || closing;
   const focus = () => api.instanceShow(i.id, "focus").catch(toastError);
   const throttled = t("dashboard.throttled");
-  const badges: [string, string?][] = [
+  const pictureNote = status === "minimized" ? t("dashboard.minimized")
+    : status === "noWindow" ? (i.state === "starting" ? t("dashboard.starting") : t("dashboard.noWindow"))
+    : status === "pending" ? t("dashboard.waitingPicture")
+    : status === "unsupported" ? t("dashboard.noPreview")
+    : "";
+  const badges:[string, string?][] = [
     ...(i.throttled ? [[throttled, t("dashboard.throttledHint")] as [string, string]] : []),
     ...(i.limits.cpuCap !== null ? [[t("dashboard.cpuPct", { pct: i.limits.cpuCap })] as [string]] : []),
     ...(i.limits.eco ? [[t("dashboard.efficiency")] as [string]] : []),
@@ -116,15 +227,19 @@ function ClientCard({ inst: i, account: a, metrics: m, now, afkOn, fps, closing,
     ...(i.limits.affinity !== null ? [[capitalized(t("launch.limits.coresItem"))] as [string]] : []),
     ...(afkOn && i.antiAfk ? [[t("dashboard.antiAfk"), i.afkAt !== null ? t("dashboard.lastKeyPress", { time: uptime(i.afkAt, now) }) : t("dashboard.noKeyPress")] as [string, string]] : []),
     ...(i.micro ? [[t("dashboard.micro")] as [string]] : []),
-    ...(i.fpsCap ? [[t("dashboard.fps", { fps: i.fpsCap }), t("dashboard.launchFpsCap")] as [string, string]]
-      : a?.fpsCap ? [[t("dashboard.fps", { fps: a.fpsCap }), t("dashboard.accountFpsCap")] as [string, string]] : []),
+    ...(i.fpsCap ? [[t("dashboard.fpsCap", { fps: i.fpsCap }), t("dashboard.launchFpsCap")] as [string, string]]
+      : a?.fpsCap ? [[t("dashboard.fpsCap", { fps: a.fpsCap }), t("dashboard.accountFpsCap")] as [string, string]]
+      : defaultFps ? [[t("dashboard.fpsCap", { fps: defaultFps }), t("dashboard.defaultFpsCap")] as [string, string]] : []),
   ];
   return (
     <div
+      ref={card}
       role="group"
       tabIndex={0}
       aria-label={t("dashboard.cardLabel", { name, state: label })}
-      className="enter panel relative flex flex-col gap-3 p-3.5 min-w-0 outline-offset-2"
+      data-group={i.accountId}
+      className={`tile panel relative flex flex-col outline-offset-2 ${detailed ? "gap-3 p-3.5" : "gap-2 p-2.5"}`}
+      style={cardFlex(width, detailed)}
       title={`PID ${i.pid}`}
       onDoubleClick={(e) => {
         if (!(e.target as Element).closest("button")) void focus();
@@ -147,68 +262,82 @@ function ClientCard({ inst: i, account: a, metrics: m, now, afkOn, fps, closing,
     >
       <div className="bezel">
         <div className="relative aspect-video overflow-hidden rounded-[9px]">
-          <canvas ref={canvas} aria-hidden="true" className={`w-full h-full object-contain ${shown || painted ? "" : "invisible"} ${shown === false ? "opacity-50" : ""}`} />
-          {!shown && !painted && (
-            <span className="absolute inset-0 grid place-items-center text-xs text-dim">
-              {shown === false ? (i.state === "starting" ? t("dashboard.starting") : t("dashboard.minimized")) : ""}
+          <canvas ref={canvas} aria-hidden="true" className={`w-full h-full object-contain ${painted ? "" : "invisible"} ${pictureNote || ageS !== null ? "opacity-50" : ""}`} />
+          {!painted && <span className="absolute inset-0 grid place-items-center text-xs text-dim">{pictureNote}</span>}
+        </div>
+        {painted && pictureNote ? <span className="badge" title={status === "minimized" ? t("dashboard.lastPictureHint") : undefined}>{pictureNote}</span>
+          : ageS !== null ? <span className="badge" title={t("dashboard.pictureAgeHint")}>{t("dashboard.pictureAge", { s: ageS })}</span>
+          : ghost && <span className="badge" title={t("dashboard.hiddenHint")}>{t("dashboard.hidden")}</span>}
+        <button type="button" className="grip" aria-label={t("accounts.reorder", { name })} {...grip(name)}>
+          <Icon name="grip" size={14} />
+        </button>
+      </div>
+      {detailed ? (
+        <>
+          <div className="flex items-center gap-3 min-w-0">
+            {a && <Avatar account={a} size={36} />}
+            <div className="flex-1 min-w-0 flex flex-col">
+              <span className="font-medium truncate">{name}</span>
+              <span className="flex gap-1 text-[13px] text-dim min-w-0">
+                <GameName placeId={i.placeId} />
+                <span className="mono flex-none">· {uptime(i.startedAt, now)}</span>
+              </span>
+            </div>
+            <span className="state flex-none text-[13px]" style={{ color }}>
+              <span aria-hidden="true" className={`led ${moving ? "pulse" : ""}`} />
+              {label}
             </span>
-          )}
-        </div>
-        {shown === false && painted && <span className="badge" title={t("dashboard.lastPictureHint")}>{t("dashboard.minimized")}</span>}
-        {parked && <span className="badge" title={t("settings.parkMinimizedHint")}>{t("dashboard.parked")}</span>}
-      </div>
-      <div className="flex items-center gap-3 min-w-0">
-        {a && <Avatar account={a} size={36} />}
-        <div className="flex-1 min-w-0 flex flex-col">
-          <span className="font-medium truncate">{name}</span>
-          <span className="flex gap-1 text-[13px] text-dim min-w-0">
-            <GameName placeId={i.placeId} />
-            <span className="mono flex-none">· {uptime(i.startedAt, now)}</span>
-          </span>
-        </div>
-        <span className="state flex-none text-[13px]" style={{ color }}>
-          <span aria-hidden="true" className={`led ${moving ? "pulse" : ""}`} />
-          {label}
-        </span>
-      </div>
-      {i.note && !rejoining && <span className="text-[13px] text-orange">{i.note}</span>}
-      <div className="flex items-center justify-between gap-2 text-xs text-dim min-w-0">
-        <span className="flex flex-wrap gap-1 min-w-0">
-          {badges.map(([b, tip]) => (
-            <span key={b} className={`tag ${b === throttled ? "text-orange" : ""}`} title={tip}>{b}</span>
-          ))}
-        </span>
-        <span className="mono flex-none ml-auto" style={{ fontVariantNumeric: "tabular-nums" }}>
-          {m ? `${pct(m.cpuPct)} · ${mb(m.privateMb)}` : "—"}
-        </span>
-      </div>
-      <div className="flex gap-2.5">
-        <button className="btn flex-1 min-w-0 px-2 py-1 whitespace-normal leading-tight" disabled={noWindow} onClick={focus}>
-          {t("home.show")}
-        </button>
-        {i.state === "disconnected" && !i.relaunching && a ? (
-          // Nothing else brings it back with auto-rejoin off.
-          <button className="btn btn-primary flex-1 min-w-0 px-2 py-1 whitespace-normal leading-tight" onClick={() => api.launch(a.id, i.target, undefined, i.fpsCap).then((info) => launched(a, info), launchFailed)}>
-            {t("home.playAgain")}
-          </button>
-        ) : (
-          <button className="btn flex-1 min-w-0 px-2 py-1 whitespace-normal leading-tight" disabled={noWindow} onClick={() => api.instanceShow(i.id, hidden ? "restore" : "minimize").catch(toastError)}>
-            {hidden ? t("dashboard.restore") : t("dashboard.minimize")}
-          </button>
-        )}
-        <button
-          className="btn btn-icon"
-          aria-label={t("home.moreFor", { name })}
-          title={t("dashboard.clientActions")}
-          aria-haspopup="menu"
-          onClick={(e) => {
-            const r = e.currentTarget.getBoundingClientRect();
-            onMenu({ inst: i, hidden, x: r.left, y: r.top - 8, from: e.currentTarget, beside: r.left });
-          }}
-        >
-          <Icon name="dots" />
-        </button>
-      </div>
+          </div>
+          {i.note && !rejoining && <span className="text-[13px] text-orange">{i.note}</span>}
+          <div className="flex items-center justify-between gap-2 text-xs text-dim min-w-0">
+            <span className="flex flex-wrap gap-1 min-w-0">
+              {badges.map(([b, tip]) => (
+                <span key={b} className={`tag ${b === throttled ? "text-orange" : ""}`} title={tip}>{b}</span>
+              ))}
+            </span>
+            <span className="mono flex-none ms-auto" title={m ? t("monitor.commit", { mb: mb(m.privateMb) }) : undefined} style={{ fontVariantNumeric: "tabular-nums" }}>
+              {m ? `${pct(m.cpuPct)} · ${mb(m.memoryMb)}` : "—"}
+            </span>
+          </div>
+          <div className="flex gap-2.5">
+            <button className="btn flex-1 min-w-0 px-2 py-1 whitespace-normal leading-tight" disabled={noWindow} onClick={focus}>
+              {t("home.show")}
+            </button>
+            {i.state === "disconnected" && !i.relaunching && a ? (
+              // With auto-rejoin off, only this and the menu's item bring it back.
+              <button className="btn btn-primary flex-1 min-w-0 px-2 py-1 whitespace-normal leading-tight" onClick={() => playAgain(a, i)}>
+                {t("home.playAgain")}
+              </button>
+            ) : (
+              <button className="btn flex-1 min-w-0 px-2 py-1 whitespace-normal leading-tight" disabled={noWindow} onClick={() => api.instanceShow(i.id, hidden ? "restore" : "minimize").catch(toastError)}>
+                {hidden ? t("dashboard.restore") : t("dashboard.minimize")}
+              </button>
+            )}
+            <button
+              className="btn btn-icon"
+              aria-label={t("home.moreFor", { name })}
+              title={t("dashboard.clientActions")}
+              aria-haspopup="menu"
+              onClick={(e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                onMenu({ inst: i, hidden, x: r.right, y: r.top - 8, from: e.currentTarget, beside: r.left });
+              }}
+            >
+              <Icon name="dots" />
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="flex items-center gap-2.5 min-w-0 px-1">
+            {/* Only what needs a look; the card's label always says the state. */}
+            {(closing || i.state !== "inGame") && <span aria-hidden="true" title={label} className={`led ${moving ? "pulse" : ""}`} style={{ color }} />}
+            <span className="font-medium truncate">{a?.username ?? name}</span>
+          </div>
+          {i.note && !rejoining && <span className="px-1 text-[13px] text-orange">{i.note}</span>}
+        </>
+      )}
+      <SizeHandle name={name} detailed={detailed} onSize={onSize} />
     </div>
   );
 }
@@ -219,8 +348,9 @@ type Item =
   | null;
 
 /** A card's right-click menu: a popover, so Esc and a click outside close it; arrows move. */
-function ClientMenu({ at, onClose, afkOn, closing, onLimits, onCloseClient }: {
+function ClientMenu({ at, account, onClose, afkOn, closing, onLimits, onCloseClient }: {
   at: MenuAt | null;
+  account: AccountSummary | undefined;
   onClose: () => void;
   afkOn: boolean;
   closing: ReadonlySet<string>;
@@ -236,7 +366,7 @@ function ClientMenu({ at, onClose, afkOn, closing, onLimits, onCloseClient }: {
     el.showPopover();
     const r = el.getBoundingClientRect();
     setPos({
-      left: at.beside === undefined ? Math.max(4, Math.min(at.x, innerWidth - r.width - 4)) : Math.max(4, at.beside - r.width - 6),
+      left: at.beside === undefined ? Math.max(4, Math.min(at.x, innerWidth - r.width - 4)) : isRtl() ? Math.min(at.x + 6, innerWidth - r.width - 4) : Math.max(4, at.beside - r.width - 6),
       top: Math.max(4, Math.min(at.y, innerHeight - r.height - 4)),
     });
     el.querySelector<HTMLElement>("[role^=menuitem]")?.focus();
@@ -272,6 +402,7 @@ function ClientMenu({ at, onClose, afkOn, closing, onLimits, onCloseClient }: {
 
   const items: Item[] = i
     ? [
+        ...(i.state === "disconnected" && !i.relaunching && account ? [{ icon: "play", label: t("home.playAgain"), run: () => playAgain(account, i) } as Item] : []),
         { icon: "external", label: t("dashboard.focus"), run: () => show("focus") },
         at.hidden ? { label: t("dashboard.restore"), run: () => show("restore") } : { label: t("dashboard.minimize"), run: () => show("minimize") },
         { icon: "grid", label: i.micro ? t("dashboard.normalSize") : t("dashboard.microWindow", tiny), run: micro },
@@ -360,12 +491,17 @@ function Dial({ value, label, hint, text }: { value: number | null; label: strin
   );
 }
 
-/** How the whole PC is doing, in words and dials. */
+/** What all Roblox clients use together, in dials; the words say how much room the whole PC has. */
 function PcPanel({ metrics }: { metrics: ClientMetrics[] }) {
   const sys = useSystemUsage(true).data ?? null;
-  const memPct = sys ? (sys.memUsedMb / Math.max(1, sys.memTotalMb)) * 100 : null;
-  const gpu = metrics.some((m) => m.gpuPct !== null) ? metrics.reduce((n, m) => n + (m.gpuPct ?? 0), 0) : null;
-  const worst = Math.max(sys?.cpuPct ?? 0, memPct ?? 0, gpu ?? 0);
+  const total = (of: (m: ClientMetrics) => number | null) => (metrics.some((m) => of(m) !== null) ? metrics.reduce((n, m) => n + (of(m) ?? 0), 0) : null);
+  const memTotal = sys ? Math.max(1, sys.memTotalMb) : null;
+  const memUsed = total((m) => m.memoryMb);
+  const pcMem = sys && memTotal ? (sys.memUsedMb / memTotal) * 100 : null;
+  // Each client's own busiest engine: on one GPU the sum comes close, with clients on different
+  // GPUs it says too much.
+  const gpu = total((m) => m.gpuPct);
+  const worst = Math.max(sys?.cpuPct ?? 0, pcMem ?? 0);
   const [verdict, color] = worst < 60
     ? [t("home.plenty"), "var(--accent-text)"]
     : worst < 85
@@ -374,14 +510,17 @@ function PcPanel({ metrics }: { metrics: ClientMetrics[] }) {
   return (
     <section aria-labelledby="pc-title" className="panel flex flex-wrap items-center gap-x-8 gap-y-5 p-5">
       <div className="flex-[1_1_170px] min-w-0">
-        <h2 id="pc-title" className="section-title">{t("home.yourPc")}</h2>
-        <p className="state mt-2" style={{ color }}>
-          <span aria-hidden="true" className="led" />
-          {verdict}
-        </p>
+        <h2 id="pc-title" className="section-title">{t("home.robloxClients")}</h2>
+        {/* Without the PC's numbers there is nothing to say about its room. */}
+        {sys && (
+          <p className="state mt-2" style={{ color }} title={t("home.verdictHint", { cpu: pct(sys.cpuPct), memory: pct(pcMem) })}>
+            <span aria-hidden="true" className="led" />
+            {verdict}
+          </p>
+        )}
       </div>
-      <Dial value={sys?.cpuPct ?? null} label={t("home.cpu")} hint={t("home.wholePc")} />
-      <Dial value={memPct} label={t("home.memory")} hint={sys ? t("home.memOf", { used: mb(sys.memUsedMb), total: mb(sys.memTotalMb) }) : t("home.wholePc")} />
+      <Dial value={total((m) => m.cpuPct)} label={t("home.cpu")} hint={t("home.allClients")} />
+      <Dial value={memUsed !== null && memTotal ? (memUsed / memTotal) * 100 : null} label={t("home.memory")} hint={memUsed !== null && sys ? t("home.memOf", { used: mb(memUsed), total: mb(sys.memTotalMb) }) : t("home.allClients")} />
       <Dial value={gpu} label={t("home.gpu")} hint={t("home.allClients")} />
     </section>
   );
@@ -476,11 +615,16 @@ function Welcome({ hasAccounts, signedOut, onAdd, onImport, onPlay, onAccounts }
 
 /** Every running client at a glance, with a picture of its window, and the window tools; with
  * nothing running, the way to the first game. */
-export function DashboardView({ accounts, onLaunch, onAdd, onImport, onAccounts }: { accounts: AccountSummary[]; onLaunch: () => void; onAdd: () => void; onImport: () => void; onAccounts: () => void }) {
+export function DashboardView({ accounts, home, onLaunch, onAdd, onImport, onAccounts }: { accounts: AccountSummary[]; home: HomeTabs; onLaunch: () => void; onAdd: () => void; onImport: () => void; onAccounts: () => void }) {
   const setSettings = useSetSettings();
   const qc = useQueryClient();
   const list = useInstances().data ?? [];
   const running = list.filter(isRunning);
+  const [order, setOrder] = useHomeOrder();
+  const [detailed, setDetailed] = useHomeDetailed();
+  const [sizes, setSize] = useHomeSizes();
+  const shown = homeSorted(running, order);
+  const drag = useGridDrag((from, over) => setOrder(reordered(order, shown.map((i) => i.accountId), from, over)));
   const metrics = useMetrics().data ?? [];
   const settings = useSettings().data;
   const afkOn = settings?.antiAfk.enabled ?? false;
@@ -544,65 +688,72 @@ export function DashboardView({ accounts, onLaunch, onAdd, onImport, onAccounts 
   return (
     <main className="scroll flex-1 min-w-0 px-8 pt-5 pb-12">
       <div className="enter flex flex-col gap-6">
-        {running.length === 0 ? (
-          <Welcome hasAccounts={accounts.length > 0} signedOut={accounts.length > 0 && accounts.every((a) => a.status !== "valid")} onAdd={onAdd} onImport={onImport} onPlay={onLaunch} onAccounts={onAccounts} />
-        ) : (
-          <>
-            <header className="flex flex-wrap items-center justify-between gap-4">
-              <div className="min-w-0">
-                <h1 className="page-title">{inGame ? t("home.playing", { count: inGame }) : coming ? t("home.gettingIn") : t("home.noneInGame")}</h1>
-                <p className="page-sub">
-                  {games.length > 0 && <>{t("home.in", { games: fmtList(games) })} </>}
-                  {settings?.autoRejoin ? t("home.autoRejoinOn") : t("home.autoRejoinOff")}
-                  {settings && !settings.autoRejoin && (
-                    <button className="btn btn-ghost btn-sm ml-1" onClick={() => setSettings.mutate({ autoRejoin: true })}>{t("launch.multi.turnOn")}</button>
-                  )}
-                </p>
-              </div>
-              <div className="flex flex-wrap items-center gap-3">
-                <button className="btn" disabled={busy} onClick={tile(false)} title={t("dashboard.tileHint")}>{t("dashboard.tile")}</button>
-                <button className="btn" disabled={busy} onClick={act(() => api.instancesShowAll("minimize"))}>{t("dashboard.minimizeAll")}</button>
-                <button className="btn btn-icon" popoverTarget="home-more" style={{ anchorName: "--home-more" }} aria-label={t("home.more")} title={t("home.more")}>
-                  <Icon name="dots" />
-                </button>
-                <div id="home-more" popover="auto" className="menu" onKeyDown={menuKeys} style={{ positionAnchor: "--home-more", positionArea: "block-end span-inline-start", margin: "6px 0 0" }}>
-                  <button className="menu-item" popoverTarget="home-more" popoverTargetAction="hide" disabled={busy} onClick={act(() => api.instancesShowAll("restore"))}>{t("dashboard.restoreAll")}</button>
-                  <button className="menu-item" popoverTarget="home-more" popoverTargetAction="hide" disabled={busy} title={t("dashboard.tileMicroHint", { w: settings?.microWidth ?? 320, h: settings?.microHeight ?? 240 })} onClick={tile(true)}>{t("dashboard.tileMicro")}</button>
-                  <button
-                    className="menu-item"
-                    popoverTarget="home-more"
-                    popoverTargetAction="hide"
-                    title={t("dashboard.refreshHint")}
-                    onClick={() => {
-                      for (const queryKey of [qk.instances, qk.metrics, qk.multi]) void queryClient.invalidateQueries({ queryKey });
-                    }}
-                  >
-                    {t("dashboard.refresh")}
-                  </button>
-                  <div role="separator" className="h-px my-1 bg-line" />
-                  <button className="menu-item text-orange" popoverTarget="home-more" popoverTargetAction="hide" onClick={() => setConfirmClose(true)}>{t("launch.running.closeAll")}</button>
+        <AccountTabs accounts={accounts} home={home} onAdd={onAdd}>
+          {running.length === 0 ? (
+            <Welcome hasAccounts={accounts.length > 0} signedOut={accounts.length > 0 && accounts.every((a) => a.status !== "valid")} onAdd={onAdd} onImport={onImport} onPlay={onLaunch} onAccounts={onAccounts} />
+          ) : (
+            <>
+              <header className="flex flex-wrap items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <h1 className="page-title">{inGame ? t("home.playing", { count: inGame }) : coming ? t("home.gettingIn") : t("home.noneInGame")}</h1>
+                  <p className="page-sub">
+                    {games.length > 0 && <>{t("home.in", { games: fmtList(games) })} </>}
+                    {settings?.autoRejoin ? t("home.autoRejoinOn") : t("home.autoRejoinOff")}
+                    {settings && !settings.autoRejoin && (
+                      <button className="btn btn-ghost btn-sm ms-1" onClick={() => setSettings.mutate({ autoRejoin: true })}>{t("launch.multi.turnOn")}</button>
+                    )}
+                  </p>
                 </div>
-                <button className="btn btn-primary" onClick={onLaunch}>
-                  <Icon name="play" size={12} fill />
-                  {t("home.playMore")}
-                </button>
-              </div>
-            </header>
-            {troubles.map((i) => <Trouble key={i.id} inst={i} account={byId.get(i.accountId)} />)}
-            <PcPanel metrics={metrics} />
-            <AfkPanel />
-            <section aria-label={t("launch.running.title")} className="grid gap-6" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(280px, 100%), 1fr))" }}>
-              {running.map((i) => (
-                <ClientCard key={i.id} inst={i} account={byId.get(i.accountId)} metrics={byInst.get(i.id)} now={now} afkOn={afkOn} fps={fps} closing={closingOne.has(closeKey(i))} onMenu={openMenu} />
-              ))}
-            </section>
-          </>
-        )}
-        {running.length === 0 && accounts.length > 0 && <AfkPanel />}
-        {running.length === 0 && troubles.map((i) => <Trouble key={i.id} inst={i} account={byId.get(i.accountId)} />)}
-        <EndedPanel accounts={accounts} />
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="flex items-center gap-2 text-dim">
+                    {t("dashboard.detailedView")}
+                    <Switch label={t("dashboard.detailedView")} checked={detailed} onChange={setDetailed} />
+                  </label>
+                  <button className="btn" disabled={busy} onClick={tile(false)} title={t("dashboard.tileHint")}>{t("dashboard.tile")}</button>
+                  <button className="btn" disabled={busy} onClick={act(() => api.instancesShowAll("minimize"))}>{t("dashboard.minimizeAll")}</button>
+                  <button className="btn btn-icon" popoverTarget="home-more" style={{ anchorName: "--home-more" }} aria-label={t("home.more")} title={t("home.more")}>
+                    <Icon name="dots" />
+                  </button>
+                  <div id="home-more" popover="auto" className="menu" onKeyDown={menuKeys} style={{ positionAnchor: "--home-more", positionArea: "block-end span-inline-start", margin: "6px 0 0" }}>
+                    <button className="menu-item" popoverTarget="home-more" popoverTargetAction="hide" disabled={busy} onClick={act(() => api.instancesShowAll("restore"))}>{t("dashboard.restoreAll")}</button>
+                    <button className="menu-item" popoverTarget="home-more" popoverTargetAction="hide" disabled={busy} title={t("dashboard.tileMicroHint", { w: settings?.microWidth ?? 320, h: settings?.microHeight ?? 240 })} onClick={tile(true)}>{t("dashboard.tileMicro")}</button>
+                    <button
+                      className="menu-item"
+                      popoverTarget="home-more"
+                      popoverTargetAction="hide"
+                      title={t("dashboard.refreshHint")}
+                      onClick={() => {
+                        for (const queryKey of [qk.instances, qk.metrics, qk.multi]) void queryClient.invalidateQueries({ queryKey });
+                      }}
+                    >
+                      {t("dashboard.refresh")}
+                    </button>
+                    <div role="separator" className="h-px my-1 bg-line" />
+                    <button className="menu-item text-orange" popoverTarget="home-more" popoverTargetAction="hide" onClick={() => setConfirmClose(true)}>{t("launch.running.closeAll")}</button>
+                  </div>
+                  <button className="btn btn-primary" onClick={onLaunch}>
+                    <Icon name="play" size={12} fill />
+                    {t("home.playMore")}
+                  </button>
+                </div>
+              </header>
+              {troubles.map((i) => <Trouble key={i.id} inst={i} account={byId.get(i.accountId)} />)}
+              <PcPanel metrics={metrics} />
+              <AfkPanel />
+              <span className="sr-only" aria-live="polite">{drag.moved}</span>
+              <section ref={drag.grid} aria-label={t("launch.running.title")} className="flex flex-wrap items-start gap-6">
+                {shown.map((i) => (
+                  <ClientCard key={i.id} inst={i} account={byId.get(i.accountId)} metrics={byInst.get(i.id)} now={now} afkOn={afkOn} defaultFps={settings?.fpsCap ?? 0} fps={fps} closing={closingOne.has(closeKey(i))} detailed={detailed} width={sizes[i.accountId]} onSize={(w) => setSize(i.accountId, w)} grip={drag.grip} onMenu={openMenu} />
+                ))}
+              </section>
+            </>
+          )}
+          {running.length === 0 && accounts.length > 0 && <AfkPanel />}
+          {running.length === 0 && troubles.map((i) => <Trouble key={i.id} inst={i} account={byId.get(i.accountId)} />)}
+          <EndedPanel accounts={accounts} />
+        </AccountTabs>
       </div>
-      <ClientMenu at={menu} onClose={closeMenu} afkOn={afkOn} closing={closingOne} onLimits={setLimitsFor} onCloseClient={closeOne} />
+      <ClientMenu at={menu} account={menu ? byId.get(menu.inst.accountId) : undefined} onClose={closeMenu} afkOn={afkOn} closing={closingOne} onLimits={setLimitsFor} onCloseClient={closeOne} />
       <LimitsDialog instanceId={limitsFor} name={limitedName} onClose={() => setLimitsFor(null)} />
       <ConfirmDialog
         open={confirmClose}

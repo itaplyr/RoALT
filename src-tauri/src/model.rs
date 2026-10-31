@@ -219,6 +219,9 @@ pub struct Settings {
     pub trim_every_min: u32,
     /// Give each client its own share of the CPU cores (round-robin) unless its limits say.
     pub auto_spread: bool,
+    /// Divide the CPU among the clients: each gets a cap that shrinks as more run
+    /// (`limits::fair_cap`), unless it has its own; separate from `adaptive`'s, which it tightens.
+    pub fair_cap: bool,
     pub adaptive: Adaptive,
     /// Outbound limit for all Roblox clients together (a Windows QoS policy, set with admin
     /// rights by `bandwidth_apply`, which alone changes this); 0: none.
@@ -235,7 +238,9 @@ pub struct Settings {
     /// Discord rich presence through the Discord app on this PC (`rpc`): "Playing RoALT" with
     /// the game and how many alts run.
     pub discord_presence: bool,
-    /// Minimize each client (without taking the focus) once, when its window first appears.
+    /// Hide each client (without taking the focus) once, when its window first appears, unless its
+    /// account is full quality. A hidden client (`instances::window`) stays live while Home shows
+    /// it and sleeps otherwise, and comes back from the taskbar or Alt-Tab.
     pub minimize_on_launch: bool,
     /// System-wide key combination for Kill all, like "Ctrl+Shift+F12"; "" for none.
     pub panic_hotkey: String,
@@ -250,9 +255,6 @@ pub struct Settings {
     /// geometry detail and what `render_flags` picks.
     pub lighter_rendering: bool,
     pub render_flags: RenderFlags,
-    /// RoALT's minimize moves a client off-screen instead (`instances::window`): its preview stays
-    /// live, but it keeps using the GPU, which a minimized client doesn't.
-    pub park_minimized: bool,
     /// Width and height "Make it tiny" and "Tile tiny windows" use.
     pub micro_width: u32,
     pub micro_height: u32,
@@ -347,11 +349,12 @@ pub struct RenderFlags {
     pub gray_sky: bool,
     pub no_grass: bool,
     pub lowest_frm: bool,
+    pub pause_voxelizer: bool,
 }
 
 impl Default for RenderFlags {
     fn default() -> Self {
-        Self { msaa: Msaa::X1, texture: TextureQuality::Lowest, mode: RenderMode::Default, gray_sky: false, no_grass: true, lowest_frm: true }
+        Self { msaa: Msaa::X1, texture: TextureQuality::Lowest, mode: RenderMode::Default, gray_sky: false, no_grass: true, lowest_frm: true, pause_voxelizer: false }
     }
 }
 
@@ -378,7 +381,7 @@ impl Default for AntiAfk {
 #[ts(export)]
 pub enum AfkMode {
     /// Brings the client to the front for a moment and presses Space through `SendInput`; only
-    /// while the user is away, never in minimized clients.
+    /// while the user is away, never in minimized clients (hidden ones asleep among them).
     #[default]
     Focus,
     /// Posts Tab to the client's window without changing the focus, also while the user is
@@ -463,6 +466,7 @@ impl Default for Settings {
             mem_throttle: MemThrottle::default(),
             trim_every_min: 0,
             auto_spread: false,
+            fair_cap: false,
             adaptive: Adaptive::default(),
             bandwidth_kbps: 0,
             anti_afk: AntiAfk::default(),
@@ -477,7 +481,6 @@ impl Default for Settings {
             low_graphics: true,
             lighter_rendering: true,
             render_flags: RenderFlags::default(),
-            park_minimized: false,
             micro_width: 320,
             micro_height: 240,
             tiny_on_launch: false,
@@ -536,6 +539,8 @@ pub struct SettingsPatch {
     #[ts(optional)]
     pub auto_spread: Option<bool>,
     #[ts(optional)]
+    pub fair_cap: Option<bool>,
+    #[ts(optional)]
     pub adaptive: Option<Adaptive>,
     #[ts(optional)]
     pub anti_afk: Option<AntiAfk>,
@@ -561,8 +566,6 @@ pub struct SettingsPatch {
     pub lighter_rendering: Option<bool>,
     #[ts(optional)]
     pub render_flags: Option<RenderFlags>,
-    #[ts(optional)]
-    pub park_minimized: Option<bool>,
     #[ts(optional)]
     pub micro_width: Option<u32>,
     #[ts(optional)]
@@ -919,14 +922,14 @@ pub struct ClientMetrics {
     pub pid: u32,
     /// Percent of the whole machine since the previous sample (None on the first one).
     pub cpu_pct: Option<f64>,
-    /// Working set (what Task Manager's details show), MB.
-    pub working_set_mb: f64,
-    /// Private bytes (what a leak grows), MB.
+    /// Private working set (Task Manager's Memory column, what a trim lowers), MB.
+    pub memory_mb: f64,
+    /// Private bytes (Task Manager's Commit size, what a leak grows and the memory limits watch), MB.
     pub private_mb: f64,
     /// Disk and network reads and writes, bytes per second since the previous sample.
     pub read_bps: Option<f64>,
     pub write_bps: Option<f64>,
-    /// 3D GPU use, percent of one engine set (None when Windows can't say).
+    /// Use of its busiest GPU engine (Task Manager's GPU column), percent (None when Windows can't say).
     pub gpu_pct: Option<f64>,
     /// Dedicated GPU memory, MB (None when Windows can't say).
     pub gpu_mem_mb: Option<f64>,

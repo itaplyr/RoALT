@@ -1,11 +1,13 @@
 //! Client-window controls on Linux. Wayland has no portable global window list, and X11
-//! controls would need a separate dependency and per-compositor handling. Thumbnails, tiling,
-//! micro windows and focus/minimize are therefore not available yet.
+//! controls would need a separate dependency and per-compositor handling. Hyprland gets focus,
+//! hide and reveal through `hyprctl`; previews come from Cordial's dev-control socket.
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use crate::error::{AppError, Result};
 
@@ -16,16 +18,52 @@ pub struct Thumb {
     pub rgba: Vec<u8>,
 }
 
+#[derive(Clone)]
+pub struct Shot {
+    pub thumb: Arc<Thumb>,
+    pub seq: u32,
+    pub at: Instant,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Status {
+    Live = 0,
+    Minimized = 1,
+    NoWindow = 2,
+    Pending = 3,
+    Unsupported = 4,
+}
+
+pub struct Preview {
+    pub status: Status,
+    pub hidden: bool,
+    pub shot: Option<Shot>,
+}
+
+impl Preview {
+    /// Width, height, status, 1 if hidden else 0, picture number and its age in ms (u32
+    /// little-endian each; the size, number and age are 0 without a picture), then RGBA rows
+    /// top-down, unless the picture is `known` already.
+    pub fn to_bytes(&self, known: u32) -> Vec<u8> {
+        let (w, h, seq, age) = self.shot.as_ref().map_or((0, 0, 0, 0), |s| {
+            (s.thumb.width, s.thumb.height, s.seq, u32::try_from(s.at.elapsed().as_millis()).unwrap_or(u32::MAX))
+        });
+        let rgba = self.shot.as_ref().filter(|s| s.seq != known).map_or(&[][..], |s| &s.thumb.rgba);
+        let mut b = Vec::with_capacity(24 + rgba.len());
+        for v in [w, h, self.status as u32, u32::from(self.hidden), seq, age] {
+            b.extend(v.to_le_bytes());
+        }
+        b.extend_from_slice(rgba);
+        b
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Show {
     Focus,
     Minimize,
     Restore,
-}
-
-pub fn thumbnail(_pid: u32, _max_w: u32) -> Option<(Thumb, bool)> {
-    None
 }
 
 /// A preview through Cordial's dev-control socket. It asks the running engine to write its next
@@ -56,6 +94,33 @@ pub fn thumbnail_socket(socket: &Path, max_w: u32) -> Option<(Thumb, bool)> {
     let target_h = ((h as u64 * target_w as u64) / w.max(1) as u64).max(1) as u32;
     let resized = img.resize(target_w, target_h, image::imageops::FilterType::Triangle).to_rgba8();
     Some((Thumb { width: resized.width(), height: resized.height(), rgba: resized.into_raw() }, false))
+}
+
+static SEQ: AtomicU32 = AtomicU32::new(1);
+
+/// The newest frame Cordial can provide. A headless client has no host window, so its profile is
+/// found from the process command line and the dev-control socket does the rest.
+pub fn preview(pid: Option<u32>, max_w: u32) -> Preview {
+    let Some(pid) = pid else {
+        return Preview { status: Status::NoWindow, hidden: false, shot: None };
+    };
+    let Some(user) = super::process::profile_of(pid) else {
+        return Preview { status: Status::NoWindow, hidden: false, shot: None };
+    };
+    let Some(socket) = crate::launcher::client::devctl_socket(user) else {
+        return Preview { status: Status::NoWindow, hidden: false, shot: None };
+    };
+    match thumbnail_socket(&socket, max_w) {
+        Some((thumb, _)) => {
+            let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+            Preview {
+                status: Status::Live,
+                hidden: hidden_workspace_of(pid).is_some(),
+                shot: Some(Shot { thumb: Arc::new(thumb), seq, at: Instant::now() }),
+            }
+        }
+        None => Preview { status: Status::Pending, hidden: false, shot: None },
+    }
 }
 
 /// Where each hidden window came from. Hyprland has no minimize, so a window is moved to a
@@ -127,7 +192,7 @@ pub fn unpark_client(pid: u32) {
     let _ = reveal(pid, false);
 }
 
-pub fn show(pid: u32, what: Show, _park_it: bool) -> Result<()> {
+pub fn show(pid: u32, what: Show) -> Result<()> {
     match what {
         Show::Focus => reveal(pid, true),
         Show::Minimize => hide(pid),
@@ -135,11 +200,23 @@ pub fn show(pid: u32, what: Show, _park_it: bool) -> Result<()> {
     }
 }
 
-pub const MICRO: (u32, u32) = (320, 240);
+pub fn show_all(pids: &[u32], what: Show) {
+    for &pid in pids {
+        if let Err(e) = show(pid, what) {
+            log::debug!("show all: client {pid}: {e}");
+        }
+    }
+}
 
-pub fn minimize_quietly(pid: u32, _park_it: bool) {
+pub fn hide_on_launch(pid: u32) {
     let _ = hide(pid);
 }
+
+pub fn recover(_followed: &[u32]) {}
+
+pub fn sweep(_clients: &[(u32, Option<(u32, u32)>)]) {}
+
+pub const MICRO: (u32, u32) = (320, 240);
 
 pub fn micro(_id: &str, _pid: u32, _on: bool, size: (u32, u32)) -> Result<(u32, u32)> {
     // Hyprland can resize a window, but restoring its exact previous geometry needs the same

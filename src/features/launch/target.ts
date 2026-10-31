@@ -1,6 +1,7 @@
 // The Launch composer's state and how a target reads in the UI. Shell owns the draft, so it
 // survives switching views and is dropped with everything else when the vault locks.
-import type { LaunchTarget, ParsedInput, UserRef } from "../../api";
+import type { Dispatch, SetStateAction } from "react";
+import { api, type ErrorPayload, type LaunchTarget, type ParsedInput, type UserRef } from "../../api";
 import { t } from "../../i18n";
 
 export type Draft = {
@@ -112,3 +113,42 @@ export function describe(p: ParsedInput, place: number | null, user: UserRef | n
 /** The looked-up user for this name, if any. */
 export const userFor = (d: Draft, name: string) =>
   d.user && d.user.name.toLowerCase() === name.toLowerCase() ? d.user.ref : null;
+
+/** How a draft reads now. `pending`: the parse hasn't caught up, which is still launchable because
+ * `resolveTarget` parses again. */
+export function readDraft(d: Draft) {
+  const parsed = d.text.trim() ? d.parsed?.value ?? null : null;
+  const place = placeOf(d.place);
+  const user = parsed?.kind === "username" ? userFor(d, parsed.name) : null;
+  const look = parsed && describe(parsed, place, user);
+  const usable = !!look && look.tone !== "bad" && !(parsed?.kind === "jobIdOnly" && place === null);
+  return { parsed, place, look, usable, pending: !!d.text.trim() && d.parsed?.text !== d.text };
+}
+
+const invalid = (message: string): ErrorPayload => ({ kind: "invalid", message });
+
+/** What the draft launches; parses again if the debounce hasn't caught up, looks a username up. */
+export async function resolveTarget(d: Draft, setDraft: Dispatch<SetStateAction<Draft>>, onLookup?: (name: string) => void): Promise<LaunchTarget> {
+  const p = d.parsed?.text === d.text ? d.parsed.value : await api.targetParse(d.text);
+  switch (p.kind) {
+    case "target":
+      return p.target;
+    case "jobIdOnly": {
+      const placeId = placeOf(d.place);
+      if (placeId === null) throw invalid(t("launch.enterPlaceId"));
+      return { kind: "server", placeId, jobId: p.jobId };
+    }
+    case "username": {
+      let ref = userFor(d, p.name);
+      if (!ref) {
+        onLookup?.(p.name);
+        ref = await api.userLookup(p.name);
+        const found = { name: p.name, ref };
+        setDraft((x) => (x.text === d.text ? { ...x, user: found } : x));
+      }
+      return { kind: "followUser", userId: ref.userId };
+    }
+    default:
+      throw invalid(p.reason);
+  }
+}

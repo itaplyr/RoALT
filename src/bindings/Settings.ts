@@ -91,7 +91,12 @@ trimEveryMin: number,
 /**
  * Give each client its own share of the CPU cores (round-robin) unless its limits say.
  */
-autoSpread: boolean, adaptive: Adaptive,
+autoSpread: boolean,
+/**
+ * Divide the CPU among the clients: each gets a cap that shrinks as more run
+ * (`limits::fair_cap`), unless it has its own; separate from `adaptive`'s, which it tightens.
+ */
+fairCap: boolean, adaptive: Adaptive,
 /**
  * Outbound limit for all Roblox clients together (a Windows QoS policy, set with admin
  * rights by `bandwidth_apply`, which alone changes this); 0: none.
@@ -117,7 +122,9 @@ selfUpdate: boolean,
  */
 discordPresence: boolean,
 /**
- * Minimize each client (without taking the focus) once, when its window first appears.
+ * Hide each client (without taking the focus) once, when its window first appears, unless its
+ * account is full quality. A hidden client (`instances::window`) stays live while Home shows
+ * it and sleeps otherwise, and comes back from the taskbar or Alt-Tab.
  */
 minimizeOnLaunch: boolean,
 /**
@@ -142,11 +149,6 @@ lowGraphics: boolean,
  * geometry detail and what `render_flags` picks.
  */
 lighterRendering: boolean, renderFlags: RenderFlags,
-/**
- * RoALT's minimize moves a client off-screen instead (`instances::window`): its preview stays
- * live, but it keeps using the GPU, which a minimized client doesn't.
- */
-parkMinimized: boolean,
 /**
  * Width and height "Make it tiny" and "Tile tiny windows" use.
  */

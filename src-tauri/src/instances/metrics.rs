@@ -8,7 +8,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{FILETIME, HANDLE};
-use windows::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX};
+use windows::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX, PROCESS_MEMORY_COUNTERS_EX2};
 use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows::Win32::System::Threading::{
     GetProcessIoCounters, GetProcessTimes, GetSystemTimes, IO_COUNTERS, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
@@ -18,16 +18,25 @@ use super::gpu::{Gpu, Usage};
 use super::process::{open, started};
 use crate::model::{ClientMetrics, Limits, SystemUsage};
 
-/// Samples are reused for this long, so several views polling don't add up.
-const CACHE: Duration = Duration::from_secs(2);
+/// Samples are reused for this long, so several views polling don't add up. A little under the
+/// views' 2 s, so a poll arriving a hair early gets a new sample instead of waiting for the next.
+const CACHE: Duration = Duration::from_millis(1900);
 const MB: f64 = 1024.0 * 1024.0;
+
+/// How long a sample that took `read` is reused: many clients make the counters slow, and this
+/// keeps them from reading all the time.
+fn ttl(read: Duration) -> Duration {
+    CACHE.max(read * 3)
+}
 
 /// One reading of a process.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Reading {
     /// Kernel + user time, 100 ns ticks.
     pub cpu: u64,
-    pub working_set: u64,
+    /// Private working set: Task Manager's Memory column, what a trim lowers.
+    pub memory: u64,
+    /// Private bytes: Task Manager's Commit size, what a leak grows and the memory limits watch.
     pub private: u64,
     pub read: u64,
     pub write: u64,
@@ -40,13 +49,17 @@ struct Last {
     r: Reading,
 }
 
+/// The PC's last sample: when, what, and its CPU times (idle, kernel + user).
+type SystemSample = (Instant, SystemUsage, (u64, u64));
+
 pub struct Sampler {
     last: Mutex<HashMap<String, Last>>,
+    /// The last sample and when it stops being reused.
     cache: Mutex<Option<(Instant, Vec<ClientMetrics>)>>,
     /// Opened on the first sample; stays None where Windows has no such counters.
     gpu: Mutex<Option<Option<Gpu>>>,
-    /// The PC's last sample and its CPU times (idle, kernel + user), for `system`.
-    system: Mutex<Option<(Instant, SystemUsage, (u64, u64))>>,
+    /// For `system`.
+    system: Mutex<Option<SystemSample>>,
 }
 
 impl Sampler {
@@ -73,8 +86,8 @@ impl Sampler {
     /// a client whose process can't be read is left out.
     pub fn sample(&self, clients: &[(String, u32, u64, Limits)]) -> Vec<ClientMetrics> {
         let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((at, m)) = cache.as_ref()
-            && at.elapsed() < CACHE
+        if let Some((until, m)) = cache.as_ref()
+            && Instant::now() < *until
             && m.len() == clients.len()
             && m.iter().zip(clients).all(|(m, c)| m.instance_id == c.0 && m.pid == c.1)
         {
@@ -85,11 +98,16 @@ impl Sampler {
             .map_or(1, |n| n.get()) as f64;
         let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
         last.retain(|id, _| clients.iter().any(|c| c.0 == *id));
-        let usage = match self.gpu.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(Gpu::open) {
+        let mut gpu = self.gpu.lock().unwrap_or_else(|e| e.into_inner());
+        let gpu = gpu.get_or_insert_with(Gpu::open);
+        // After opening the GPU counters, which can take seconds once: the cache lasts from here.
+        // Not from the end of the read: a poll every 2 s would then keep finding it still fresh.
+        let began = Instant::now();
+        let usage = match gpu {
             Some(g) => g.read(),
             None => Usage { pct: None, mem_mb: None },
         };
-        // After the GPU counters, which can take seconds to open: the cache lasts from here.
+        // What the rates are measured from: when these values were read.
         let now = Instant::now();
         // A process using nothing has no counter instance: 0, when the counters answered at all.
         let of = |m: &Option<HashMap<u32, f64>>, pid: u32| m.as_ref().map(|m| m.get(&pid).copied().unwrap_or(0.0));
@@ -104,7 +122,7 @@ impl Sampler {
                 pid: *pid,
                 // 100 ns ticks per second of one core: 1e7.
                 cpu_pct: rate(|r| r.cpu).map(|t| (t / 1e7 / cores * 100.0).min(100.0)),
-                working_set_mb: r.working_set as f64 / MB,
+                memory_mb: r.memory as f64 / MB,
                 private_mb: r.private as f64 / MB,
                 read_bps: rate(|r| r.read),
                 write_bps: rate(|r| r.write),
@@ -113,7 +131,9 @@ impl Sampler {
             });
             last.insert(id.clone(), Last { at: now, t0: *t0, r });
         }
-        *cache = Some((now, out.clone()));
+        let read = began.elapsed();
+        log::debug!("metrics: {} clients read in {read:?}", clients.len());
+        *cache = Some((began + ttl(read), out.clone()));
         out
     }
 }
@@ -158,21 +178,27 @@ pub fn read(pid: u32, t0: u64) -> Option<Reading> {
         return None;
     }
     let cpu = cpu_ticks(*h)?;
-    let mut mem = PROCESS_MEMORY_COUNTERS_EX { cb: size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32, ..Default::default() };
+    let (ex2, ex) = (size_of::<PROCESS_MEMORY_COUNTERS_EX2>() as u32, size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32);
+    let mut mem = PROCESS_MEMORY_COUNTERS_EX2 { cb: ex2, ..Default::default() };
+    let counters = (&raw mut mem).cast::<PROCESS_MEMORY_COUNTERS>();
     let mut io = IO_COUNTERS::default();
     // SAFETY: `h` is live with PROCESS_QUERY_LIMITED_INFORMATION (all these need); `mem` is a
-    // local PROCESS_MEMORY_COUNTERS_EX whose `cb` says its size, and starts with the plain
-    // PROCESS_MEMORY_COUNTERS; `io` is a local.
+    // local PROCESS_MEMORY_COUNTERS_EX2, which is as long as the sizes given and starts with the
+    // shorter forms; `io` is a local.
     unsafe {
-        K32GetProcessMemoryInfo(*h, (&raw mut mem).cast::<PROCESS_MEMORY_COUNTERS>(), mem.cb)
-            .ok()
-            .inspect_err(|e| log::debug!("metrics: memory of process {pid} unreadable: {e}"))
-            .ok()?;
+        // Older Windows only knows the shorter form.
+        if !K32GetProcessMemoryInfo(*h, counters, ex2).as_bool() {
+            K32GetProcessMemoryInfo(*h, counters, ex)
+                .ok()
+                .inspect_err(|e| log::debug!("metrics: memory of process {pid} unreadable: {e}"))
+                .ok()?;
+        }
         GetProcessIoCounters(*h, &mut io).inspect_err(|e| log::debug!("metrics: I/O of process {pid} unreadable: {e}")).ok()?;
     }
     Some(Reading {
         cpu,
-        working_set: mem.WorkingSetSize as u64,
+        // Zero on that older Windows, which can only say the whole working set.
+        memory: if mem.PrivateWorkingSetSize > 0 { mem.PrivateWorkingSetSize } else { mem.WorkingSetSize } as u64,
         private: mem.PrivateUsage as u64,
         read: io.ReadTransferCount,
         write: io.WriteTransferCount,
@@ -233,7 +259,7 @@ mod tests {
             .unwrap();
         let (pid, t0) = (child.id(), start_time(child.id()).unwrap());
         let r = read(pid, t0).unwrap();
-        assert!(r.working_set > 0 && r.private > 0, "{r:?}");
+        assert!(r.memory > 0 && r.private > 0, "{r:?}");
         assert_eq!(read(pid, t0 - 10), None, "a reused pid is not the client");
 
         let s = Sampler::new();
@@ -245,11 +271,17 @@ mod tests {
         std::thread::sleep(Duration::from_millis(50));
         let second = s.sample(&clients);
         assert!(second[0].cpu_pct.is_some_and(|c| (0.0..=100.0).contains(&c)), "{second:?}");
-        assert!(second[0].working_set_mb > 0.0);
+        assert!(second[0].memory_mb > 0.0);
         child.kill().unwrap();
         child.wait().unwrap();
         *s.cache.lock().unwrap() = None;
         assert!(s.sample(&clients).is_empty(), "gone");
+    }
+
+    #[test]
+    fn a_slow_read_is_reused_for_longer() {
+        assert_eq!(ttl(Duration::from_millis(10)), CACHE);
+        assert_eq!(ttl(Duration::from_secs(2)), Duration::from_secs(6));
     }
 
     #[test]

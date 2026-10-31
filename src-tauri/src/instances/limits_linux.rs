@@ -123,13 +123,43 @@ pub fn plan(
     cores: u32,
     throttled: &[String],
 ) -> Vec<(String, u32, u64, Limits)> {
+    plan_full(clients, v, foreground, cores, throttled, &[], None, &[])
+}
+
+/// `plan` for the clients running now, with the Full quality accounts left free.
+pub fn plan_now(s: &crate::App, v: &Settings, clients: &[(String, u32, u64, Limits)], throttled: &[String]) -> Vec<(String, u32, u64, Limits)> {
+    let full_quality = s.db.full_quality_accounts().unwrap_or_else(|e| {
+        log::debug!("could not read the Full quality accounts: {e}");
+        Vec::new()
+    });
+    let free = s.tracker.free(&full_quality, crate::commands::now_ms());
+    let cores = crate::commands::cores();
+    let fair = v.fair_cap.then(|| fair_cap(clients.len() as u32, cores));
+    plan_full(clients, v, super::process::foreground_pid(), cores, throttled, &free, fair, &[])
+}
+
+fn plan_full(
+    clients: &[(String, u32, u64, Limits)],
+    v: &Settings,
+    foreground: Option<u32>,
+    cores: u32,
+    throttled: &[String],
+    free: &[String],
+    fair: Option<u8>,
+    uncapped: &[String],
+) -> Vec<(String, u32, u64, Limits)> {
     let n = clients.len() as u32;
     clients
         .iter()
         .enumerate()
         .map(|(i, (id, pid, t0, manual))| {
-            let share = (v.auto_spread && n > 1).then(|| spread(i as u32, n, cores));
-            let mut l = effective(*manual, foreground == Some(*pid), v, share);
+            let i = i as u32;
+            let share = match v.auto_spread && n > 1 {
+                true if uncapped.contains(id) => Some(pin(i, n, cores)),
+                true => Some(spread(i, n, cores)),
+                false => None,
+            };
+            let mut l = effective_with(*manual, foreground == Some(*pid) || free.contains(id), v, share, fair);
             if v.mem_throttle.mb > 0 && throttled.contains(id) {
                 l.cpu_cap = Some(throttle_cap(l.cpu_cap, v.mem_throttle.cpu_cap));
             }
@@ -139,18 +169,49 @@ pub fn plan(
 }
 
 pub fn effective(manual: Limits, foreground: bool, v: &Settings, share: Option<u64>) -> Limits {
-    let mut l = if manual == Limits::default() && v.adaptive.enabled && !foreground { v.adaptive.background } else { manual };
+    effective_with(manual, foreground, v, share, None)
+}
+
+fn effective_with(manual: Limits, free: bool, v: &Settings, share: Option<u64>, fair: Option<u8>) -> Limits {
+    if free {
+        return manual;
+    }
+    let mut l = if manual == Limits::default() && v.adaptive.enabled { v.adaptive.background } else { manual };
     if l.trim_every_min.is_none() && v.trim_every_min > 0 {
         l.trim_every_min = Some(v.trim_every_min);
     }
     if l.affinity.is_none() {
         l.affinity = share;
     }
+    if let Some(f) = fair.filter(|_| manual.cpu_cap.is_none()) {
+        l.cpu_cap = Some(throttle_cap(l.cpu_cap, f));
+    }
     l
 }
 
 pub fn throttle_cap(own: Option<u8>, throttle: u8) -> u8 {
     own.map_or(throttle, |c| c.min(throttle))
+}
+
+/// A client followed again after RoALT restarted: its old niceness and affinity are reset;
+/// `sync` sets what it should have now.
+pub fn reset_followed(pid: u32, t0: u64) {
+    if super::process::start_time(pid) == Some(t0) {
+        set_nice(pid, 0);
+        clear_affinity(pid);
+    }
+}
+
+pub fn fair_cap(n: u32, cores: u32) -> u8 {
+    (75 / n.max(1)).max(25u32.div_ceil(cores.max(1))).clamp(1, 100) as u8
+}
+
+fn pin(i: u32, n: u32, cores: u32) -> u64 {
+    let cores = cores.clamp(1, 64);
+    if n >= cores {
+        return 1 << (i % cores);
+    }
+    (0..cores).filter(|c| c % n == i % n).fold(0, |m, c| m | 1 << c)
 }
 
 pub fn spread(i: u32, n: u32, cores: u32) -> u64 {

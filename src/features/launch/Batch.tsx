@@ -98,11 +98,11 @@ export function BatchSection({ accounts, onPick }: { accounts: AccountSummary[];
           <span id="batch-label" className="font-medium">{t("launch.batch.label")}</span>
           <span className="mono text-xs text-dim truncate" title={target.detail}>{summary}</span>
           {p.done ? (
-            <button className="wc w-7 h-7 ml-auto" aria-label={t("launch.batch.dismiss")} title={t("common.dismiss")} onClick={() => dismissBulk(qc, p.batchId)}>
+            <button className="wc w-7 h-7 ms-auto" aria-label={t("launch.batch.dismiss")} title={t("common.dismiss")} onClick={() => dismissBulk(qc, p.batchId)}>
               <Icon name="x" size={10} />
             </button>
           ) : (
-            <button className="btn btn-sm ml-auto" disabled={cancelling === p.batchId} onClick={cancel}>
+            <button className="btn btn-sm ms-auto" disabled={cancelling === p.batchId} onClick={cancel}>
               {cancelling === p.batchId ? t("launch.batch.cancelling") : t("common.cancel")}
             </button>
           )}
@@ -156,7 +156,7 @@ export function BatchSection({ accounts, onPick }: { accounts: AccountSummary[];
               <span aria-hidden="true" className="grid grid-cols-4 gap-[3px]">
                 {steps(st, !!item.instanceId, p.done).map((c, i) => <span key={i} className={c} />)}
               </span>
-              <span className={`mono col-span-2 pl-[30px] text-xs ${st.kind === "failed" ? "text-orange" : st.kind === "inGame" ? "text-text" : "text-dim"}`}>
+              <span className={`mono col-span-2 ps-[30px] text-xs ${st.kind === "failed" ? "text-orange" : st.kind === "inGame" ? "text-text" : "text-dim"}`}>
                 {note}
               </span>
             </li>

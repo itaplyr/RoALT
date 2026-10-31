@@ -67,7 +67,7 @@ export function toastError(e: unknown) {
 export function Toaster() {
   const list = useSyncExternalStore(subscribe, () => items);
   return (
-    <div className="fixed right-4 bottom-4 z-50 flex flex-col items-end gap-2 pointer-events-none" aria-live="polite">
+    <div className="fixed end-4 bottom-4 z-50 flex flex-col items-end gap-2 pointer-events-none" aria-live="polite">
       {list.map((item) => (
         <div
           key={item.id}

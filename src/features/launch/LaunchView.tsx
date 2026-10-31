@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  api, asError, type AccountSummary, type BulkProgress, type ErrorPayload, type Favourite, type JoinCandidate, type LaunchInfo, type LaunchTarget,
+  api, asError, type AccountSummary, type BulkProgress, type Favourite, type JoinCandidate, type LaunchInfo,
   type MultiInstanceStatus, type SameServer, type Settings,
 } from "../../api";
 import { publicBlock, qk, useBulk, useFavourites, useInstances, useMultiStatus, useNetwork, usePresence, useRobloxClient, useSetSettings, useSettings } from "../../data";
@@ -14,10 +14,10 @@ import { BatchSection } from "./Batch";
 import { FavouriteDialog, FavouritesRow } from "./Favourites";
 import { JoinDialog } from "./JoinDialog";
 import { isLive, isRunning, MultiNotice } from "./Running";
-import { describe, draftFor, draftForUser, placeOf, userFor, type Draft, type Tone } from "./target";
+import { draftFor, draftForUser, readDraft, resolveTarget, type Draft, type Tone } from "./target";
 
 const LAST_KEY = "roalt.lastLaunchAccount";
-const MARK: Record<Tone, CSSProperties> = {
+export const MARK: Record<Tone, CSSProperties> = {
   ok: { background: "var(--accent-text)" },
   info: { background: "var(--blue)", borderRadius: 2 },
   bad: { background: "var(--orange)", transform: "rotate(45deg) scale(.85)" },
@@ -27,7 +27,6 @@ const LAUNCH_ERRORS: Record<string, Key> = {
   challenge: "launch.err.challenge",
   notFound: "launch.err.notFound",
 };
-const invalid = (message: string): ErrorPayload => ({ kind: "invalid", message });
 /** One launch at a time, also across remounts of the view. */
 let busy = false;
 /** The FPS cap typed for the next launches (0: each account's own or the default), across remounts;
@@ -145,47 +144,15 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
     return () => clearTimeout(t);
   }, [text]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const parsed = text.trim() ? draft.parsed?.value ?? null : null;
-  const place = placeOf(draft.place);
-  const user = parsed?.kind === "username" ? userFor(draft, parsed.name) : null;
-  const look = parsed && describe(parsed, place, user);
-  const usableTarget = !!look && look.tone !== "bad" && !(parsed?.kind === "jobIdOnly" && place === null);
+  // A parse that hasn't caught up yet is launchable.
+  const { parsed, place, look, usable: usableTarget, pending } = readDraft(draft);
   const fav = draft.favId === null ? undefined : favourites.data?.find((f) => f.id === draft.favId);
-  // A parse that hasn't caught up yet is launchable: resolveTarget parses again.
-  const pending = !!text.trim() && draft.parsed?.text !== text;
   const network = useNetwork().data;
   // Turned on but held up by a Roblox already running: another client would still replace it.
   const blocked = publicBlock(network, settings) ?? launchBlocked(bulk || (replaces && !!multi?.enabled), multi, batch);
   // Multi-instance has its own notice, with the way out.
   const otherBlock = publicBlock(network, settings) ?? (batch && !batch.done ? t("launch.batchRunning") : null);
   const canLaunch = !!account && (usableTarget || pending) && !step && !blocked;
-
-  /** What the draft launches; parses again if the debounce hasn't caught up, looks a username up. */
-  async function resolveTarget(onLookup?: (name: string) => void): Promise<LaunchTarget> {
-    const d = draft;
-    const p = d.parsed?.text === d.text ? d.parsed.value : await api.targetParse(d.text);
-    switch (p.kind) {
-      case "target":
-        return p.target;
-      case "jobIdOnly": {
-        const placeId = placeOf(d.place);
-        if (placeId === null) throw invalid(t("launch.enterPlaceId"));
-        return { kind: "server", placeId, jobId: p.jobId };
-      }
-      case "username": {
-        let ref = userFor(d, p.name);
-        if (!ref) {
-          onLookup?.(p.name);
-          ref = await api.userLookup(p.name);
-          const found = { name: p.name, ref };
-          setDraft((x) => (x.text === d.text ? { ...x, user: found } : x));
-        }
-        return { kind: "followUser", userId: ref.userId };
-      }
-      default:
-        throw invalid(p.reason);
-    }
-  }
 
   async function launch() {
     if (!canLaunch || !account || busy) return;
@@ -196,7 +163,7 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
     setStep(first);
     let timer = 0;
     try {
-      const target = await resolveTarget((name) => setStep(t("launch.step.lookup", { name })));
+      const target = await resolveTarget(draft, setDraft, (name) => setStep(t("launch.step.lookup", { name })));
       setStep(first);
       if (ids.length > 1) {
         // From the cache: a stagger committed by this click's blur hasn't re-rendered yet.
@@ -437,10 +404,10 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
             {step ? (
               <span className="text-text">{step}</span>
             ) : otherBlock ? (
-              <span className="alert text-left">{otherBlock}</span>
+              <span className="alert text-start">{otherBlock}</span>
             ) : bulk && client?.outdated ? (
               // Not blocking: Roblox updates itself on the first launch, which can end the clients after it.
-              <span className="alert text-left" title={t("launch.robloxVersions", { installed: client.version ?? "", latest: client.latest ?? "" })}>
+              <span className="alert text-start" title={t("launch.robloxVersions", { installed: client.version ?? "", latest: client.latest ?? "" })}>
                 {t("launch.robloxOutdated")}
               </span>
             ) : canLaunch && look ? (
@@ -522,7 +489,7 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
             inTray: false,
           }
         }
-        resolve={() => (fav ? Promise.resolve(fav.target) : resolveTarget())}
+        resolve={() => (fav ? Promise.resolve(fav.target) : resolveTarget(draft, setDraft))}
         onSaved={(f) => setDraft((d) => (d.text === text ? { ...d, favId: f.id, note: f.name } : d))}
       />
     </main>

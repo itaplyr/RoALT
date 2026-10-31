@@ -142,7 +142,7 @@
   "Closed unexpectedly": "Неожиданно закрылся",
   "Not responding": "Не отвечает",
   "Closed": "Закрыт",
-  "Used {mb} MB of private memory": "Использовал {mb} MB приватной памяти",
+  "Commit size reached {mb} MB": "Выделенная память достигла {mb} MB",
   "Replaced by another Roblox client": "Заменён другим клиентом Roblox",
   "That client has no window yet.": "У этого клиента ещё нет окна.",
   "Windows didn't let RoALT bring that client to the front.": "Windows не позволила RoALT вывести этот клиент на передний план.",

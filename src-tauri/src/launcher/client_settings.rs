@@ -8,7 +8,8 @@
 //! Every client shares that file and reads it once, a few seconds after it starts. A launch
 //! writes its values, waits until its client has read them (`wait_until_read`) and puts the
 //! user's own back; launches hold `LOCK` meanwhile, so one never reads another's. A client writes
-//! all its settings back when it closes, so `spawn` watches the file: a setting holding a value a
+//! all its settings back when it closes: `Undo::keep_until` writes a launch's values again when that
+//! happens before its client has read them, and `spawn` watches the file: a setting holding a value a
 //! launch wrote goes back to the user's own (`settle_values`); any other change is the user's
 //! own. The user's values and the ones launches wrote
 //! are kept in the database (`KEPT`), so this holds across restarts. Only these three settings
@@ -60,6 +61,9 @@ const UPDATE_TIMEOUT: Duration = Duration::from_secs(180);
 const RELAUNCH_GRACE: Duration = Duration::from_secs(3);
 /// How often `spawn` looks at the file.
 const WATCH: Duration = Duration::from_secs(1);
+/// How often a launch looks at the file until its client has read it: a closing client's save must
+/// be undone before that read.
+const KEEP: Duration = Duration::from_millis(100);
 /// How often a read or write is tried while Windows refuses it for a moment (another process has
 /// the file open), and how long apart.
 const TRIES: u32 = 10;
@@ -251,9 +255,41 @@ pub struct Undo {
     file: PathBuf,
     want: Values,
     kept: Kept,
+    /// What the launch asked for (`for_launch`).
+    fps: u32,
+    low: bool,
 }
 
 impl Undo {
+    /// Until `stop`: one that closes while this client starts saves its own settings over the
+    /// launch's, and this client would run at those.
+    pub fn keep_until(mut self, stop: &std::sync::atomic::AtomicBool) -> Undo {
+        while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+            self.keep();
+            std::thread::sleep(KEEP);
+        }
+        self
+    }
+
+    /// One look: the launch's values back if something else was saved (`settle_values` tells which
+    /// of that is the user's own). Not there or refused now: the next look tries again.
+    fn keep(&mut self) {
+        let Ok(Some((text, seen))) = read_file(&self.file) else { return };
+        let now = read(&text);
+        if now == self.want {
+            return;
+        }
+        settle_values(&mut self.kept, now);
+        self.want = for_launch(self.kept.user.unwrap_or(now), self.fps, self.low);
+        if self.want == now {
+            return;
+        }
+        match replace(&self.file, &write(&text, self.want), Some(seen)) {
+            Ok(()) => log::info!("Roblox settings: another client saved its own while this one started; this launch's FPS cap and graphics are back"),
+            Err(e) => log::debug!("Roblox settings: couldn't write this launch's values again yet: {e}"),
+        }
+    }
+
     /// Puts the user's values back; a change the user made meanwhile stays (failures are logged).
     pub fn put_back(mut self) {
         for _ in 0..TRIES {
@@ -316,7 +352,7 @@ fn apply_at(db: &Db, file: PathBuf, fps: u32, low: bool) -> Option<Undo> {
                 continue;
             }
             // Nothing to give: Roblox's defaults are the user's own.
-            Err(e) if e.kind() == ErrorKind::NotFound && fps == 0 && !low => return Some(Undo { file, want: [None; 3], kept: Kept::default() }),
+            Err(e) if e.kind() == ErrorKind::NotFound && fps == 0 && !low => return Some(Undo { file, want: [None; 3], kept: Kept::default(), fps, low }),
             Err(e) if e.kind() == ErrorKind::NotFound => (EMPTY.to_owned(), None),
             Err(e) => {
                 log::warn!("FPS cap and graphics skipped: can't read {}: {e}", file.display());
@@ -338,7 +374,7 @@ fn apply_at(db: &Db, file: PathBuf, fps: u32, low: bool) -> Option<Undo> {
             }
         }
         save(db, &kept);
-        let undo = Undo { file: file.clone(), want, kept };
+        let undo = Undo { file: file.clone(), want, kept, fps, low };
         if want == now {
             return Some(undo);
         }
@@ -668,6 +704,49 @@ mod tests {
         f.put(&write(XML, LOW));
         restore_at(&db, &f.0);
         assert_eq!(read(&f.text()), [Some(60), Some(19), Some(9)]);
+    }
+
+    #[test]
+    fn a_client_closing_during_a_launch_doesnt_change_what_the_new_one_reads() {
+        let db = Db::open_in_memory().unwrap();
+        let f = TestFile::new("closing", Some(XML));
+        // A launch at 15 and the lowest graphics left those in `ours`; this one is at 30.
+        apply_at(&db, f.0.clone(), 15, true).unwrap().put_back();
+        let mut undo = apply_at(&db, f.0.clone(), 30, true).unwrap();
+        let want = [Some(30), Some(1), Some(1)];
+        assert_eq!(read(&f.text()), want);
+        undo.keep();
+        assert_eq!(read(&f.text()), want, "nothing to do");
+
+        // An alt started at 15 closes and saves that: this launch's are back, the user's stay known.
+        f.put(&write(XML, LOW));
+        undo.keep();
+        assert_eq!(read(&f.text()), want);
+        undo.put_back();
+        assert_eq!(f.text(), XML);
+
+        // The client that closes was the user's own Roblox, on new settings: the launch's still
+        // win while it starts, and the user's new ones are what goes back.
+        let mut undo = apply_at(&db, f.0.clone(), 30, false).unwrap();
+        f.put(&write(XML, [Some(144), Some(19), Some(5)]));
+        undo.keep();
+        assert_eq!(read(&f.text()), [Some(30), Some(19), Some(5)]);
+        undo.put_back();
+        assert_eq!(read(&f.text()), [Some(144), Some(19), Some(5)]);
+
+        // Half written: left alone until it is whole.
+        let mut undo = apply_at(&db, f.0.clone(), 30, false).unwrap();
+        f.put("<roblox>");
+        undo.keep();
+        assert_eq!(f.text(), "<roblox>");
+        f.put(&write(XML, [Some(144), Some(19), Some(5)]));
+        undo.keep();
+        assert_eq!(read(&f.text()), [Some(30), Some(19), Some(5)]);
+
+        // Stops when told, and hands the undo back.
+        let stop = std::sync::atomic::AtomicBool::new(true);
+        undo.keep_until(&stop).put_back();
+        assert_eq!(read(&f.text()), [Some(144), Some(19), Some(5)]);
     }
 
     #[test]
