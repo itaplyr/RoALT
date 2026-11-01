@@ -5,11 +5,11 @@
  * most `cpu_cap` percent of the CPU (its frame rate drops with it) until it is back under 90 %
  * of `mb`. Tightens a client's own cap, never loosens it; the window in front too.
  */
-export type MemThrottle = { 
+export type MemThrottle = {
 /**
  * 0: off, else 512..=65 536.
  */
-mb: number, 
+mb: number,
 /**
  * 1..=100.
  */

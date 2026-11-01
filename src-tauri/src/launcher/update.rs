@@ -183,7 +183,17 @@ pub async fn launch_client(s: &App) -> Result<(client::ClientExe, bool)> {
     let managed = client::managed_by_bootstrapper(&exe);
     let live = if managed { None } else { production_version(s).await };
     let chosen = launch_choice(exe, managed, live.as_deref(), client::installed_build);
-    log::info!("launching {} (production: {})", chosen.0.path.display(), chosen.1);
+    log::info!(
+        "launching {} (production: {}, bootstrapper manages this install: {managed}, Roblox's live version: {live:?}, channel: {:?}, roblox-player handler: {:?})",
+        chosen.0.path.display(),
+        chosen.1,
+        client::channel(),
+        client::handler(),
+    );
+    // Asked for production without having it: this client updates itself into a new folder.
+    if chosen.1 && live.as_deref().is_some_and(|v| client::installed_build(v).is_none()) {
+        log::warn!("Roblox's live version isn't installed: the updated client won't have this launch's graphics flags, which go in the old version's folder");
+    }
     Ok(chosen)
 }
 

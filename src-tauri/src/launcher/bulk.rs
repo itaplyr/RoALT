@@ -17,10 +17,13 @@
 //! 2. Per account: stage `Ticket`, then `commands::launch_tracked` (the favourite is touched
 //!    for the first started client only), then `Starting` with its instance id; later stages
 //!    mirror that instance (`stage_of`; a disconnect is `Done` for an account that allows it).
-//! 3. Between launches: wait until the previous client's log is bound (its instance left
-//!    `starting`, at most 30 s), then `delay_ms` ± 1 s (`jittered`). After the last launch,
-//!    keep mirroring until every started client is in game or ended (at most 120 s), then
-//!    `done = true`.
+//! 3. Between launches: wait until the previous client is through signing in and joining (its
+//!    instance left `starting` and `joining`, at most 30 s), then `delay_ms` ± 1 s (`jittered`).
+//!    After the last launch, keep mirroring until every started client is in game or ended (at
+//!    most 120 s), then `done = true`.
+//!    Roblox refusing an account with a 403 (its ticket, or its client's sign-in: that client is
+//!    closed) doubles the delay for the rest of the batch (`Pace`) and tries that account once
+//!    more; a second 403 in a row stops the batch.
 //! 4. Stops: `AppError::Challenge`, `AppError::Locked` (the vault locked mid-batch),
 //!    multi-instance turned off mid-batch, or an instance note saying it signed in as another
 //!    account or that Roblox wants a human check → that item `Failed`, the rest `Cancelled`,
@@ -43,7 +46,8 @@ use super::Join;
 use super::target::is_uuid;
 use crate::App;
 use crate::error::{AppError, Result};
-use crate::instances::{challenged, wrong_account};
+use crate::instances::rejoin::backoff;
+use crate::instances::{auth_failed, challenged, wrong_account};
 use crate::roblox_api::types::UserPresence;
 use crate::model::{
     AccountStatus, AccountSummary, BulkItem, BulkProgress, BulkRequest, BulkStage, GameServer, Instance,
@@ -64,14 +68,13 @@ fn launching() -> String {
 }
 /// How often a wait looks at the clients and the cancel flag.
 const TICK: Duration = Duration::from_millis(500);
-/// The Windows client's log binding is quick. Cordial/Sober logs use a different format, so on
-/// Linux there is nothing to wait for and the stagger alone spaces launches out.
-#[cfg(windows)]
 const BIND_WAIT: Duration = Duration::from_secs(30);
-#[cfg(not(windows))]
-const BIND_WAIT: Duration = Duration::ZERO;
 const FOLLOW_WAIT: Duration = Duration::from_secs(90);
 const SETTLE_WAIT: Duration = Duration::from_secs(120);
+/// For a client closed after a 403 to count as gone, so that its account can launch again.
+const CLOSE_WAIT: Duration = Duration::from_secs(10);
+/// How long a 403 from Roblox keeps launches slower when nothing has got through since.
+const REFUSAL_LASTS: Duration = Duration::from_secs(10 * 60);
 
 /// The running or last batch.
 pub struct Bulk {
@@ -85,6 +88,8 @@ pub struct Bulk {
     last_launch: Mutex<Option<Instant>>,
     /// Bumped by Kill all (`kill`): a launch or rejoin that saw another value stops.
     kills: AtomicU64,
+    /// Roblox's 403s since a client last reached a game, and the last one's time.
+    refusals: Mutex<(u32, Option<Instant>)>,
 }
 
 /// A launch slot taken by `cooldown`; give it back with `release` when no client started.
@@ -120,7 +125,28 @@ impl Bulk {
             launches: AtomicUsize::new(0),
             last_launch: Mutex::new(None),
             kills: AtomicU64::new(0),
+            refusals: Mutex::new((0, None)),
         }
+    }
+
+    /// Roblox refused a launch with a 403, from any path: the next ones of any path wait longer.
+    pub fn refused(&self) {
+        let mut r = self.refusals.lock().unwrap_or_else(|e| e.into_inner());
+        *r = (r.0.saturating_add(1), Some(Instant::now()));
+    }
+
+    /// A client reached a game: launches go at their usual pace again.
+    pub fn got_through(&self) {
+        *self.refusals.lock().unwrap_or_else(|e| e.into_inner()) = (0, None);
+    }
+
+    /// The time between launches for a delay of `delay_ms`: doubled per recent 403 (`refused`), up to
+    /// the most a delay can be, less the jitter's second, so a batch's own jittered wait never adds to it.
+    pub fn launch_gap(&self, delay_ms: u32, now: Instant) -> Duration {
+        let (n, at) = *self.refusals.lock().unwrap_or_else(|e| e.into_inner());
+        let n = if at.is_some_and(|t| now.duration_since(t) < REFUSAL_LASTS) { n } else { 0 };
+        let wanted = if n > 0 { backoff(delay_ms, n).min(MAX_DELAY) } else { delay_ms };
+        Duration::from_millis(u64::from(wanted.saturating_sub(1_000)))
     }
 
     /// The launch cooldown: reserves the next launch slot at least `gap` after the last one and
@@ -266,7 +292,7 @@ pub fn start(app: AppHandle, mut req: BulkRequest) -> Result<String> {
         if let Some(why) = cant_launch(a.status) {
             return Err(AppError::Invalid(tr!("{name} can't launch: {why}", name = name, why = why)));
         }
-        if s.tracker.has_live_client_for(id, Some(a.user_id)) {
+        if s.tracker.has_live_client(id) {
             return Err(AppError::Invalid(tr!("{name} is already running. Untick it or close its client first.", name = name)));
         }
         accounts.push(Account { id, user_id: a.user_id, name, allow_disconnect: a.allow_disconnect });
@@ -340,6 +366,33 @@ pub fn stage_of(instance: &Instance, allow_disconnect: bool) -> BulkStage {
     }
 }
 
+/// How a batch answers Roblox's 403s (pure). ponytail: only this batch slows down, not the launches
+/// and rejoins after it; a shared cooldown if logs show those get refused too.
+#[derive(Default)]
+struct Pace {
+    /// Refusals so far: the delay stays doubled for each.
+    refusals: u32,
+    /// Refusals since an account last got through.
+    in_a_row: u32,
+}
+
+impl Pace {
+    fn delay(&self, delay_ms: u32) -> u32 {
+        backoff(delay_ms, self.refusals)
+    }
+
+    /// One more refusal; true when the batch has to stop.
+    fn refused(&mut self) -> bool {
+        self.refusals += 1;
+        self.in_a_row += 1;
+        self.in_a_row >= 2
+    }
+
+    fn got_through(&mut self) {
+        self.in_a_row = 0;
+    }
+}
+
 /// One account of a batch, as the runner needs it.
 struct Account {
     id: i64,
@@ -386,18 +439,12 @@ impl Run {
                 self.update(|p| p.job_id = Some(found.1.clone()));
             }
         }
-        let (mut prev, mut started) = (None::<String>, false);
+        let (mut started, mut pace) = (false, Pace::default());
         for (i, a) in self.accounts.iter().enumerate() {
-            if i > 0 {
-                if let Some(id) = prev.take() {
-                    let bound = || self.instance(&id).is_none_or(|x| x.state != InstanceState::Starting);
-                    if let Some(why) = self.wait(BIND_WAIT, bound).await {
-                        return Some(why);
-                    }
-                }
-                if let Some(why) = self.wait(jittered(req.delay_ms), || false).await {
-                    return Some(why);
-                }
+            if i > 0
+                && let Some(why) = self.wait(jittered(pace.delay(req.delay_ms)), || false).await
+            {
+                return Some(why);
             }
             if self.cancel.load(Ordering::SeqCst) {
                 return Some(cancelled());
@@ -427,45 +474,90 @@ impl Run {
                 }
             }
 
-            self.set_stage(i, BulkStage::Ticket);
-            let target = target_for(&req.target, server.as_ref());
-            let favourite = if started { None } else { req.favourite_id };
-            match crate::commands::launch_tracked(&self.app, &s, a.id, target, favourite, Some(req.delay_ms), req.fps_cap, true, None).await {
-                Ok((info, inst)) => {
-                    started = true;
-                    self.update(|p| {
-                        p.items[i].instance_id = Some(inst.id.clone());
-                        p.items[i].stage = BulkStage::Starting;
-                        if p.note.is_none() {
-                            p.note = info.warning;
-                        }
-                    });
-                    // The first client that starts leads when the rest follow it.
-                    if let Some(place_id) = follow.take() {
-                        match self.followed(a, &inst.id, place_id).await {
-                            Err(why) => return Some(why),
-                            Ok(Some(found)) => {
-                                self.update(|p| p.job_id = Some(found.1.clone()));
-                                server = Some(found);
+            loop {
+                self.set_stage(i, BulkStage::Ticket);
+                let target = target_for(&req.target, server.as_ref());
+                let favourite = if started { None } else { req.favourite_id };
+                let refused = match crate::commands::launch_tracked(&self.app, &s, a.id, target, favourite, Some(req.delay_ms), req.fps_cap, true, None).await {
+                    Ok((info, inst)) => {
+                        started = true;
+                        self.update(|p| {
+                            p.items[i].instance_id = Some(inst.id.clone());
+                            p.items[i].stage = BulkStage::Starting;
+                            if p.note.is_none() {
+                                p.note = info.warning;
                             }
-                            Ok(None) => self.note(tr!(
-                                "{name}'s server couldn't be read, so the rest were matched by Roblox on their own.",
-                                name = a.name
-                            )),
+                        });
+                        let refused = |x: &Instance| x.note.as_deref().is_some_and(|n| n == auth_failed());
+                        let through = || self.instance(&inst.id).is_none_or(|x| refused(&x) || !matches!(x.state, InstanceState::Starting | InstanceState::Joining));
+                        if let Some(why) = self.wait(BIND_WAIT, through).await {
+                            return Some(why);
+                        }
+                        if self.instance(&inst.id).is_some_and(|x| refused(&x)) {
+                            if let Some(why) = self.close_refused(i, &inst.id).await {
+                                return Some(why);
+                            }
+                            true
+                        } else {
+                            // The first client that gets through leads when the rest follow it.
+                            if let Some(place_id) = follow.take() {
+                                match self.followed(a, &inst.id, place_id).await {
+                                    Err(why) => return Some(why),
+                                    Ok(Some(found)) => {
+                                        self.update(|p| p.job_id = Some(found.1.clone()));
+                                        server = Some(found);
+                                    }
+                                    Ok(None) => self.note(tr!(
+                                        "{name}'s server couldn't be read, so the rest were matched by Roblox on their own.",
+                                        name = a.name
+                                    )),
+                                }
+                            }
+                            false
                         }
                     }
-                    prev = Some(inst.id);
-                }
-                Err(e) => {
-                    log::warn!("bulk batch {}: account {} failed: {e}", self.batch_id, a.id);
-                    self.set_stage(i, BulkStage::Failed { message: e.message() });
-                    if let Some(why) = stop_reason(&e, &a.name) {
-                        return Some(why);
+                    Err(e) => {
+                        log::warn!("bulk batch {}: account {} failed: {e}", self.batch_id, a.id);
+                        if !e.is_forbidden() {
+                            self.set_stage(i, BulkStage::Failed { message: e.message() });
+                            if let Some(why) = stop_reason(&e, &a.name) {
+                                return Some(why);
+                            }
+                        }
+                        e.is_forbidden()
                     }
+                };
+                if !refused {
+                    pace.got_through();
+                    break;
+                }
+                if pace.refused() {
+                    self.set_stage(i, BulkStage::Failed { message: auth_failed() });
+                    return Some(tr!("Roblox keeps refusing sign-ins (error 403). Wait a few minutes."));
+                }
+                self.set_stage(i, BulkStage::Queued);
+                self.note(tr!("Roblox refused {name} (error 403). Trying it once more, with more time between launches.", name = a.name));
+                if let Some(why) = self.wait(jittered(pace.delay(req.delay_ms)), || false).await {
+                    return Some(why);
                 }
             }
         }
         None
+    }
+
+    /// Closes a client Roblox refused and waits until it counts as gone, so that its account can
+    /// launch again. `Some(why)` when the batch has to stop meanwhile.
+    async fn close_refused(&self, i: usize, id: &str) -> Option<String> {
+        self.update(|p| p.items[i].instance_id = None);
+        let s = self.app.state::<App>();
+        if let Some((pid, started)) = s.tracker.mark_closing(id) {
+            match tauri::async_runtime::spawn_blocking(move || crate::instances::process::close(pid, started, true, Duration::ZERO)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => log::warn!("could not close refused client {pid}: {e}"),
+                Err(e) => log::warn!("close of refused client {pid} failed: {e}"),
+            }
+        }
+        self.wait(CLOSE_WAIT, || self.instance(id).is_none_or(|x| x.state == InstanceState::Exited)).await
     }
 
     /// The server everyone is sent to (`PickFirst`), or the place whose server the rest follow
@@ -663,10 +755,14 @@ fn stop_reason(e: &AppError, name: &str) -> Option<String> {
 }
 
 /// Mirrors one started client into its item; `Some(why)` when it signed in as another account
-/// or Roblox wants a human check.
+/// or Roblox wants a human check. A refused sign-in is `launch_all`'s to answer.
 fn mirror_item(item: &mut BulkItem, inst: &Instance, a: &Account) -> Option<String> {
     let name = &a.name;
     let why = match inst.note.as_deref() {
+        Some(n) if n == auth_failed() => {
+            item.stage = BulkStage::Failed { message: n.to_owned() };
+            return None;
+        }
         Some(n) if n == wrong_account() => tr!(
             "{name}'s client signed in as another account. Close that client and turn on Settings > Protect \
              each client's sign-in.",
@@ -775,6 +871,7 @@ mod tests {
             relaunching: false,
             relaunch_problem: None,
             sign_in_problem: false,
+            applied_limits: Default::default(),
         }
     }
 
@@ -828,6 +925,46 @@ mod tests {
         }
         let spread: std::collections::HashSet<u128> = (0..50).map(|_| jittered(6_000).as_millis()).collect();
         assert!(spread.len() > 1, "jitter is random");
+    }
+
+    #[test]
+    fn a_refusal_slows_every_launch_for_a_while() {
+        let b = Bulk::new();
+        let now = Instant::now();
+        assert_eq!(b.launch_gap(6_000, now), Duration::from_secs(5), "as ever, less the jitter");
+        assert_eq!(b.launch_gap(0, now), Duration::ZERO);
+        b.refused();
+        let now = Instant::now();
+        assert_eq!(b.launch_gap(6_000, now), Duration::from_secs(11));
+        b.refused();
+        assert_eq!(b.launch_gap(6_000, now), Duration::from_secs(23));
+        for _ in 0..30 {
+            b.refused();
+        }
+        assert_eq!(b.launch_gap(6_000, now), Duration::from_secs(59), "never past the longest delay");
+        assert_eq!(b.launch_gap(6_000, now + REFUSAL_LASTS + Duration::from_secs(1)), Duration::from_secs(5), "forgotten in time");
+        b.got_through();
+        assert_eq!(b.launch_gap(6_000, Instant::now()), Duration::from_secs(5), "over once a client gets through");
+    }
+
+    #[test]
+    fn refusals_slow_the_batch_and_two_in_a_row_stop_it() {
+        let mut pace = Pace::default();
+        assert_eq!(pace.delay(6_000), 6_000);
+        assert!(!pace.refused(), "tried once more");
+        assert_eq!(pace.delay(6_000), 12_000);
+        pace.got_through();
+        assert!(!pace.refused(), "another account, after one got through");
+        assert_eq!(pace.delay(6_000), 24_000, "still slower");
+        assert!(pace.refused(), "twice in a row");
+    }
+
+    #[test]
+    fn a_refused_client_fails_its_item_without_stopping_the_batch() {
+        let a = accounts(&[1]).remove(0);
+        let mut it = item(BulkStage::Joining, true);
+        assert_eq!(mirror_item(&mut it, &instance(InstanceState::Joining, Some("Roblox refused the sign-in (error 403)")), &a), None);
+        assert_eq!(it.stage, failed("Roblox refused the sign-in (error 403)"));
     }
 
     #[test]

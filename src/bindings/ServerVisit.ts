@@ -3,12 +3,12 @@
 /**
  * A server an account's client reached (the newest 50 per account are kept).
  */
-export type ServerVisit = { placeId: number, jobId: string, 
+export type ServerVisit = { placeId: number, jobId: string,
 /**
  * Can't be joined by its id alone (a private server, whose code isn't kept, or wherever a
  * teleport led): listed only.
  */
-private: boolean, 
+private: boolean,
 /**
  * Unix ms.
  */

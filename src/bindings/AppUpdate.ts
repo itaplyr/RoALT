@@ -3,7 +3,7 @@
 /**
  * RoALT's own version and a newer published release, once found (`self_update`).
  */
-export type AppUpdate = { current: string, 
+export type AppUpdate = { current: string,
 /**
  * The newer version (`x.y.z`); None when up to date or not checked yet.
  */

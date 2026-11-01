@@ -6,19 +6,19 @@ import type { Subscription } from "./Subscription";
  * The account info panel. Each part is `None` when Roblox did not answer for it;
  * `unavailable` names those parts for the UI.
  */
-export type AccountInfo = { accountId: number, userId: number, username: string, displayName: string, description: string, 
+export type AccountInfo = { accountId: number, userId: number, username: string, displayName: string, description: string,
 /**
  * ISO 8601 account creation time.
  */
-created: string | null, isBanned: boolean, verifiedBadge: boolean, headshotUrl: string | null, robux: number | null, subscription: Subscription | null, friends: number | null, followers: number | null, following: number | null, emailVerified: boolean | null, 
+created: string | null, isBanned: boolean, verifiedBadge: boolean, headshotUrl: string | null, robux: number | null, subscription: Subscription | null, friends: number | null, followers: number | null, following: number | null, emailVerified: boolean | null,
 /**
  * Enabled 2-step methods ("Email", "Authenticator", ...); empty = 2SV off.
  */
-twoStepMethods: Array<string> | null, 
+twoStepMethods: Array<string> | null,
 /**
  * The account seen with its own cookie.
  */
-presence: Presence | null, 
+presence: Presence | null,
 /**
  * Unix ms.
  */

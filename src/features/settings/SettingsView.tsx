@@ -188,6 +188,14 @@ export function SettingsView({ vault, settings, onPerformance, onRecoveryCode }:
         <Row title={t("settings.closeToTray")} hint={t("settings.closeToTrayHint")}>
           <Switch label={t("settings.closeToTray")} checked={settings.closeToTray} onChange={(closeToTray) => set.mutate({ closeToTray })} />
         </Row>
+        <Row title={t("settings.tabLayout")} hint={t("settings.tabLayoutHint")}>
+          <Segmented
+            label={t("settings.tabLayout")}
+            value={settings.tabLayout}
+            options={[{ value: "top", label: t("settings.tabLayoutTop") }, { value: "side", label: t("settings.tabLayoutSide") }]}
+            onChange={(tabLayout) => set.mutate({ tabLayout })}
+          />
+        </Row>
         <Row title={t("settings.skipSplash")} hint={t("settings.skipSplashHint")}>
           <Switch label={t("settings.skipSplash")} checked={settings.skipSplash} onChange={(skipSplash) => set.mutate({ skipSplash })} />
         </Row>

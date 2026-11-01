@@ -451,7 +451,8 @@ pub async fn wait_until_read(browser_tracker_id: i64, since: SystemTime, client:
                 log::debug!("Roblox settings: installer check failed: {e}");
                 false
             });
-            log::info!("Roblox settings: the client (pid {pid}, started {t}) ended before it read them (Roblox's installer running: {installer})");
+            let lived = since.elapsed().map_or(0, |d| d.as_secs());
+            log::warn!("Roblox settings: the client (pid {pid}, started {t}) ended about {lived} s after its launch, before it read them (Roblox's installer running: {installer}, client log found: {})", log.is_some());
             gone = Some((Instant::now(), installer));
         }
         let deadline = match (gone, &log) {
@@ -462,7 +463,7 @@ pub async fn wait_until_read(browser_tracker_id: i64, since: SystemTime, client:
         };
         if Instant::now() >= deadline {
             let what = if gone.is_some() { "come back" } else if log.is_some() { "show it had read them" } else { "start logging" };
-            return log::warn!("Roblox settings: the client didn't {what} in time; putting the user's back");
+            return log::warn!("Roblox settings: the client didn't {what} in time; putting the user's back. If it died, the \"autopsy\" lines of its instance say why, up to 2 minutes after its launch");
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }

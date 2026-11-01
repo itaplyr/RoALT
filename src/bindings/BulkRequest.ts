@@ -2,19 +2,19 @@
 import type { LaunchTarget } from "./LaunchTarget";
 import type { SameServer } from "./SameServer";
 
-export type BulkRequest = { 
+export type BulkRequest = {
 /**
  * Launch order.
  */
-accountIds: Array<number>, target: LaunchTarget, 
+accountIds: Array<number>, target: LaunchTarget,
 /**
  * Wait between launches; clamped to 2 000..=60 000, ±1 s jitter is added.
  */
-delayMs: number, sameServer: SameServer, 
+delayMs: number, sameServer: SameServer,
 /**
  * Marked as used once the first client starts.
  */
-favouriteId: number | null, 
+favouriteId: number | null,
 /**
  * FPS cap for each of these launches, instead of each account's and the default; None:
  * those.

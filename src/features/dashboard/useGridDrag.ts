@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useLayoutEffect, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type PointerEvent } from "react";
 import { isRtl } from "../../i18n";
 
 type Rect = Pick<DOMRect, "left" | "top" | "width">;
@@ -17,20 +17,40 @@ export function overAt<T extends { getBoundingClientRect(): Rect; offsetTop: num
   return tiles.length;
 }
 
+/** As `overAt` for tiles in one column: before the first whose middle is below `y`. */
+export function overRow<T extends { getBoundingClientRect(): Pick<DOMRect, "top" | "height"> }>(tiles: T[], dragged: T, y: number) {
+  for (let n = 0; n < tiles.length; n++) {
+    if (tiles[n] === dragged) continue;
+    const r = tiles[n].getBoundingClientRect();
+    if (y < r.top + r.height / 2) return n;
+  }
+  return tiles.length;
+}
+
 type Dragging = { tile: HTMLElement; x: number; y: number; scroller: Element | null; scroll: number; marked: HTMLElement | null };
+/** Pressed on an `item`, not moved far enough yet to be a drag. */
+type Pressed = { x: number; y: number };
+/** How far a press moves before it is a drag and not a click. */
+const DRAG_FROM = 5;
 
 /** Reorders the children of the `grid` element: a pointer drag on a tile's grip, or arrow keys on
  * it. `onMove(from, over)` moves tile `from` before tile `over`, or after the last. Tiles glide to
  * where the new order puts them. Tiles with the same `data-group` move together, so the keys step
  * past their own. React must keep each tile's element (keys), and `moved` belongs in an aria-live
- * element. */
-export function useGridDrag(onMove: (from: number, over: number) => void) {
+ * element. `item` is for a tile that is itself a button: dragged by all of it, still clicked, and
+ * moved with Alt and the arrows, which on their own may mean something else there. `column`: the
+ * tiles are one column. */
+export function useGridDrag(onMove: (from: number, over: number) => void, column = false) {
   const grid = useRef<HTMLElement | null>(null);
   const dragging = useRef<Dragging | null>(null);
   const flip = useRef<Map<Element, DOMRect> | null>(null);
+  const pressed = useRef<Pressed | null>(null);
+  // The click that ends a drag isn't one.
+  const dragged = useRef(false);
   const [moved, setMoved] = useState("");
 
   const tiles = () => [...(grid.current?.children ?? [])] as HTMLElement[];
+  const over = (all: HTMLElement[], tile: HTMLElement, e: PointerEvent) => (column ? overRow(all, tile, e.clientY) : overAt(all, tile, e.clientX, e.clientY));
   const snapshot = () => void (flip.current = new Map(tiles().map((el) => [el, el.getBoundingClientRect()])));
 
   const mark = (d: Dragging, target: HTMLElement | null, side?: "before" | "after") => {
@@ -69,15 +89,21 @@ export function useGridDrag(onMove: (from: number, over: number) => void) {
     }
   });
 
-  function down(e: PointerEvent<HTMLButtonElement>) {
+  /** Starts the drag of the tile holding `e`'s element, measured from (x, y). */
+  function begin(e: PointerEvent<HTMLButtonElement>, x: number, y: number) {
     const tile = tiles().find((el) => el.contains(e.currentTarget));
-    if (e.button !== 0 || !tile) return;
-    e.preventDefault();
+    if (!tile) return false;
     e.currentTarget.setPointerCapture(e.pointerId);
     tile.style.transition = "none";
     tile.classList.add("tile-drag");
     const scroller = tile.closest(".scroll");
-    dragging.current = { tile, x: e.clientX, y: e.clientY, scroller, scroll: scroller?.scrollTop ?? 0, marked: null };
+    dragging.current = { tile, x, y, scroller, scroll: scroller?.scrollTop ?? 0, marked: null };
+    return true;
+  }
+
+  function down(e: PointerEvent<HTMLButtonElement>) {
+    if (e.button !== 0) return;
+    if (begin(e, e.clientX, e.clientY)) e.preventDefault();
   }
 
   function move(e: PointerEvent) {
@@ -87,9 +113,9 @@ export function useGridDrag(onMove: (from: number, over: number) => void) {
     d.tile.style.transform = `translate(${e.clientX - d.x}px, ${e.clientY - d.y + (d.scroller?.scrollTop ?? 0) - d.scroll}px)`;
     const all = tiles();
     const from = all.indexOf(d.tile);
-    const over = overAt(all, d.tile, e.clientX, e.clientY);
-    if (over === from || over === from + 1) mark(d, null);
-    else if (over < all.length) mark(d, all[over], "before");
+    const to = over(all, d.tile, e);
+    if (to === from || to === from + 1) mark(d, null);
+    else if (to < all.length) mark(d, all[to], "before");
     else mark(d, all[all.length - 1], "after");
   }
 
@@ -102,15 +128,15 @@ export function useGridDrag(onMove: (from: number, over: number) => void) {
     d.tile.classList.remove("tile-drag");
     const all = tiles();
     const from = all.indexOf(d.tile);
-    const over = e ? overAt(all, d.tile, e.clientX, e.clientY) : from;
-    if (over === from || over === from + 1) {
+    const to = e ? over(all, d.tile, e) : from;
+    if (to === from || to === from + 1) {
       // Glides back home.
       d.tile.style.transition = "";
       d.tile.style.transform = "";
       return;
     }
     snapshot();
-    onMove(from, over);
+    onMove(from, to);
   }
 
   /** Left and right move a place, up and down to the nearest tile of the next row. */
@@ -122,7 +148,7 @@ export function useGridDrag(onMove: (from: number, over: number) => void) {
     e.preventDefault();
     const grip = e.currentTarget;
     const from = all.findIndex((el) => el.contains(grip));
-    const same = (n: number, m: number) => !!all[n] && all[n].dataset.group === all[m].dataset.group;
+    const same = (n: number, m: number) => !!all[n] && all[n].dataset.group !== undefined && all[n].dataset.group === all[m].dataset.group;
     let to = from + step;
     if (e.key === "ArrowUp" || e.key === "ArrowDown") {
       const tops = [...new Set(all.map((el) => el.offsetTop))].sort((a, b) => a - b);
@@ -154,5 +180,45 @@ export function useGridDrag(onMove: (from: number, over: number) => void) {
     onKeyDown: (e: KeyboardEvent<HTMLButtonElement>) => key(e, name),
   });
 
-  return { grid, grip, moved };
+  const item = (name: string) => ({
+    "aria-keyshortcuts": "Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown",
+    // A picture inside would start the webview's own drag.
+    onDragStart: (e: DragEvent) => e.preventDefault(),
+    onPointerDown: (e: PointerEvent<HTMLButtonElement>) => {
+      dragged.current = false;
+      pressed.current = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
+      // Now: a fast first move lands on another tile, and that one would be dragged.
+      if (pressed.current) e.currentTarget.setPointerCapture(e.pointerId);
+    },
+    onPointerMove: (e: PointerEvent<HTMLButtonElement>) => {
+      const p = pressed.current;
+      if (p && Math.hypot(e.clientX - p.x, e.clientY - p.y) >= DRAG_FROM) {
+        pressed.current = null;
+        dragged.current = begin(e, p.x, p.y);
+      }
+      move(e);
+    },
+    onPointerUp: (e: PointerEvent) => {
+      pressed.current = null;
+      end(e);
+    },
+    onPointerCancel: () => {
+      pressed.current = null;
+      end(null);
+    },
+    onClickCapture: (e: MouseEvent) => {
+      if (!dragged.current) return;
+      dragged.current = false;
+      e.preventDefault();
+      e.stopPropagation();
+    },
+    onKeyDown: (e: KeyboardEvent<HTMLButtonElement>) => {
+      if (!e.altKey) return;
+      key(e, name);
+      // Not as well a move between tabs.
+      if (e.key.startsWith("Arrow")) e.stopPropagation();
+    },
+  });
+
+  return { grid, grip, item, moved };
 }

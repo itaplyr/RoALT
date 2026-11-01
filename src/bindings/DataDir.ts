@@ -3,11 +3,11 @@
 /**
  * Where RoALT keeps its data.
  */
-export type DataDir = { path: string, 
+export type DataDir = { path: string,
 /**
  * `%LOCALAPPDATA%\RoALT` (not moved).
  */
-default: boolean, 
+default: boolean,
 /**
  * Set for test runs (`ROALT_DATA_DIR`): moving is not offered.
  */

@@ -4,23 +4,23 @@ import type { CrashKind } from "./CrashKind";
 /**
  * One client that crashed, was disconnected or hung (the newest 200 are kept).
  */
-export type Crash = { id: number, 
+export type Crash = { id: number,
 /**
  * The `Instance` it was.
  */
-instanceId: string, accountId: number, kind: CrashKind, 
+instanceId: string, accountId: number, kind: CrashKind,
 /**
  * Unix ms it ended.
  */
-at: number, 
+at: number,
 /**
  * From launch to end.
  */
-uptimeMs: number, 
+uptimeMs: number,
 /**
  * What its log said (disconnect reason, redacted to plain text), if anything.
  */
-reason: string | null, placeId: number | null, 
+reason: string | null, placeId: number | null,
 /**
  * Its client log was found ("Open log"); the path itself stays in the backend.
  */

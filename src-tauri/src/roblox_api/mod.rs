@@ -575,6 +575,17 @@ impl Client {
             }
             let e = classify(status, &headers, &bytes);
             log::warn!("{route}: HTTP {status}, code {:?}: {e}", error_code(&bytes));
+            if status == StatusCode::FORBIDDEN {
+                // Whose refusal it is (the API's or a CDN's page), without the body.
+                let header = |name| headers.get(name).and_then(|v| v.to_str().ok()).unwrap_or("-");
+                log::warn!(
+                    "{route}: 403 details: CSRF retried {csrf_retried}, x-csrf-token sent back {}, challenge {}, content-type {}, server {}",
+                    headers.contains_key(CSRF),
+                    headers.contains_key(CHALLENGE),
+                    header("content-type"),
+                    header("server"),
+                );
+            }
             return Err(e);
         }
     }

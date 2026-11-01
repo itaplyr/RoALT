@@ -43,6 +43,22 @@ impl Limiter {
         Ok(())
     }
 
+    /// Linux has no working-set trim. Report the memory before and after (unchanged) so the UI
+    /// can still say what happened.
+    pub fn logged_trim(&self, why: &'static str, pid: u32, t0: u64) -> Result<(u64, u64)> {
+        let read = || super::metrics::read(pid, t0);
+        let before = read();
+        let after = read();
+        let mb = |r: Option<super::metrics::Reading>| r.map_or(0, |r| r.private >> 20);
+        log::info!("trim of client {pid} ({why}): not supported on Linux");
+        Ok((mb(before), mb(after)))
+    }
+
+    /// What each client really has now, for the UI.
+    pub fn in_force(&self) -> Vec<(String, Limits)> {
+        self.applied.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|(id, a)| (id.clone(), a.limits)).collect()
+    }
+
     pub fn release_all(&self) {
         let applied = std::mem::take(&mut *self.applied.lock().unwrap_or_else(|e| e.into_inner()));
         for (_, a) in applied {

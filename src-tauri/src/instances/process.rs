@@ -7,7 +7,7 @@
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{E_ACCESSDENIED, FILETIME, HANDLE, HWND, LPARAM, WAIT_TIMEOUT, WPARAM};
+use windows::Win32::Foundation::{E_ACCESSDENIED, FILETIME, HANDLE, HWND, LPARAM, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
@@ -86,18 +86,52 @@ fn named(exe: &str) -> Vec<ProcInfo> {
     out
 }
 
-/// Start time of a running process, `None` if it is gone.
+/// Start time of a running process, `None` if it is gone or can't be read (`unreadable_client`).
 pub fn start_time(pid: u32) -> Option<u64> {
     started(*open(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE)?)
+}
+
+/// `start_time` said None, yet this is a Roblox client that hasn't exited: Windows still lists
+/// it (no handle needed) and it isn't signalled. Anything else with its pid doesn't count.
+pub fn unreadable_client(pid: u32) -> bool {
+    // SAFETY: `h` is a live handle with PROCESS_SYNCHRONIZE.
+    if open(pid, PROCESS_SYNCHRONIZE).is_some_and(|h| unsafe { WaitForSingleObject(*h, 0) } == WAIT_OBJECT_0) {
+        return false;
+    }
+    listed_as(pid, CLIENT_EXE)
+}
+
+/// Whether the process list has `pid` running `exe`.
+fn listed_as(pid: u32, exe: &str) -> bool {
+    // SAFETY: as in `named`.
+    unsafe {
+        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return false };
+        let snap = Owned::new(snap);
+        let mut e = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
+        let mut more = Process32FirstW(*snap, &mut e).is_ok();
+        while more {
+            if e.th32ProcessID == pid {
+                return is_named(&e.szExeFile, exe);
+            }
+            more = Process32NextW(*snap, &mut e).is_ok();
+        }
+    }
+    false
 }
 
 /// Asks the client to close: WM_CLOSE to its top-level windows, again after ~400 ms (Roblox may
 /// show a leave prompt), then TerminateProcess if it is still alive after `grace`. `force`
 /// terminates at once. `expected` is the start time the process was seen with; another
-/// process now holding `pid` is left alone. Already gone → Ok.
+/// process now holding `pid` is left alone. Already gone → Ok. A client that can't be read is
+/// only asked, and it stays an error: it may not close.
 pub fn close(pid: u32, expected: Option<u64>, force: bool, grace: Duration) -> Result<()> {
+    let seen = start_time(pid);
+    if seen.is_none() && unreadable_client(pid) {
+        post_close(pid);
+        return Err(AppError::Internal(tr!("Could not close Roblox (process {pid}): {why}", pid = pid, why = tr!("access denied"))));
+    }
     // Pid + start time, so a pid already reused, or reused while we wait, is never touched.
-    let Some(t0) = start_time(pid).filter(|t| expected.is_none_or(|e| e == *t)) else { return Ok(()) };
+    let Some(t0) = seen.filter(|t| expected.is_none_or(|e| e == *t)) else { return Ok(()) };
     let alive = || start_time(pid) == Some(t0);
     if !force {
         let deadline = Instant::now() + grace;
@@ -253,7 +287,11 @@ pub(super) fn started(h: HANDLE) -> Option<u64> {
     // SAFETY: `h` is a live handle with PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE; the out
     // pointers are locals.
     unsafe {
-        if WaitForSingleObject(h, 0) != WAIT_TIMEOUT {
+        let wait = WaitForSingleObject(h, 0);
+        if wait != WAIT_TIMEOUT {
+            if wait != WAIT_OBJECT_0 {
+                log::debug!("process wait failed: {wait:?}");
+            }
             return None;
         }
         GetProcessTimes(h, &mut created, &mut exited, &mut kernel, &mut user)

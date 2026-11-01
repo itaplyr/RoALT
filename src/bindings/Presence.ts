@@ -5,11 +5,11 @@ import type { PresenceKind } from "./PresenceKind";
  * What Roblox shows about where a user is. Game fields are `None` when the viewer
  * is not allowed to see them.
  */
-export type Presence = { kind: PresenceKind, 
+export type Presence = { kind: PresenceKind,
 /**
  * Game name when in game, else e.g. "Website".
  */
-lastLocation: string | null, placeId: number | null, rootPlaceId: number | null, universeId: number | null, 
+lastLocation: string | null, placeId: number | null, rootPlaceId: number | null, universeId: number | null,
 /**
  * The server (job) id.
  */

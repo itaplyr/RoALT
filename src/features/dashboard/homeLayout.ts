@@ -7,7 +7,9 @@ const DETAILED = "roalt.homeDetailed";
 const ORDER = "roalt.homeOrder";
 const SIZES = "roalt.homeSizes";
 const TABS = "roalt.homeTabs";
+const SECTIONS = "roalt.sectionOrder";
 /** When this PC keeps no storage, the choices last until RoALT closes. */
+let unsavedSections: string[] | null = null;
 let unsavedDetailed: boolean | null = null;
 let unsavedOrder: number[] | null = null;
 let unsavedSizes: Record<number, number> | null = null;
@@ -32,6 +34,16 @@ function storedOrder(): number[] {
   try {
     const v: unknown = JSON.parse(localStorage.getItem(ORDER) ?? "null");
     return Array.isArray(v) ? v.filter((n): n is number => typeof n === "number") : [];
+  } catch {
+    return [];
+  }
+}
+
+function storedSections(): string[] {
+  if (unsavedSections) return unsavedSections;
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(SECTIONS) ?? "null");
+    return Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : [];
   } catch {
     return [];
   }
@@ -99,10 +111,31 @@ export function homeSorted<T extends { accountId: number }>(list: T[], order: nu
   return [...list].sort((a, b) => rank(a) - rank(b));
 }
 
+/** `ids` in the remembered order; ones it doesn't know yet follow, as they came. */
+export function byOrder<T>(ids: readonly T[], order: T[]): T[] {
+  const at = new Map(order.map((id, n) => [id, n]));
+  const rank = (id: T) => at.get(id) ?? order.length;
+  return [...ids].sort((a, b) => rank(a) - rank(b));
+}
+
+/** RoALT's sections in the order the user dragged them to, by name. */
+export function useSectionOrder(): [string[], (ids: string[]) => void] {
+  const [order, setOrder] = useState(storedSections);
+  return [order, (next) => {
+    unsavedSections = next;
+    setOrder(next);
+    try {
+      localStorage.setItem(SECTIONS, JSON.stringify(next));
+    } catch {
+      // No storage: kept in `unsavedSections`.
+    }
+  }];
+}
+
 /** The order after moving shown[from] before shown[over] (or after the last shown, at the end).
- * `shown` holds one account id per tile; accounts not running now keep their place in `order`,
- * and two tiles of one account move together. */
-export function reordered(order: number[], shown: number[], from: number, over: number): number[] {
+ * `shown` holds one id per tile (an account's, for clients, tabs and rows); ids not shown now keep
+ * their place in `order`, and two tiles of one account move together. */
+export function reordered<T>(order: T[], shown: T[], from: number, over: number): T[] {
   const id = shown[from];
   const ids = [...new Set([...order, ...shown])].filter((x) => x !== id);
   const next = shown.slice(over).find((x) => x !== id);
@@ -152,7 +185,9 @@ const unparsed = (d: Draft) => !!d.text.trim() && d.parsed?.text !== d.text;
 export function useHomeTabs(accounts: AccountSummary[] | undefined) {
   const [tabs, setTabs] = useState(storedTabs);
   const [active, setActive] = useState<number | null>(null);
-  const setDraft = (id: number, f: SetStateAction<Draft>) =>
+  // One order for an account's client, tab and row, so sorting one sorts them all.
+  const [order, setOrder] = useHomeOrder();
+  const setDraft =(id: number, f: SetStateAction<Draft>) =>
     setTabs((list) =>
       list.map((tab) => {
         if (tab.accountId !== id) return tab;
@@ -193,6 +228,8 @@ export function useHomeTabs(accounts: AccountSummary[] | undefined) {
 
   return {
     tabs,
+    order,
+    setOrder,
     active: tabs.some((tab) => tab.accountId === active) ? active : null,
     setActive,
     setDraft,

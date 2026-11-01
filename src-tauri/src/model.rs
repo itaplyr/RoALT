@@ -145,6 +145,18 @@ pub struct GroupInput {
     pub color: Option<String>,
 }
 
+/// Where the accounts go in the window.
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum TabLayout {
+    /// Accounts as tabs on Home, sections on the left.
+    #[default]
+    Top,
+    /// Accounts listed on the left, sections as tabs along the top.
+    Side,
+}
+
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 #[ts(export)]
@@ -175,6 +187,7 @@ pub enum Density {
 #[ts(export)]
 pub struct Settings {
     pub theme: Theme,
+    pub tab_layout: TabLayout,
     /// `#rrggbb`, or "" for the theme's own lime.
     pub accent: String,
     /// How much of the theme's background covers a custom background image, 0-95 %.
@@ -238,10 +251,12 @@ pub struct Settings {
     /// Discord rich presence through the Discord app on this PC (`rpc`): "Playing RoALT" with
     /// the game and how many alts run.
     pub discord_presence: bool,
-    /// Hide each client (without taking the focus) once, when its window first appears, unless its
+    /// Hide each client (without taking the focus) once, when it first reaches a game, unless its
     /// account is full quality. A hidden client (`instances::window`) stays live while Home shows
     /// it and sleeps otherwise, and comes back from the taskbar or Alt-Tab.
     pub minimize_on_launch: bool,
+    /// Home's previews keep hidden clients awake and drawing. Off: they sleep and show their last picture.
+    pub live_hidden_previews: bool,
     /// System-wide key combination for Kill all, like "Ctrl+Shift+F12"; "" for none.
     pub panic_hotkey: String,
     /// Delete old or huge Roblox client logs at start and every hour (`logwatch::clean`).
@@ -381,7 +396,7 @@ impl Default for AntiAfk {
 #[ts(export)]
 pub enum AfkMode {
     /// Brings the client to the front for a moment and presses Space through `SendInput`; only
-    /// while the user is away, never in minimized clients (hidden ones asleep among them).
+    /// while the user is away. A minimized client wakes hidden for it, invisibly.
     #[default]
     Focus,
     /// Posts Tab to the client's window without changing the focus, also while the user is
@@ -445,6 +460,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             theme: Theme::Dark,
+            tab_layout: TabLayout::Top,
             accent: String::new(),
             background_dim: 60,
             density: Density::Detailed,
@@ -475,7 +491,8 @@ impl Default for Settings {
             self_update: true,
             discord_presence: true,
             minimize_on_launch: false,
-            panic_hotkey: String::new(),
+            live_hidden_previews: true,
+panic_hotkey: String::new(),
             clean_logs: false,
             fps_cap: 0,
             low_graphics: true,
@@ -498,6 +515,8 @@ impl Default for Settings {
 pub struct SettingsPatch {
     #[ts(optional)]
     pub theme: Option<Theme>,
+    #[ts(optional)]
+    pub tab_layout: Option<TabLayout>,
     #[ts(optional)]
     pub accent: Option<String>,
     #[ts(optional)]
@@ -554,6 +573,8 @@ pub struct SettingsPatch {
     pub discord_presence: Option<bool>,
     #[ts(optional)]
     pub minimize_on_launch: Option<bool>,
+    #[ts(optional)]
+    pub live_hidden_previews: Option<bool>,
     #[ts(optional)]
     pub panic_hotkey: Option<String>,
     #[ts(optional)]
@@ -879,10 +900,13 @@ pub struct Instance {
     /// Why that relaunch has to wait, while it does.
     #[serde(default, skip_deserializing)]
     pub relaunch_problem: Option<String>,
-    /// Its note is "Signed in as another account" or "Roblox wants a human check" (the note
-    /// itself is translated, so the UI can't match its text).
+    /// Its note is "Signed in as another account", "Roblox wants a human check" or "Roblox refused
+    /// the sign-in (error 403)" (the note itself is translated, so the UI can't match its text).
     #[serde(default)]
     pub sign_in_problem: bool,
+    /// What it really has now, settings' limits included (`limits` is only what was set on it).
+    #[serde(default, skip_deserializing)]
+    pub applied_limits: Limits,
 }
 
 /// What Windows holds one client to (instances::limits). Lasts as long as the client.

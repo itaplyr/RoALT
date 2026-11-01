@@ -40,6 +40,9 @@ pub struct Profile {
     pub minimize_on_launch: Option<bool>,
     #[ts(optional)]
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub live_hidden_previews: Option<bool>,
+    #[ts(optional)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub micro_width: Option<u32>,
     #[ts(optional)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -95,6 +98,7 @@ pub fn of(v: &Settings, preview_fps: Option<u32>, now_ms: i64) -> String {
         lighter_rendering: Some(v.lighter_rendering),
         render_flags: Some(v.render_flags),
         minimize_on_launch: Some(v.minimize_on_launch),
+        live_hidden_previews: Some(v.live_hidden_previews),
         micro_width: Some(v.micro_width),
         micro_height: Some(v.micro_height),
         tiny_on_launch: Some(v.tiny_on_launch),
@@ -123,6 +127,7 @@ fn patch_of(p: &Profile) -> SettingsPatch {
         lighter_rendering: p.lighter_rendering,
         render_flags: p.render_flags,
         minimize_on_launch: p.minimize_on_launch,
+        live_hidden_previews: p.live_hidden_previews,
         micro_width: p.micro_width,
         micro_height: p.micro_height,
         tiny_on_launch: p.tiny_on_launch,

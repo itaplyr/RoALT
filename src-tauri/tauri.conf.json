@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "RoALT",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "identifier": "com.inspectsoftware.roalt",
   "build": {
     "beforeDevCommand": "npm run dev",

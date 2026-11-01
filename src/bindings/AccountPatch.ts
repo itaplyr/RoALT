@@ -4,11 +4,11 @@
  * Partial update from the UI; `None` leaves a field as it is.
  * `color: Some("")` clears the colour.
  */
-export type AccountPatch = { alias?: string, notes?: string, color?: string, favourite?: boolean, groupIds?: Array<number>, allowDisconnect?: boolean, 
+export type AccountPatch = { alias?: string, notes?: string, color?: string, favourite?: boolean, groupIds?: Array<number>, allowDisconnect?: boolean,
 /**
  * `Some("")` goes back to the default from Settings.
  */
-launchArgs?: string, discordMuted?: boolean, 
+launchArgs?: string, discordMuted?: boolean,
 /**
  * `Some(0)` goes back to the default from Settings; else 5..=360.
  */

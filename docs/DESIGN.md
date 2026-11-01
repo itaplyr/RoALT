@@ -356,7 +356,7 @@ hard kill with RoALT not reopened leaves the client invisible until the next sta
 follow again (half-made ones too, by the bits alone).
 
 Anti-AFK (opt-in) uses `SendInput`, so it needs the client in front: it runs only after 5 s with no
-user input (`GetLastInputInfo`), skips minimized clients (hidden ones asleep too), and takes the focus with `SetForegroundWindow`,
+user input (`GetLastInputInfo`), wakes minimized clients as ghosts first (`window::wake_for_press`), and takes the focus with `SetForegroundWindow`,
 then `AttachThreadInput`, then after a zero-movement mouse input that lifts the foreground lock (not an
 ALT tap, which opens menus). Space goes out by scan code only while the client is confirmed in front,
 then the previous window gets the focus back. Our own injection also moves `GetLastInputInfo`, so any

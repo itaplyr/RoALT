@@ -6,51 +6,55 @@ import type { Limits } from "./Limits";
 /**
  * A Roblox client RoALT started and is following.
  */
-export type Instance = { id: string, accountId: number, pid: number, state: InstanceState, target: LaunchTarget, placeId: number | null, jobId: string | null, 
+export type Instance = { id: string, accountId: number, pid: number, state: InstanceState, target: LaunchTarget, placeId: number | null, jobId: string | null,
 /**
  * Unix ms.
  */
-startedAt: number, endedAt: number | null, viaBootstrapper: boolean, 
+startedAt: number, endedAt: number | null, viaBootstrapper: boolean,
 /**
  * Why it ended or what went wrong: "Closed", "Replaced by another Roblox client",
  * "Signed in as another account", "Roblox wants a human check", ...
  */
-note: string | null, 
+note: string | null,
 /**
  * How many auto-rejoins led to this client (0: launched by the user).
  */
-rejoins: number, limits: Limits, 
+rejoins: number, limits: Limits,
 /**
  * Anti-AFK presses keys in it (when on in Settings); false: opted out.
  */
-antiAfk: boolean, 
+antiAfk: boolean,
 /**
  * Unix ms of its last anti-AFK key press.
  */
-afkAt: number | null, 
+afkAt: number | null,
 /**
  * Held to `Settings.mem_throttle`'s CPU cap: its memory is over that limit.
  */
-throttled: boolean, 
+throttled: boolean,
 /**
  * Its window was made small by RoALT (`instance_micro`, `instances_tile`); "Normal size"
  * puts it back.
  */
-micro: boolean, 
+micro: boolean,
 /**
  * The FPS cap its launch asked for (`LaunchInfo::fps_cap`); a rejoin uses it again.
  */
-fpsCap: number | null, 
+fpsCap: number | null,
 /**
  * RoALT is working on relaunching it (`instances::rejoin`). Not kept over a restart of RoALT.
  */
-relaunching: boolean, 
+relaunching: boolean,
 /**
  * Why that relaunch has to wait, while it does.
  */
-relaunchProblem: string | null, 
+relaunchProblem: string | null,
 /**
- * Its note is "Signed in as another account" or "Roblox wants a human check" (the note
- * itself is translated, so the UI can't match its text).
+ * Its note is "Signed in as another account", "Roblox wants a human check" or "Roblox refused
+ * the sign-in (error 403)" (the note itself is translated, so the UI can't match its text).
  */
-signInProblem: boolean, };
+signInProblem: boolean,
+/**
+ * What it really has now, settings' limits included (`limits` is only what was set on it).
+ */
+appliedLimits: Limits, };

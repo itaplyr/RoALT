@@ -169,13 +169,14 @@ pub async fn launch(
     let (exe, production) = update::launch_client(s).await?;
     let args = args_for(s, account_id)?;
     let (join, warning) = resolve(&s.api, account_id, &cookie, target).await?;
+    // Read again before each call: Roblox can rotate the cookie in any answer, and the old one stops working.
     let assertion = s
         .api
-        .client_assertion(account_id, &cookie)
+        .client_assertion(account_id, &account_cookie(s, account_id)?)
         .await
         .inspect_err(|e| log::warn!("client assertion for account {account_id} failed, ticket fetched without it: {e}"))
         .ok();
-    let ticket = s.api.authentication_ticket(account_id, &cookie, assertion.as_ref()).await?;
+    let ticket = s.api.authentication_ticket(account_id, &account_cookie(s, account_id)?, assertion.as_ref()).await?;
     let (browser_tracker_id, started_at) = (uri::new_browser_tracker_id(), crate::commands::now_ms());
     let place = uri::PlaceLaunch { join: &join, browser_tracker_id, join_attempt_id: Uuid::new_v4() };
     let settings = s.db.settings()?;
@@ -242,7 +243,14 @@ pub async fn launch(
     }
     let (pid, pid_start) = started?;
 
-    log::info!("launched account {account_id} (pid {pid}, bootstrapper: {}, {} extra argument(s))", exe.bootstrapper, args.len());
+    log::info!(
+        "launched account {account_id} (pid {pid}, bootstrapper: {}, {} extra argument(s), Roblox processes running now: {}, lighter rendering: {}, full quality: {})",
+        exe.bootstrapper,
+        args.len(),
+        crate::instances::process::roblox_processes().len(),
+        settings.lighter_rendering,
+        account.full_quality,
+    );
     Ok(LaunchInfo {
         account_id,
         pid,
@@ -264,8 +272,8 @@ pub async fn launch_check(s: &App, account_id: i64, target: &LaunchTarget) -> Re
     client::find()?;
     args_for(s, account_id)?;
     resolve(&s.api, account_id, &cookie, target).await?;
-    let assertion = s.api.client_assertion(account_id, &cookie).await.ok();
-    s.api.authentication_ticket(account_id, &cookie, assertion.as_ref()).await.map(drop)
+    let assertion = s.api.client_assertion(account_id, &account_cookie(s, account_id)?).await.ok();
+    s.api.authentication_ticket(account_id, &account_cookie(s, account_id)?, assertion.as_ref()).await.map(drop)
 }
 
 pub(crate) fn account_cookie(s: &App, account_id: i64) -> Result<Secret> {

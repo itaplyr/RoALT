@@ -3,13 +3,14 @@ import { open as openFile, save as saveFile } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { api, asError, type AccountSummary, type Profile, type Settings } from "../../api";
 import type { RenderFlags } from "../../bindings/RenderFlags";
-import { useAccounts, useSetSettings, useUpdateAccount } from "../../data";
+import { useAccounts, useInstances, useSetSettings, useUpdateAccount } from "../../data";
 import { NumberField, Segmented, Switch } from "../../ui/controls";
 import { Dialog } from "../../ui/Dialog";
 import { Icon } from "../../ui/Icon";
 import { fmtList, fmtNum, t, type Key } from "../../i18n";
 import { friendly, toast, toastError } from "../../ui/Toast";
 import { accountName } from "../accounts/shared";
+import { isLive } from "../launch/Running";
 import { BandwidthRow, Row } from "../settings/SettingsView";
 import { PREVIEW_FPS, setPreviewFps, storedFps, usePreviewFps, type PreviewFps } from "../dashboard/previewFps";
 
@@ -150,6 +151,7 @@ export function PerformanceView({ settings }: { settings: Settings }) {
   const closedAt = useRef(0);
   // An account's own cap beats a preset's, so it isn't what those clients get.
   const active = ownCaps(useAccounts().data ?? []) ? undefined : PRESETS.find((p) => isApplied(p.profile, settings));
+  const using = <span className="text-[13px] text-dim">{active ? t("performance.using", { name: t(active.label) }) : t("performance.custom")}</span>;
 
   return (
     <main className="scroll flex-1 min-w-0 px-8 pt-5 pb-12">
@@ -161,29 +163,28 @@ export function PerformanceView({ settings }: { settings: Settings }) {
 
         <section aria-label={t("performance.presets")} className="grid gap-6" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(250px, 100%), 1fr))" }}>
           {PRESETS.map((p) => (
-            <button key={p.label} className="btn preset" aria-pressed={p === active} aria-haspopup="dialog" onClick={() => Date.now() - closedAt.current > 400 && setIncoming(p.profile)}>
+            <button key={p.label} className="btn preset" title={p.facts().join("\n")} aria-pressed={p === active} aria-haspopup="dialog" onClick={() => Date.now() - closedAt.current > 400 && setIncoming(p.profile)}>
               <span className="flex items-center justify-between gap-2.5 w-full">
                 <span className="section-title">{t(p.label)}</span>
                 <span aria-hidden="true" className="tick tick-round"><Icon name="check" size={14} /></span>
               </span>
               <span className="font-normal text-dim">{t(p.tag)}</span>
-              <span className="flex flex-col gap-1.5 text-[13px] font-normal">
-                {p.facts().map((f) => <span key={f}>{f}</span>)}
+              <span className="flex flex-col gap-1 text-[13px] font-normal">
+                {p.facts().slice(0, FACTS_SHOWN).map((f) => <span key={f}>{f}</span>)}
+                {/* The rest are in the review, and the tooltip. */}
+                {p.facts().length > FACTS_SHOWN && <span aria-hidden="true" className="text-dim">+{p.facts().length - FACTS_SHOWN}</span>}
+                <span className="sr-only">{p.facts().slice(FACTS_SHOWN).join(". ")}</span>
               </span>
             </button>
           ))}
         </section>
 
-        <section aria-labelledby="perf-tune" className="panel p-5">
+        {/* Most useful first; what can disconnect a client last. */}
+        <section aria-labelledby="perf-cpu" className="panel p-5 [&>*:last-child]:border-b-0">
           <div className="flex flex-wrap items-center justify-between gap-2 pb-3.5">
-            <h2 id="perf-tune" className="section-title">{t("performance.fineTune")}</h2>
-            <span className="text-[13px] text-dim">{active ? t("performance.using", { name: t(active.label) }) : t("performance.custom")}</span>
+            <h2 id="perf-cpu" className="section-title">{t("performance.section.cpuMemory")}</h2>
+            {using}
           </div>
-          <FpsRow settings={settings} />
-          <SwitchRow title={t("settings.lowGraphics")} hint={t("performance.hintLow")} more={t("settings.lowGraphicsHint")} checked={settings.lowGraphics} onChange={(lowGraphics) => set.mutate({ lowGraphics })} />
-          <SwitchRow title={t("settings.lighterRendering")} hint={t("performance.hintLight")} more={t("performance.hintLight")} checked={settings.lighterRendering} onChange={(lighterRendering) => set.mutate({ lighterRendering })} />
-          {settings.lighterRendering && <RenderFlagRows settings={settings} />}
-          <h3 id="perf-cpu" className="font-semibold pt-5 pb-2">{t("performance.section.cpuMemory")}</h3>
           <TuneRow title={t("settings.adaptive")} hint={t("settings.adaptiveHint")}>
             <Switch label={t("settings.adaptive")} checked={settings.adaptive.enabled} onChange={(enabled) => set.mutate({ adaptive: { ...settings.adaptive, enabled } })} />
           </TuneRow>
@@ -218,24 +219,13 @@ export function PerformanceView({ settings }: { settings: Settings }) {
           <TuneRow title={t("settings.fairCap")} hint={t("settings.fairCapHint")}>
             <Switch label={t("settings.fairCap")} checked={settings.fairCap} onChange={(fairCap) => set.mutate({ fairCap })} />
           </TuneRow>
-          <TuneRow title={t("settings.trim")} hint={t("settings.trimHint")}>
+          <TuneRow title={t("settings.trim")} hint={`${t("settings.trimHint")} ${t("settings.commitStays")}`}>
             <NumberField unit={t("settings.unit.minutesOff")} short={t("settings.unit.min")} min={0} max={1440} value={settings.trimEveryMin} onCommit={(trimEveryMin) => set.mutate({ trimEveryMin })} />
           </TuneRow>
           <TuneRow title={t("settings.spread")} hint={t("settings.spreadHint")}>
             <Switch label={t("settings.spread")} checked={settings.autoSpread} onChange={(autoSpread) => set.mutate({ autoSpread })} />
           </TuneRow>
-          <SwitchRow title={t("settings.minimize")} hint={t("performance.hintMinimize")} more={t("settings.minimizeHint")} checked={settings.minimizeOnLaunch} onChange={(minimizeOnLaunch) => set.mutate({ minimizeOnLaunch })} />
-          <SwitchRow title={t("performance.tinyOnLaunch")} hint={t("performance.hintTinyOnLaunch")} more={t("performance.hintTinySize")} checked={settings.tinyOnLaunch} onChange={(tinyOnLaunch) => set.mutate({ tinyOnLaunch })} />
-          <TuneRow title={t("performance.tinySize")} hint={t("performance.hintTinySize")}>
-            <div className="flex flex-wrap items-center gap-2">
-              <NumberField unit={t("performance.tinyWidth")} short="×" min={16} max={7680} value={settings.microWidth} onCommit={(microWidth) => set.mutate({ microWidth })} />
-              <NumberField unit={t("performance.tinyHeight")} short="px" min={16} max={4320} value={settings.microHeight} onCommit={(microHeight) => set.mutate({ microHeight })} />
-            </div>
-          </TuneRow>
-          <TuneRow title={t("settings.memRestart")} hint={t("settings.memRestartHint")}>
-            <NumberField unit={t("settings.unit.mbOff")} short="MB" min={0} max={65536} value={settings.memRestartMb} onCommit={(memRestartMb) => set.mutate({ memRestartMb })} />
-          </TuneRow>
-          <TuneRow title={t("settings.memThrottle")} hint={t("settings.memThrottleHint")}>
+          <TuneRow title={t("settings.memThrottle")} hint={`${t("settings.memThrottleHint")} ${t("settings.noMemoryFreed")}`}>
             <div className="flex flex-wrap items-center gap-3">
               <NumberField
                 unit={t("settings.unit.mbOff")}
@@ -252,6 +242,29 @@ export function PerformanceView({ settings }: { settings: Settings }) {
                 options={[25, 10, 5, 2].map((c) => ({ value: c, label: t("settings.percent", { n: c }) }))}
                 onChange={(cpuCap) => set.mutate({ memThrottle: { ...settings.memThrottle, cpuCap } })}
               />
+            </div>
+          </TuneRow>
+          <TuneRow title={t("settings.memRestart")} hint={t("settings.memRestartHint")}>
+            <NumberField unit={t("settings.unit.mbOff")} short="MB" min={0} max={65536} value={settings.memRestartMb} onCommit={(memRestartMb) => set.mutate({ memRestartMb })} />
+          </TuneRow>
+        </section>
+
+        <section aria-labelledby="perf-tune" className="panel p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-3.5">
+            <h2 id="perf-tune" className="section-title">{t("performance.fineTune")}</h2>
+            {using}
+          </div>
+          <FpsRow settings={settings} />
+          <SwitchRow title={t("settings.lowGraphics")} hint={t("performance.hintLow")} more={t("settings.lowGraphicsHint")} checked={settings.lowGraphics} onChange={(lowGraphics) => set.mutate({ lowGraphics })} />
+          <SwitchRow title={t("settings.lighterRendering")} hint={t("performance.hintLight")} more={t("performance.hintLight")} checked={settings.lighterRendering} onChange={(lighterRendering) => set.mutate({ lighterRendering })} />
+          {settings.lighterRendering && <RenderFlagRows settings={settings} />}
+          <SwitchRow title={t("settings.minimize")} hint={t("performance.hintMinimize")} more={t("settings.minimizeHint")} checked={settings.minimizeOnLaunch} onChange={(minimizeOnLaunch) => set.mutate({ minimizeOnLaunch })} />
+          <SwitchRow title={t("performance.liveHidden")} hint={t("performance.hintLiveHidden")} more={t("performance.hintLiveHidden")} checked={settings.liveHiddenPreviews} onChange={(liveHiddenPreviews) => set.mutate({ liveHiddenPreviews })} />
+          <SwitchRow title={t("performance.tinyOnLaunch")} hint={t("performance.hintTinyOnLaunch")} more={t("performance.hintTinySize")} checked={settings.tinyOnLaunch} onChange={(tinyOnLaunch) => set.mutate({ tinyOnLaunch })} />
+          <TuneRow title={t("performance.tinySize")} hint={t("performance.hintTinySize")}>
+            <div className="flex flex-wrap items-center gap-2">
+              <NumberField unit={t("performance.tinyWidth")} short="×" min={16} max={7680} value={settings.microWidth} onCommit={(microWidth) => set.mutate({ microWidth })} />
+              <NumberField unit={t("performance.tinyHeight")} short="px" min={16} max={4320} value={settings.microHeight} onCommit={(microHeight) => set.mutate({ microHeight })} />
             </div>
           </TuneRow>
           <h3 id="perf-roalt" className="font-semibold pt-5 pb-2">{t("performance.section.roalt")}</h3>
@@ -271,21 +284,24 @@ export function PerformanceView({ settings }: { settings: Settings }) {
   );
 }
 
+/** What a preset's card lists, so the settings below it stay in reach. */
+const FACTS_SHOWN = 3;
+/** Only Roblox defaults names these: the others leave a user's own memory limits alone. */
 const noThrottle = { mb: 0, cpuCap: 10 };
 const lightest: RenderFlags = { msaa: "x1", texture: "lowest", mode: "default", graySky: false, noGrass: true, lowestFrm: true, pauseVoxelizer: false };
 /** What leaving Max alts must undo: a profile only changes what it names. */
-const normalWindows = { tinyOnLaunch: false, microWidth: 320, microHeight: 240, fairCap: false };
+const normalWindows = { tinyOnLaunch: false, microWidth: 320, microHeight: 240, fairCap: false, liveHiddenPreviews: true };
 /** One-click setups: a profile each, reviewed like any other. */
 const PRESETS: readonly { label: Key; tag: Key; facts: () => string[]; profile: Profile }[] = [
   {
     label: "performance.preset.maxAlts",
     tag: "performance.tagMaxAlts",
     facts: () => [
-      t("dashboard.fps", { fps: 10 }), t("settings.lowGraphics"), t("performance.tinyOnLaunch"), t("settings.minimize"), t("performance.factFair", { n: 25 }),
+      t("dashboard.fps", { fps: 10 }), t("settings.lowGraphics"), t("performance.tinyOnLaunch"), t("settings.minimize"), t("performance.factAsleep"), t("performance.factFair", { n: 25 }),
       t("performance.factMainAccount"), t("performance.factBootstrapper"), t("performance.factAfk"), t("performance.factNextLaunch"),
     ],
     profile: {
-      fpsCap: 10, lowGraphics: true, lighterRendering: true, renderFlags: { ...lightest, graySky: true, pauseVoxelizer: true }, minimizeOnLaunch: true, tinyOnLaunch: true, microWidth: 240, microHeight: 180, memRestartMb: 0, memThrottle: noThrottle, trimEveryMin: 15, autoSpread: true, fairCap: true,
+      fpsCap: 10, lowGraphics: true, lighterRendering: true, renderFlags: { ...lightest, graySky: true, pauseVoxelizer: true }, minimizeOnLaunch: true, tinyOnLaunch: true, microWidth: 240, microHeight: 180, liveHiddenPreviews: false, trimEveryMin: 15, autoSpread: true, fairCap: true,
       adaptive: { enabled: true, background: { cpuCap: 25, eco: true, trimEveryMin: null, affinity: null } }, previewFps: 5,
     },
   },
@@ -294,7 +310,7 @@ const PRESETS: readonly { label: Key; tag: Key; facts: () => string[]; profile: 
     tag: "performance.tagBalanced",
     facts: () => [t("dashboard.fps", { fps: 30 }), t("settings.lowGraphics"), t("performance.factOnScreen"), t("performance.factBg", { n: 50 })],
     profile: {
-      fpsCap: 30, lowGraphics: true, lighterRendering: true, renderFlags: lightest, minimizeOnLaunch: false, ...normalWindows, memRestartMb: 0, memThrottle: noThrottle, trimEveryMin: 30, autoSpread: true,
+      fpsCap: 30, lowGraphics: true, lighterRendering: true, renderFlags: lightest, minimizeOnLaunch: false, ...normalWindows, trimEveryMin: 30, autoSpread: true,
       adaptive: { enabled: true, background: { cpuCap: 50, eco: true, trimEveryMin: null, affinity: null } }, previewFps: 15,
     },
   },
@@ -423,6 +439,7 @@ const LABELS: Record<Field, Key> = {
   lighterRendering: "settings.lighterRendering",
   renderFlags: "performance.graphicsTitle",
   minimizeOnLaunch: "settings.minimize",
+  liveHiddenPreviews: "performance.liveHidden",
   microWidth: "performance.tinyWidth",
   microHeight: "performance.tinyHeight",
   tinyOnLaunch: "performance.tinyOnLaunch",
@@ -473,6 +490,17 @@ function ReviewDialog({ profile, settings, onClose }: { profile: Profile | null;
   // A profile's FPS cap is what its clients get: an account's own would win over it at launch.
   const clearing = typeof profile?.fpsCap === "number" ? accounts.filter((a) => a.fpsCap) : [];
   if (clearing.length) changes.push({ label: t("performance.accountCaps"), from: ownCaps(clearing), to: t("performance.capsCleared") });
+  // Windows change now; what a client reads at its start waits for its next launch.
+  const running = (useInstances().data ?? []).filter(isLive);
+  // One still loading gets these when it reaches a game.
+  const reshape = running.filter((i) => i.state === "inGame" && !accounts.find((a) => a.id === i.accountId)?.fullQuality);
+  // Only when this turns them on: a client since brought back stays so when nothing changes.
+  const makeTiny = !!profile?.tinyOnLaunch && !settings.tinyOnLaunch;
+  const hide = !!profile?.minimizeOnLaunch && !settings.minimizeOnLaunch;
+  if (reshape.length && (makeTiny || hide)) changes.push({ label: t("performance.runningClients"), from: "", to: t("performance.runningNow") });
+  // What its card had no room for.
+  const presetFacts = PRESETS.find((p) => p.profile === profile)?.facts().slice(FACTS_SHOWN) ?? [];
+  const nextLaunch = (["fpsCap", "lowGraphics", "lighterRendering", "renderFlags"] as const).some((k) => profile?.[k] !== undefined && JSON.stringify(profile[k]) !== JSON.stringify(settings[k]));
 
   async function apply() {
     if (!profile) return;
@@ -483,7 +511,11 @@ function ReviewDialog({ profile, settings, onClose }: { profile: Profile | null;
       await set.mutateAsync(patch);
       for (const a of clearing) await update.mutateAsync({ id: a.id, patch: { fpsCap: 0 } });
       if (previewFps) setPreviewFps(previewFps as PreviewFps);
-      toast(t("performance.applied"));
+      await Promise.allSettled(reshape.flatMap((i) => [
+        ...(makeTiny && !i.micro ? [api.instanceMicro(i.id, true)] : []),
+        ...(hide ? [api.instanceShow(i.id, "minimize")] : []),
+      ]));
+      toast(t(running.length && nextLaunch ? "performance.appliedRelaunch" : "performance.applied"));
       onClose();
     } catch (e) {
       setError(friendly(asError(e)));
@@ -511,6 +543,11 @@ function ReviewDialog({ profile, settings, onClose }: { profile: Profile | null;
               ))}
             </ul>
           </>
+        )}
+        {presetFacts.length > 0 && (
+          <ul className="flex flex-col gap-1 text-[13px] text-dim">
+            {presetFacts.map((f) => <li key={f}>{f}</li>)}
+          </ul>
         )}
         {error && <div role="alert" className="alert">{error}</div>}
         <div className="flex justify-end gap-2 pt-1">

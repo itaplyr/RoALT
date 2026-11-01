@@ -3,7 +3,7 @@
 /**
  * The Discord webhook as the UI may see it: never the URL or its token.
  */
-export type DiscordStatus = { configured: boolean, 
+export type DiscordStatus = { configured: boolean,
 /**
  * The webhook id's last 4 digits, e.g. "…4821".
  */

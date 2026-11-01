@@ -13,6 +13,7 @@
 //! stays invisible until RoALT starts again (`recover`).
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -115,8 +116,13 @@ pub fn preview(pid: Option<u32>, max_w: u32) -> Preview {
     let Some((pid, hwnd, iconic)) = pid.and_then(|pid| process::main_window(pid).map(|(hwnd, iconic)| (pid, hwnd, iconic))) else {
         return Preview { status: status_of(None, false, false), hidden: false, shot: None };
     };
-    wanted().insert(hwnd.0 as isize, Instant::now());
     let unsupported = super::capture::unsupported();
+    // Nothing asked of a hidden client: it goes to sleep, and its last picture stays.
+    if !LIVE_HIDDEN.load(Ordering::Relaxed) && (iconic || is_hidden(hwnd)) {
+        let shot = super::capture::last(hwnd);
+        return Preview { status: status_of(Some(iconic), shot.is_some(), unsupported), hidden: is_hidden(hwnd), shot };
+    }
+    wanted().insert(hwnd.0 as isize, Instant::now());
     let waking = iconic && may_wake(pid);
     if waking {
         wake(pid, hwnd, false);
@@ -155,6 +161,28 @@ static WAKING: Mutex<Vec<isize>> = Mutex::new(Vec::new());
 /// grows it to Roblox's minimum (816 x 638, measured), so it is made tiny again.
 static TINY: Mutex<Vec<(u32, (u32, u32))>> = Mutex::new(Vec::new());
 
+/// `Settings.live_hidden_previews`.
+static LIVE_HIDDEN: AtomicBool = AtomicBool::new(true);
+/// When each client's size was last set on purpose, by pid: `keep_tiny` leaves it alone for
+/// `TINY_RETRY` after that, as what it sees may be on its way.
+static TINY_TRIED: LazyLock<Mutex<HashMap<u32, Instant>>> = LazyLock::new(Mutex::default);
+const TINY_RETRY: Duration = Duration::from_secs(60);
+/// Windows `keep_tiny` is putting back, each on a thread of its own: `sweep` must not wait for a client.
+static TINY_FIXING: Mutex<Vec<isize>> = Mutex::new(Vec::new());
+/// Windows `free_resize` is at.
+static RESIZING: Mutex<Vec<isize>> = Mutex::new(Vec::new());
+/// How long a `free_resize` waits for one already at its window.
+const RESIZE_WAITS: u32 = 100;
+const RESIZE_GAP: Duration = Duration::from_millis(20);
+
+fn size_set_now(pid: u32) {
+    TINY_TRIED.lock().unwrap_or_else(|e| e.into_inner()).insert(pid, Instant::now());
+}
+
+pub fn set_live_hidden_previews(on: bool) {
+    LIVE_HIDDEN.store(on, Ordering::Relaxed);
+}
+
 fn wanted() -> MutexGuard<'static, HashMap<isize, Instant>> {
     WANTED.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -164,6 +192,8 @@ fn tiny() -> MutexGuard<'static, Vec<(u32, (u32, u32))>> {
 }
 
 fn set_tiny(pid: u32, size: Option<(u32, u32)>) {
+    // `sweep` may still have a list saying tiny, and would bring this one back small.
+    size_set_now(pid);
     let mut t = tiny();
     t.retain(|e| e.0 != pid);
     if let Some(size) = size {
@@ -328,6 +358,7 @@ fn back_to_tiny(pid: u32, hwnd: HWND) {
     if unsafe { IsIconic(hwnd).as_bool() || IsZoomed(hwnd).as_bool() } || client_size(hwnd) == Some(size) {
         return;
     }
+    size_set_now(pid);
     let (fw, fh) = frame(hwnd).unwrap_or((0, 0));
     free_resize(hwnd, (0, 0, size.0 as i32 + fw, size.1 as i32 + fh), true);
 }
@@ -364,6 +395,33 @@ pub fn wake(pid: u32, hwnd: HWND, landing: bool) {
     });
 }
 
+/// Brings a minimized client back as a ghost for anti-AFK's press, and waits for it. `sweep` puts it
+/// back to sleep afterwards. False if it can't be pressed now: not responding, still minimized, or
+/// the user asked for it meanwhile.
+pub fn wake_for_press(pid: u32, hwnd: HWND) -> bool {
+    let h = hwnd.0 as isize;
+    if process::hung(pid) {
+        return false;
+    }
+    wanted().insert(h, Instant::now());
+    {
+        let mut w = waking();
+        if !w.contains(&h) {
+            w.push(h);
+        }
+    }
+    let woke = ghost(hwnd) && waking().contains(&h);
+    if woke {
+        un_iconify(hwnd, false);
+        back_to_tiny(pid, hwnd);
+    }
+    waking().retain(|w| *w != h);
+    // `sweep` leaves it alone for the press itself.
+    wanted().insert(h, Instant::now());
+    // SAFETY: reads one window's state.
+    woke && !unsafe { IsIconic(hwnd) }.as_bool()
+}
+
 /// Whether someone looked at this window's preview lately.
 pub fn watched(hwnd: HWND) -> bool {
     asked_within(wanted().get(&(hwnd.0 as isize)).copied())
@@ -372,6 +430,38 @@ pub fn watched(hwnd: HWND) -> bool {
 /// `at` is less than `WATCH` ago.
 fn asked_within(at: Option<Instant>) -> bool {
     at.is_some_and(|t| t.elapsed() < WATCH)
+}
+
+/// A tiny client not at its size (a launch's resize that failed, a wake that gave up waiting) goes
+/// back to it, unless the user may be sizing it, it doesn't respond or its size was only just set.
+/// On a thread of its own. If it won't go that small, what it stays at is its tiny size from then on.
+fn keep_tiny(pid: u32, hwnd: HWND) {
+    let Some(size) = tiny().iter().find(|e| e.0 == pid).map(|e| e.1) else { return };
+    let h = hwnd.0 as isize;
+    let recent = TINY_TRIED.lock().unwrap_or_else(|e| e.into_inner()).get(&pid).is_some_and(|t| t.elapsed() < TINY_RETRY);
+    // SAFETY: reads which window is in front and one window's state.
+    if recent || client_size(hwnd) == Some(size) || unsafe { GetForegroundWindow() == hwnd || IsZoomed(hwnd).as_bool() } || waking().contains(&h) || process::hung(pid) {
+        return;
+    }
+    {
+        let mut fixing = TINY_FIXING.lock().unwrap_or_else(|e| e.into_inner());
+        if fixing.contains(&h) || fixing.len() >= MOST_WAKING {
+            return;
+        }
+        fixing.push(h);
+    }
+    log::info!("client {pid}: tiny but {:?}: putting it back to {size:?}", client_size(hwnd));
+    std::thread::spawn(move || {
+        let hwnd = HWND(h as *mut _);
+        back_to_tiny(pid, hwnd);
+        if let Some(now) = client_size(hwnd).filter(|now| *now != size)
+            && let Some(e) = tiny().iter_mut().find(|e| e.0 == pid && e.1 == size)
+        {
+            log::info!("client {pid}: stays at {now:?}, not {size:?}");
+            e.1 = now;
+        }
+        TINY_FIXING.lock().unwrap_or_else(|e| e.into_inner()).retain(|f| *f != h);
+    });
 }
 
 /// One round of the tracker's sweep over its clients (pid, tiny size if it is tiny): hidden clients
@@ -391,7 +481,11 @@ pub fn sweep(clients: &[(u32, Option<(u32, u32)>)]) {
     }
     // SAFETY: only asks whether a handle still is a window.
     wanted().retain(|h, _| unsafe { IsWindow(Some(HWND(*h as *mut _))) }.as_bool());
+    TINY_TRIED.lock().unwrap_or_else(|e| e.into_inner()).retain(|pid, _| clients.iter().any(|c| c.0 == *pid));
     for &(pid, _) in clients {
+        if let Some((hwnd, false)) = process::main_window(pid) {
+            keep_tiny(pid, hwnd);
+        }
         if let Some((hwnd, iconic)) = process::main_window(pid)
             && !iconic
             && is_hidden(hwnd)
@@ -399,6 +493,7 @@ pub fn sweep(clients: &[(u32, Option<(u32, u32)>)]) {
             // SAFETY: reads which window is in front.
             && unsafe { GetForegroundWindow() } != hwnd
         {
+            log::debug!("client {pid}: hidden and nobody watches its preview: going to sleep (anti-AFK's Focus mode skips it now)");
             // SAFETY: a window-manager call on a top-level window; posted.
             let _ = unsafe { ShowWindowAsync(hwnd, SW_SHOWMINNOACTIVE) };
         }
@@ -595,6 +690,18 @@ pub fn set_style(hwnd: HWND, style: isize) {
 /// title bar and edges. Waits for the client, so it must have answered before the style goes back.
 pub fn free_resize(hwnd: HWND, (x, y, w, h): (i32, i32, i32, i32), keep_place: bool) {
     super::resize::mark_small(hwnd);
+    // One at a time per window: the second would save the first's borderless style, and put it back for good.
+    let id = hwnd.0 as isize;
+    for _ in 0..RESIZE_WAITS {
+        {
+            let mut busy = RESIZING.lock().unwrap_or_else(|e| e.into_inner());
+            if !busy.contains(&id) {
+                busy.push(id);
+                break;
+            }
+        }
+        std::thread::sleep(RESIZE_GAP);
+    }
     let style = style_of(hwnd);
     set_style(hwnd, borderless(style as u32) as isize);
     let place = if keep_place { SWP_NOMOVE } else { Default::default() };
@@ -605,6 +712,7 @@ pub fn free_resize(hwnd: HWND, (x, y, w, h): (i32, i32, i32, i32), keep_place: b
     set_style(hwnd, style);
     // SAFETY: as above; only makes the frame follow the style again.
     let _ = unsafe { SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED) };
+    RESIZING.lock().unwrap_or_else(|e| e.into_inner()).retain(|b| *b != id);
 }
 
 /// `on`: remembers where the window is (once per client), then sets its client area to `size`;
@@ -613,6 +721,7 @@ pub fn free_resize(hwnd: HWND, (x, y, w, h): (i32, i32, i32, i32), keep_place: b
 /// resize itself, and then it stays bigger than asked; the caller says so.
 pub fn micro(id: &str, pid: u32, on: bool, size: (u32, u32)) -> Result<(u32, u32)> {
     let hwnd = window_to_change(pid)?;
+    size_set_now(pid);
     if on {
         remember(id, pid, hwnd);
         normal(hwnd, false);
@@ -827,6 +936,15 @@ mod tests {
             println!("toggle {toggle} size_loop {size_loop}: size {size:?}, moved {moved}");
             size
         }
+    }
+
+    #[test]
+    fn a_size_just_set_is_left_alone() {
+        const PID: u32 = 4_000_000_001;
+        set_tiny(PID, None);
+        let recent = TINY_TRIED.lock().unwrap().get(&PID).is_some_and(|t| t.elapsed() < TINY_RETRY);
+        assert!(recent, "normal size or a big tile isn't undone by a sweep with an older list");
+        TINY_TRIED.lock().unwrap().remove(&PID);
     }
 
     #[test]

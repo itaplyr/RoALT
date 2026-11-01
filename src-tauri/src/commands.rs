@@ -1,7 +1,7 @@
 //! The IPC surface. Each command validates input, calls the modules and emits change events.
 
 use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -822,9 +822,11 @@ pub(crate) async fn launch_tracked(
         return Err(AppError::Wait(why));
     }
     let v = s.db.settings()?;
-    // Less the jitter's second, so a batch's own jittered wait never adds to it.
-    let gap = Duration::from_millis(u64::from(delay_ms.unwrap_or(v.launch_delay_ms).saturating_sub(1_000)));
+    let gap = s.bulk.launch_gap(delay_ms.unwrap_or(v.launch_delay_ms), Instant::now());
     let (wait, slot) = s.bulk.cooldown(gap);
+    if !wait.is_zero() {
+        log::debug!("launch of account {account_id} waits {wait:?} (launch gap {gap:?})");
+    }
     tokio::time::sleep(wait).await;
     if s.bulk.kills() != kills {
         s.bulk.release(slot);
@@ -838,6 +840,9 @@ pub(crate) async fn launch_tracked(
         Err(e) => {
             log::warn!("launch failed for account {account_id}: {e}");
             s.bulk.release(slot);
+            if e.is_forbidden() {
+                s.bulk.refused();
+            }
             record_cookie_error(app, s, account_id, &e)?;
             return Err(e);
         }
@@ -1503,7 +1508,7 @@ pub fn instance_set_anti_afk(app: AppHandle, s: State<'_, App>, id: String, enab
 
 /// Pages one client's working set out now ("Trim now").
 #[tauri::command]
-pub async fn instance_trim(s: State<'_, App>, id: String) -> Result<()> {
+pub async fn instance_trim(app: AppHandle, s: State<'_, App>, id: String) -> Result<(u64, u64)> {
     s.tracker.get(&id).ok_or(AppError::NotFound)?;
     let (_, pid, t0, _) = s
         .tracker
@@ -1511,7 +1516,7 @@ pub async fn instance_trim(s: State<'_, App>, id: String) -> Result<()> {
         .into_iter()
         .find(|c| c.0 == id)
         .ok_or_else(|| AppError::Invalid(tr!("That client hasn't started yet, or has closed.")))?;
-    tauri::async_runtime::spawn_blocking(move || crate::instances::limits::trim(pid, t0))
+    tauri::async_runtime::spawn_blocking(move || app.state::<App>().limiter.logged_trim("by hand", pid, t0))
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?
 }
@@ -2380,6 +2385,7 @@ pub(crate) fn apply_performance(v: &mut Settings, patch: &SettingsPatch) -> Resu
     if let Some(k) = patch.keep_running_on_close { v.keep_running_on_close = k }
     if let Some(m) = patch.minimize_on_launch { v.minimize_on_launch = m }
     if let Some(t) = patch.tiny_on_launch { v.tiny_on_launch = t }
+    if let Some(l) = patch.live_hidden_previews { v.live_hidden_previews = l }
     if patch.micro_width.is_some() || patch.micro_height.is_some() {
         let size = (patch.micro_width.unwrap_or(v.micro_width), patch.micro_height.unwrap_or(v.micro_height));
         check_window_size(size)?;
@@ -2484,6 +2490,7 @@ pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> 
         crate::launcher::launch_args(&a)?;
         v.launch_args = a.trim().to_owned();
     }
+    if let Some(l) = patch.tab_layout { v.tab_layout = l }
     if let Some(c) = patch.close_to_tray { v.close_to_tray = c }
     if let Some(s) = patch.skip_splash { v.skip_splash = s }
     if let Some(a) = patch.anti_afk {

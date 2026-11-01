@@ -3,15 +3,15 @@
 /**
  * What the Servers view shows about a game.
  */
-export type GameInfo = { 
+export type GameInfo = {
 /**
  * The place that was asked about (may differ from the root place).
  */
-placeId: number, universeId: number, rootPlaceId: number, name: string, creator: string, playing: number, visits: number, maxPlayers: number, 
+placeId: number, universeId: number, rootPlaceId: number, name: string, creator: string, playing: number, visits: number, maxPlayers: number,
 /**
  * 150×150 icon on *.rbxcdn.com, when Roblox has one.
  */
-iconUrl: string | null, 
+iconUrl: string | null,
 /**
  * The game sells private servers.
  */

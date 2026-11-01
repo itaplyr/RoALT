@@ -3,19 +3,19 @@
 /**
  * What Windows holds one client to (instances::limits). Lasts as long as the client.
  */
-export type Limits = { 
+export type Limits = {
 /**
  * Hard cap on its CPU time, in percent of the whole machine (1-100); None: no cap.
  */
-cpuCap: number | null, 
+cpuCap: number | null,
 /**
  * Efficiency mode: EcoQoS and below-normal priority, as Task Manager's.
  */
-eco: boolean, 
+eco: boolean,
 /**
  * Trim its working set every this many minutes (0: never); None: `Settings.trim_every_min`.
  */
-trimEveryMin: number | null, 
+trimEveryMin: number | null,
 /**
  * The CPU cores it may run on, one bit each (the first 53 cores: a JS number); None: all
  * (or its share with `Settings.auto_spread`).

@@ -6,20 +6,20 @@ import type { SameServer } from "./SameServer";
 /**
  * The whole batch; `bulk://progress` carries it on every change.
  */
-export type BulkProgress = { batchId: string, target: LaunchTarget, sameServer: SameServer, delayMs: number, 
+export type BulkProgress = { batchId: string, target: LaunchTarget, sameServer: SameServer, delayMs: number,
 /**
  * The server everyone is sent to, once known.
  */
-jobId: string | null, items: Array<BulkItem>, 
+jobId: string | null, items: Array<BulkItem>,
 /**
  * Why the batch stopped early ("Cancelled", a challenge, a wrong account); None while it
  * runs and after a normal finish.
  */
-stopped: string | null, 
+stopped: string | null,
 /**
  * No more launches or stage changes will come.
  */
-done: boolean, 
+done: boolean,
 /**
  * Something the user should know (no server had room, the first account's server
  * couldn't be read, ...).

@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, asError, events, type Favourite, type SameServer, type Settings, type VaultStatus } from "./api";
 import { qk, queryClient, useAccounts, useGroups, useInstances, useSetSettings, useSettings, useVault } from "./data";
 import { AccountsView } from "./features/accounts/AccountsView";
 import { AddAccountDialog, type Tab as AddTab } from "./features/accounts/AddAccountDialog";
+import { AccountRail, SectionTabs } from "./features/dashboard/AccountRail";
 import { DashboardView } from "./features/dashboard/DashboardView";
-import { useHomeTabs } from "./features/dashboard/homeLayout";
+import { useHomeTabs, useSectionOrder } from "./features/dashboard/homeLayout";
+import { Sortable, type DragProps } from "./features/dashboard/Sortable";
 import { DiscordView } from "./features/discord/DiscordView";
 import { PerformanceView } from "./features/performance/PerformanceView";
 import { DebugView } from "./features/debug/DebugView";
@@ -148,6 +150,8 @@ function Root() {
         onToggleTheme={s ? () => setSettings.mutate({ theme: dark ? "light" : "dark" }) : undefined}
         onLock={unlocked && v.mode === "master" ? lock : undefined}
         onRefresh={unlocked ? refresh : undefined}
+        sideTabs={s?.tabLayout === "side"}
+        onToggleTabs={unlocked && s ? () => setSettings.mutate({ tabLayout: s.tabLayout === "side" ? "top" : "side" }) : undefined}
       />
       {unlocked && s && !failed && <UpdateBanner />}
       {s && !failed && <PublicNetworkBanner settings={s} />}
@@ -172,6 +176,14 @@ function Root() {
   );
 }
 
+const MAIN_SECTIONS = ["home", "play", "accounts", "performance", "debug"] as const;
+const TOOL_SECTIONS = ["servers", "monitor", "discord"] as const;
+type Section = (typeof MAIN_SECTIONS)[number] | (typeof TOOL_SECTIONS)[number] | "settings";
+const SECTION_NAMES = {
+  home: "app.nav.dashboard", play: "app.nav.launch", accounts: "app.nav.accounts", performance: "app.nav.performance", debug: "app.nav.debug",
+  servers: "app.nav.servers", monitor: "app.nav.monitor", discord: "app.nav.discord", settings: "app.nav.settings",
+} as const;
+
 function Shell({ vault, settings, onRecoveryCode }: { vault: VaultStatus; settings: Settings; onRecoveryCode: (code: string) => void }) {
   const nav = usePanelWidth("nav", 228, 180, 320);
   const qc = useQueryClient();
@@ -191,6 +203,7 @@ function Shell({ vault, settings, onRecoveryCode }: { vault: VaultStatus; settin
   const [sameServer, setSameServer] = useState<SameServer>("off");
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const homeTabs = useHomeTabs(accounts.data);
+  const [sectionOrder, setSectionOrder] = useSectionOrder();
   // Kept here so a launch in flight survives leaving the view.
   const [launchStep, setLaunchStep] = useState<string | null>(null);
   // The game the Servers view shows.
@@ -199,7 +212,7 @@ function Shell({ vault, settings, onRecoveryCode }: { vault: VaultStatus; settin
   const [addOn, setAddOn] = useState<AddTab>("login");
   const [toolsOpen, setToolsOpen] = useState(false);
   // A tool that is open stays in sight.
-  const showTools = toolsOpen || view === "servers" || view === "monitor" || view === "discord" || view === "debug";
+  const showTools = toolsOpen || view === "servers" || view === "monitor" || view === "discord";
   const openAdd = (tab: AddTab = "login") => {
     setAddOn(tab);
     setAdding(true);
@@ -294,93 +307,93 @@ function Shell({ vault, settings, onRecoveryCode }: { vault: VaultStatus; settin
     if (valid.length) setPicked(valid);
     setView("launch");
   };
+  const item = (to: typeof view, icon: Parameters<typeof Icon>[0]["name"], label: string, open: () => void, count?: ReactNode) => (drag?: DragProps) => (
+    <button key={to} className="nav-item" aria-current={view === to ? "page" : undefined} onClick={open} {...drag}>
+      <Icon name={icon} />
+      <span className="flex-1 min-w-0 truncate">{label}</span>
+      {count}
+    </button>
+  );
+  const items: Record<Section, (drag?: DragProps) => ReactNode> = {
+    home: item("dashboard", "home", t("app.nav.dashboard"), () => setView("dashboard"), running > 0 && (
+      <span className="nav-count mono" title={t("app.running", { count: running })}>
+        {running}
+      </span>
+    )),
+    play: item("launch", "play", t("app.nav.launch"), () => setView("launch")),
+    accounts: item("accounts", "accounts", t("app.nav.accounts"), showAll, accounts.data.length > 0 && <span className="nav-count mono">{accounts.data.length}</span>),
+    performance: item("performance", "gauge", t("app.nav.performance"), () => setView("performance")),
+    debug: item("debug", "sliders", t("app.nav.debug"), () => setView("debug")),
+    servers: item("servers", "servers", t("app.nav.servers"), openServers),
+    monitor: item("monitor", "monitor", t("app.nav.monitor"), () => setView("monitor")),
+    discord: item("discord", "bell", t("app.nav.discord"), () => setView("discord")),
+    settings: item("settings", "settings", t("app.nav.settings"), () => setView("settings")),
+  };
+  const sections = (ids: readonly Section[], column: boolean, className?: string) => (
+    <Sortable column={column} className={className} ids={ids} order={sectionOrder as Section[]} onOrder={setSectionOrder} name={(id) => t(SECTION_NAMES[id])} render={(id, drag) => items[id](drag)} />
+  );
+  const footer = (
+    <div className="flex-none flex flex-col gap-3.5 px-3 pt-3 pb-4">
+      <button className="btn w-full" onClick={() => setDonating(true)}>
+        <Icon name="heart" size={14} />
+        {t("donate.button")}
+      </button>
+      <DonateDialog open={donating} onClose={() => setDonating(false)} />
+      <KillAllButton />
+      <p className="flex items-center gap-2 text-[13px] text-dim" title={vault.mode === "master" ? t("app.vaultUnlockedMaster") : t("app.vaultUnlockedDpapi")}>
+        <Icon name="lock" size={14} />
+        {t("app.encrypted")}
+      </p>
+    </div>
+  );
+  const side = settings.tabLayout === "side";
+  const settingsLinks = SETTINGS_SECTIONS.map(([id, label]) => (
+    <button key={id} className="sub" onClick={() => {
+      const to = document.getElementById(id);
+      to?.closest("details")?.setAttribute("open", "");
+      to?.scrollIntoView({ block: "start" });
+      to?.setAttribute("tabindex", "-1");
+      to?.focus({ preventScroll: true });
+    }}>
+      {t(label)}
+    </button>
+  ));
   return (
     <div className="flex-1 flex min-h-0">
       <span className="sr-only" aria-live="polite">{viewName}</span>
+      {side ? (
+        <AccountRail
+          width={nav.width}
+          accounts={accounts.data}
+          instances={instances}
+          home={homeTabs}
+          onHome={view === "dashboard"}
+          onOpen={() => setView("dashboard")}
+          onAdd={() => openAdd()}
+          footer={footer}
+        />
+      ) : (
       <nav aria-label={t("app.sections")} style={{ width: nav.width }} className="flex-none flex flex-col min-h-0">
         <div className="scroll flex-1 min-h-0 flex flex-col gap-1.5 px-3 pt-2.5 pb-3" style={{ scrollbarWidth: "none" }}>
-          <button className="nav-item" aria-current={view === "dashboard" ? "page" : undefined} onClick={() => setView("dashboard")}>
-            <Icon name="home" />
-            <span className="flex-1 min-w-0 truncate">{t("app.nav.dashboard")}</span>
-            {running > 0 && (
-              <span className="nav-count mono" title={t("app.running", { count: running })}>
-                {running}
-              </span>
-            )}
-          </button>
-          <button className="nav-item" aria-current={view === "launch" ? "page" : undefined} onClick={() => setView("launch")}>
-            <Icon name="play" />
-            <span className="flex-1 min-w-0 truncate">{t("app.nav.launch")}</span>
-          </button>
-          <button className="nav-item" aria-current={view === "accounts" ? "page" : undefined} onClick={showAll}>
-            <Icon name="accounts" />
-            <span className="flex-1 min-w-0 truncate">{t("app.nav.accounts")}</span>
-            {accounts.data.length > 0 && <span className="nav-count mono">{accounts.data.length}</span>}
-          </button>
-          <button className="nav-item" aria-current={view === "performance" ? "page" : undefined} onClick={() => setView("performance")}>
-            <Icon name="gauge" />
-            <span className="flex-1 min-w-0 truncate">{t("app.nav.performance")}</span>
-          </button>
+          {/* Sorted within each group; More tools and Settings stay where they are. */}
+          {sections(MAIN_SECTIONS, true, "flex flex-col gap-1.5")}
           <button className="nav-item" aria-expanded={showTools} onClick={() => setToolsOpen(!showTools)}>
             <Icon name="chevron" className={showTools ? "" : "-rotate-90 rtl:rotate-90"} />
             <span className="flex-1 min-w-0 truncate">{t("app.nav.moreTools")}</span>
           </button>
-          {showTools && (
-            <>
-              <button className="nav-item" aria-current={view === "servers" ? "page" : undefined} onClick={openServers}>
-                <Icon name="servers" />
-                <span className="flex-1 min-w-0 truncate">{t("app.nav.servers")}</span>
-              </button>
-              <button className="nav-item" aria-current={view === "monitor" ? "page" : undefined} onClick={() => setView("monitor")}>
-                <Icon name="monitor" />
-                <span className="flex-1 min-w-0 truncate">{t("app.nav.monitor")}</span>
-              </button>
-              <button className="nav-item" aria-current={view === "discord" ? "page" : undefined} onClick={() => setView("discord")}>
-                <Icon name="bell" />
-                <span className="flex-1 min-w-0 truncate">{t("app.nav.discord")}</span>
-              </button>
-              <button className="nav-item" aria-current={view === "debug" ? "page" : undefined} onClick={() => setView("debug")}>
-                <Icon name="sliders" />
-                <span className="flex-1 min-w-0 truncate">{t("app.nav.debug")}</span>
-              </button>
-            </>
-          )}
-          <button className="nav-item" aria-current={view === "settings" ? "page" : undefined} onClick={() => setView("settings")}>
-            <Icon name="settings" />
-            <span className="flex-1 min-w-0 truncate">{t("app.nav.settings")}</span>
-          </button>
-          {view === "settings" && (
-            <div className="enter flex flex-col ps-7 pt-1">
-              {SETTINGS_SECTIONS.map(([id, label]) => (
-                <button key={id} className="sub" onClick={() => {
-                  const to = document.getElementById(id);
-                  to?.closest("details")?.setAttribute("open", "");
-                  to?.scrollIntoView({ block: "start" });
-                  to?.setAttribute("tabindex", "-1");
-                  to?.focus({ preventScroll: true });
-                }}>
-                  {t(label)}
-                </button>
-              ))}
-            </div>
-          )}
+          {showTools && sections(TOOL_SECTIONS, true, "flex flex-col gap-1.5")}
+          {items.settings()}
+          {view === "settings" && <div className="enter flex flex-col ps-7 pt-1">{settingsLinks}</div>}
         </div>
-        <div className="flex-none flex flex-col gap-3.5 px-3 pt-3 pb-4">
-          <button className="btn w-full" onClick={() => setDonating(true)}>
-            <Icon name="heart" size={14} />
-            {t("donate.button")}
-          </button>
-          <DonateDialog open={donating} onClose={() => setDonating(false)} />
-          <KillAllButton />
-          <p className="flex items-center gap-2 text-[13px] text-dim" title={vault.mode === "master" ? t("app.vaultUnlockedMaster") : t("app.vaultUnlockedDpapi")}>
-            <Icon name="lock" size={14} />
-            {t("app.encrypted")}
-          </p>
-        </div>
+        {footer}
       </nav>
+      )}
       <Divider panel={nav} side="left" label={t("app.sidebarWidth")} />
 
-      <div className="sheet">
+      <div className="flex-1 min-w-0 flex flex-col min-h-0">
+      {side && <SectionTabs>{sections([...MAIN_SECTIONS, ...TOOL_SECTIONS, "settings"], false, "contents")}</SectionTabs>}
+      {side && view === "settings" && <div className="enter flex-none flex flex-wrap gap-x-1 px-1 pb-2 [&>.sub]:w-auto">{settingsLinks}</div>}
+      <div className="sheet min-h-0">
       {view === "dashboard" ? (
         <DashboardView accounts={accounts.data} home={homeTabs} onLaunch={() => setView("launch")} onAdd={() => openAdd()} onImport={() => openAdd("many")} onAccounts={showAll} />
       ) : view === "accounts" ? (
@@ -437,6 +450,7 @@ function Shell({ vault, settings, onRecoveryCode }: { vault: VaultStatus; settin
       ) : (
         <SettingsView vault={vault} settings={settings} onPerformance={() => setView("performance")} onRecoveryCode={onRecoveryCode} />
       )}
+      </div>
       </div>
 
       <AddAccountDialog

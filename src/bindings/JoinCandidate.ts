@@ -4,7 +4,7 @@ import type { Presence } from "./Presence";
 /**
  * Someone an account can join: a friend online on Roblox, or another stored account.
  */
-export type JoinCandidate = { userId: number, username: string, displayName: string, 
+export type JoinCandidate = { userId: number, username: string, displayName: string,
 /**
  * Set when this is one of the stored accounts.
  */

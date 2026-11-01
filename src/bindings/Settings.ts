@@ -5,13 +5,14 @@ import type { Density } from "./Density";
 import type { DiscordEvents } from "./DiscordEvents";
 import type { MemThrottle } from "./MemThrottle";
 import type { RenderFlags } from "./RenderFlags";
+import type { TabLayout } from "./TabLayout";
 import type { Theme } from "./Theme";
 
 /**
  * App settings, stored as one JSON value. New fields need `#[serde(default)]` semantics,
  * which the struct-level default gives.
  */
-export type Settings = { theme: Theme,
+export type Settings = { theme: Theme, tabLayout: TabLayout,
 /**
  * `#rrggbb`, or "" for the theme's own lime.
  */
@@ -122,11 +123,15 @@ selfUpdate: boolean,
  */
 discordPresence: boolean,
 /**
- * Hide each client (without taking the focus) once, when its window first appears, unless its
+ * Hide each client (without taking the focus) once, when it first reaches a game, unless its
  * account is full quality. A hidden client (`instances::window`) stays live while Home shows
  * it and sleeps otherwise, and comes back from the taskbar or Alt-Tab.
  */
 minimizeOnLaunch: boolean,
+/**
+ * Home's previews keep hidden clients awake and drawing. Off: they sleep and show their last picture.
+ */
+liveHiddenPreviews: boolean,
 /**
  * System-wide key combination for Kill all, like "Ctrl+Shift+F12"; "" for none.
  */

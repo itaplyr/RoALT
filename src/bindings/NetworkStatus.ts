@@ -3,7 +3,7 @@
 /**
  * The network RoALT runs on (`network`). Never its name: streamers show RoALT on screen.
  */
-export type NetworkStatus = { 
+export type NetworkStatus = {
 /**
  * A connected Public network with internet access.
  */

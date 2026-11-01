@@ -847,8 +847,40 @@
     opacity: 1;
   }
   .tile-drag {
+    position: relative;
     z-index: 2;
     opacity: 0.92;
+  }
+  /* Tabs and rows that sort: a line where a drag lands. */
+  :is(.sort-row, .sort-col) > [data-drop] {
+    position: relative;
+  }
+  :is(.sort-row, .sort-col) > [data-drop]::before {
+    content: "";
+    position: absolute;
+    border-radius: 99px;
+    background: var(--accent-text);
+    pointer-events: none;
+  }
+  .sort-row > [data-drop]::before {
+    inset-block: 4px;
+    width: 3px;
+  }
+  .sort-row > [data-drop="before"]::before {
+    inset-inline-start: -4px;
+  }
+  .sort-row > [data-drop="after"]::before {
+    inset-inline-end: -4px;
+  }
+  .sort-col > [data-drop]::before {
+    inset-inline: 4px;
+    height: 3px;
+  }
+  .sort-col > [data-drop="before"]::before {
+    top: -3px;
+  }
+  .sort-col > [data-drop="after"]::before {
+    bottom: -3px;
   }
   .tile[data-drop]::before {
     content: "";
@@ -875,6 +907,24 @@
     padding: 6px;
     overflow-x: auto;
     scrollbar-width: none;
+  }
+
+  /* The sections as a row, with accounts on the side. As the strip: padding for rings and shadows. */
+  .section-tabs {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 10px 12px 10px 4px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    mask-image: linear-gradient(to right, transparent, #000 var(--fade-left, 0px), #000 calc(100% - var(--fade-right, 0px)), transparent);
+  }
+  .section-tabs .nav-item {
+    flex: none;
+    width: auto;
+    gap: 8px;
+    padding: 0 12px;
   }
 
   /* Home's tabs: opaque faces, so they read over a background picture. */

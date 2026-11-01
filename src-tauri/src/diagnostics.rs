@@ -116,7 +116,7 @@ fn mask_ipv4(line: &str) -> String {
 
 /// The last `max` lines of the file, each through `redact` and with `names` masked; empty when it
 /// can't be read.
-fn clean_tail(path: &Path, max: usize, names: &[String]) -> Vec<String> {
+pub fn clean_tail(path: &Path, max: usize, names: &[String]) -> Vec<String> {
     let read = || -> std::io::Result<String> {
         let mut f = std::fs::File::open(path)?;
         let len = f.metadata()?.len();

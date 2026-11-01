@@ -116,6 +116,11 @@ pub fn descendants(pid: u32) -> Vec<u32> {
     out
 }
 
+/// `start_time` said None, but this client hasn't exited: the process is there and unreadable.
+pub fn unreadable_client(pid: u32) -> bool {
+    start_time(pid).is_none() && std::fs::metadata(format!("/proc/{pid}")).is_ok()
+}
+
 /// Start time of a running process, `None` if it is gone.
 pub fn start_time(pid: u32) -> Option<u64> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;

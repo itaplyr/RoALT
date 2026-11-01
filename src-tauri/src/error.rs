@@ -68,6 +68,12 @@ impl AppError {
         }
     }
 
+    /// Roblox answered 403, and not with a human check (`Challenge`) or for a CSRF token, which
+    /// the API client handles itself.
+    pub fn is_forbidden(&self) -> bool {
+        matches!(self, Self::Roblox(why) if why == "HTTP 403")
+    }
+
     /// Logs this error (English, secret-free like every message) at a level fit for its kind.
     pub fn log(&self) {
         let level = match self {

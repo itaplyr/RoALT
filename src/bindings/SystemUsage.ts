@@ -3,7 +3,7 @@
 /**
  * How busy the whole PC is (`system_usage`), sampled at most every 2 s.
  */
-export type SystemUsage = { 
+export type SystemUsage = {
 /**
  * Of all cores; None on the first sample, which has nothing to compare with.
  */

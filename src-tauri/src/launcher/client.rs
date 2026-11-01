@@ -73,6 +73,11 @@ fn handlers() -> impl Iterator<Item = PathBuf> {
     })
 }
 
+/// The program opening `roblox-player:` links now, for the log.
+pub fn handler() -> Option<PathBuf> {
+    handlers().find(|p| p.is_file())
+}
+
 /// RobloxPlayerLauncher.exe or RobloxPlayerInstaller.exe: Roblox's, not a bootstrapper (pure).
 fn is_roblox_launcher(path: &Path) -> bool {
     path.file_name()

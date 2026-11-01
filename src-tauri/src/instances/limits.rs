@@ -58,6 +58,25 @@ const GROWTH_MB: u64 = 150;
 const BUDGET: u32 = 75;
 /// What no client goes under: a quarter of one core, in percent of one core.
 const FLOOR: u32 = 25;
+/// A trim that failed is tried again this soon, not a whole interval later.
+const TRIM_RETRY: Duration = Duration::from_secs(60);
+/// How long after a trim its client's memory is logged: what shows whether trims help.
+const TRIM_FOLLOW_SECS: [u64; 3] = [10, 60, 300];
+
+/// A trim whose effect is still being logged.
+struct TrimFollow {
+    why: &'static str,
+    pid: u32,
+    t0: u64,
+    at: Instant,
+    /// How many of `TRIM_FOLLOW_SECS` are done.
+    done: usize,
+}
+
+/// A reading as the trim log shows it (pure).
+fn memory_line(r: &super::metrics::Reading) -> String {
+    format!("working set {} MB, private working set {} MB, commit {} MB", r.working_set >> 20, r.memory >> 20, r.private >> 20)
+}
 
 /// Our own job object; never a handle to the client.
 struct Job(Owned<HANDLE>);
@@ -129,11 +148,54 @@ impl Applied {
 pub struct Limiter {
     applied: Mutex<HashMap<String, Applied>>,
     free: Mutex<(Vec<String>, Option<u32>)>,
+    follows: Mutex<Vec<TrimFollow>>,
 }
 
 impl Limiter {
     pub fn new() -> Limiter {
-        Limiter { applied: Mutex::new(HashMap::new()), free: Mutex::new((Vec::new(), None)) }
+        Limiter { applied: Mutex::new(HashMap::new()), free: Mutex::new((Vec::new(), None)), follows: Mutex::new(Vec::new()) }
+    }
+
+    /// Trims the client and logs its memory now and at `TRIM_FOLLOW_SECS` after. The Memory column
+    /// before and after, in MB (0 where it can't be read).
+    pub fn logged_trim(&self, why: &'static str, pid: u32, t0: u64) -> Result<(u64, u64)> {
+        let read = || super::metrics::read(pid, t0);
+        let before = read();
+        trim(pid, t0).inspect_err(|e| log::warn!("trim of client {pid} ({why}) failed: {e}"))?;
+        let after = read();
+        let line = |r: &Option<super::metrics::Reading>| r.as_ref().map_or_else(|| "unreadable".to_owned(), memory_line);
+        log::info!("trim of client {pid} ({why}): before: {}; right after: {}", line(&before), line(&after));
+        self.follows.lock().unwrap_or_else(|e| e.into_inner()).push(TrimFollow { why, pid, t0, at: Instant::now(), done: 0 });
+        let mb = |r: Option<super::metrics::Reading>| r.map_or(0, |r| r.memory >> 20);
+        Ok((mb(before), mb(after)))
+    }
+
+    /// Logs the memory of the clients a trim's next measurement is due for (`read`, as
+    /// `metrics::read`); done with those finished or gone.
+    fn follow_trims(&self, now: Instant, read: impl Fn(u32, u64) -> Option<super::metrics::Reading>) {
+        self.follows.lock().unwrap_or_else(|e| e.into_inner()).retain_mut(|f| {
+            let secs = TRIM_FOLLOW_SECS[f.done];
+            if now < f.at + Duration::from_secs(secs) {
+                return true;
+            }
+            let Some(r) = read(f.pid, f.t0) else { return false };
+            log::info!("trim of client {} ({}): {secs} s later: {}", f.pid, f.why, memory_line(&r));
+            f.done += 1;
+            f.done < TRIM_FOLLOW_SECS.len()
+        });
+    }
+
+    /// Its trim failed: sooner than the schedule again.
+    fn trim_failed(&self, pid: u32, t0: u64, now: Instant) {
+        let mut map = self.applied.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(a) = map.values_mut().find(|a| (a.pid, a.t0) == (pid, t0)) {
+            a.next_trim = now + TRIM_RETRY;
+        }
+    }
+
+    /// What each client really has now, for the UI: what `apply` managed to set.
+    pub fn in_force(&self) -> Vec<(String, Limits)> {
+        self.applied.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|(id, a)| (id.clone(), a.limits)).collect()
     }
 
     /// Brings the client `pid` (started at `t0`) of instance `id` to `limits`, changing only
@@ -301,10 +363,11 @@ impl Limiter {
         let free = self.free.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let is_free = |id: &str, pid: u32| free.1 == Some(pid) || free.0.iter().any(|f| f == id);
         if let Some((pid, t0)) = self.due_trim(now).or_else(|| self.grown_trim(now, is_free, |pid, t0| super::metrics::read(pid, t0).map(|r| r.memory)))
-            && let Err(e) = trim(pid, t0)
+            && self.logged_trim("scheduled", pid, t0).is_err()
         {
-            log::warn!("{e}");
+            self.trim_failed(pid, t0, now);
         }
+        self.follow_trims(now, super::metrics::read);
     }
 }
 
@@ -373,15 +436,20 @@ pub fn plan(
         .collect()
 }
 
-/// One client's limits (pure): its own, and nothing more when it runs `free`. Otherwise, with none
-/// of its own, the adaptive manager's background limits; then the default trim, the auto-spread
-/// `share` and the `fair` cap where it says nothing of its own (the fair cap also tightens the
-/// adaptive manager's).
+/// One client's limits (pure): its own, and nothing more when it runs `free`. Otherwise each limit
+/// it says nothing about comes from the adaptive manager's background limits, then the default
+/// trim, the auto-spread `share` and the `fair` cap (which also tightens the adaptive manager's).
 pub fn effective(manual: Limits, free: bool, v: &Settings, share: Option<u64>, fair: Option<u8>) -> Limits {
     if free {
         return manual;
     }
-    let mut l = if manual == Limits::default() && v.adaptive.enabled { v.adaptive.background } else { manual };
+    let bg = if v.adaptive.enabled { v.adaptive.background } else { Limits::default() };
+    let mut l = Limits {
+        cpu_cap: manual.cpu_cap.or(bg.cpu_cap),
+        eco: manual.eco || bg.eco,
+        affinity: manual.affinity.or(bg.affinity),
+        trim_every_min: manual.trim_every_min.or(bg.trim_every_min),
+    };
     if l.trim_every_min.is_none() && v.trim_every_min > 0 {
         l.trim_every_min = Some(v.trim_every_min);
     }
@@ -508,8 +576,11 @@ fn set_eco(pid: u32, t0: u64, on: bool) -> Result<()> {
     let memory = MEMORY_PRIORITY_INFORMATION { MemoryPriority: if on { MEMORY_PRIORITY_VERY_LOW } else { MEMORY_PRIORITY_NORMAL } };
     // SAFETY: as above, for `memory`.
     let memory = unsafe { SetProcessInformation(*h, ProcessMemoryPriority, (&raw const memory).cast(), size_of::<MEMORY_PRIORITY_INFORMATION>() as u32) };
-    if let Err(e) = memory {
-        log::debug!("process {pid}: memory priority not set: {e}");
+    // First, so that a refusal leaves nothing half on while efficiency mode counts as off.
+    match memory {
+        Err(e) if on => return Err(failed(pid, e)),
+        Err(e) => log::warn!("process {pid}: memory priority not put back: {e}"),
+        Ok(()) => {}
     }
     // In one call: each replaces both masks of the one before.
     let done = match on {
@@ -803,6 +874,40 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_trim_comes_again_soon() {
+        let limiter = Limiter::new();
+        let mut a = Applied::new(7, 9);
+        a.limits.trim_every_min = Some(60);
+        let now = Instant::now();
+        a.next_trim = now;
+        limiter.applied.lock().unwrap().insert("i".into(), a);
+        assert_eq!(limiter.due_trim(now), Some((7, 9)));
+        assert_eq!(limiter.due_trim(now + TRIM_RETRY), None, "the next is an interval away");
+        limiter.trim_failed(7, 9, now);
+        assert_eq!(limiter.due_trim(now + TRIM_RETRY), Some((7, 9)), "sooner after a failure");
+    }
+
+    #[test]
+    fn a_trim_is_followed_until_its_last_measurement() {
+        let limiter = Limiter::new();
+        let at = Instant::now();
+        limiter.follows.lock().unwrap().push(TrimFollow { why: "test", pid: 1, t0: 2, at, done: 0 });
+        let r = super::super::metrics::Reading { cpu: 0, memory: 2 << 20, working_set: 3 << 20, private: 5 << 20, read: 0, write: 0 };
+        assert_eq!(memory_line(&r), "working set 3 MB, private working set 2 MB, commit 5 MB");
+        let left = || limiter.follows.lock().unwrap().first().map(|f| f.done);
+        limiter.follow_trims(at + Duration::from_secs(9), |_, _| Some(r));
+        assert_eq!(left(), Some(0), "not yet");
+        for (secs, done) in [(10, Some(1)), (60, Some(2)), (300, None)] {
+            limiter.follow_trims(at + Duration::from_secs(secs), |_, _| Some(r));
+            assert_eq!(left(), done, "at {secs} s");
+        }
+        // A client gone ends it.
+        limiter.follows.lock().unwrap().push(TrimFollow { why: "test", pid: 1, t0: 2, at, done: 0 });
+        limiter.follow_trims(at + Duration::from_secs(10), |_, _| None);
+        assert_eq!(left(), None);
+    }
+
+    #[test]
     fn the_fair_cap_divides_the_budget_above_a_floor() {
         assert_eq!(fair_cap(1, 8), 75);
         assert_eq!(fair_cap(3, 8), 25);
@@ -821,8 +926,12 @@ mod tests {
         let mine = Limits { cpu_cap: Some(50), ..Limits::default() };
         assert_eq!(effective(none, false, &v, None, None), bg, "in the background");
         assert_eq!(effective(none, true, &v, None, None), none, "in front: lifted");
-        assert_eq!(effective(mine, false, &v, None, None), mine, "manual limits win");
+        // A limit set on the client wins for that limit only: the rest stay the background's.
+        assert_eq!(effective(mine, false, &v, None, None), Limits { cpu_cap: Some(50), eco: true, ..Limits::default() });
+        let cores = Limits { affinity: Some(0b11), ..Limits::default() };
+        assert_eq!(effective(cores, false, &v, None, None), Limits { cpu_cap: Some(25), eco: true, affinity: Some(0b11), ..Limits::default() });
         v.adaptive.enabled = false;
+        assert_eq!(effective(mine, false, &v, None, None), mine, "adaptive off");
         assert_eq!(effective(none, false, &v, None, None), none, "off");
 
         // Defaults fill what the client's own limits leave open.

@@ -95,6 +95,7 @@ export function MonitorView({ accounts }: { accounts: AccountSummary[] }) {
 
   const cpuNow = list.some((m) => m.cpuPct !== null) ? list.reduce((n, m) => n + (m.cpuPct ?? 0), 0) : null;
   const memNow = list.reduce((n, m) => n + m.memoryMb, 0);
+  const commitNow = list.reduce((n, m) => n + m.privateMb, 0);
   const ioNow = list.some((m) => m.readBps !== null) ? list.reduce((n, m) => n + (m.readBps ?? 0) + (m.writeBps ?? 0), 0) : null;
   const gpuMemNow = list.some((m) => m.gpuMemMb !== null) ? list.reduce((n, m) => n + (m.gpuMemMb ?? 0), 0) : null;
 
@@ -112,6 +113,7 @@ export function MonitorView({ accounts }: { accounts: AccountSummary[] }) {
           <Tile label={t("monitor.memoryAll")} value={mb(memNow)}>
             {list.length > 0 && <Sparkline values={hist.totals.mem} floor={64} label={t("monitor.memoryAll")} format={mb} />}
           </Tile>
+          <Tile label={t("monitor.commitAll")} value={mb(commitNow)} />
           <Tile label={t("monitor.gpuMemory")} value={gpuMemNow === null ? "—" : mb(gpuMemNow)} />
           <Tile label={t("monitor.io")} value={rate(ioNow)} />
         </div>
@@ -129,6 +131,7 @@ export function MonitorView({ accounts }: { accounts: AccountSummary[] }) {
                 <th className="font-normal border-b border-line hidden xl:table-cell"><span className="sr-only">{t("monitor.cpuTrend")}</span></th>
                 <th className="font-normal border-b border-line text-end pe-3" title={t("monitor.memoryHint")}>{t("monitor.memory")}</th>
                 <th className="font-normal border-b border-line hidden xl:table-cell"><span className="sr-only">{t("monitor.memoryTrend")}</span></th>
+                <th className="font-normal border-b border-line text-end pe-3" title={t("monitor.commitHint")}>{t("monitor.commitCol")}</th>
                 <th className="font-normal border-b border-line text-end pe-3" title={t("monitor.gpuHint")}>{t("monitor.gpu")}</th>
                 <th className="font-normal border-b border-line text-end pe-3" title={t("monitor.gpuMemoryHint")}>{t("monitor.gpuMem")}</th>
                 <th className="font-normal border-b border-line text-end pe-3">{t("monitor.read")}</th>
@@ -160,8 +163,9 @@ export function MonitorView({ accounts }: { accounts: AccountSummary[] }) {
                     </td>
                     <td className="pe-3 text-end whitespace-nowrap">{m ? pct(m.cpuPct) : "—"}</td>
                     <td className="pe-3 hidden xl:table-cell"><Sparkline values={h?.cpu ?? []} floor={10} zero label={t("monitor.cpu")} format={pct} /></td>
-                    <td className="pe-3 text-end" title={m ? t("monitor.commit", { mb: mb(m.privateMb) }) : undefined}>{m ? mb(m.memoryMb) : "—"}</td>
+                    <td className="pe-3 text-end">{m ? mb(m.memoryMb) : "—"}</td>
                     <td className="pe-3 hidden xl:table-cell"><Sparkline values={h?.mem ?? []} floor={64} label={t("monitor.memory")} format={mb} /></td>
+                    <td className="pe-3 text-end whitespace-nowrap">{m ? mb(m.privateMb) : "—"}</td>
                     <td className="pe-3 text-end whitespace-nowrap">{m ? pct(m.gpuPct) : "—"}</td>
                     <td className="pe-3 text-end whitespace-nowrap">{m && m.gpuMemMb !== null ? mb(m.gpuMemMb) : "—"}</td>
                     <td className="pe-3 text-end whitespace-nowrap">{m ? rate(m.readBps) : "—"}</td>

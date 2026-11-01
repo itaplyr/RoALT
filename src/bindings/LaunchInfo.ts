@@ -3,31 +3,31 @@
 /**
  * A client RoALT started.
  */
-export type LaunchInfo = { accountId: number, 
+export type LaunchInfo = { accountId: number,
 /**
  * Process id of what was started (the Roblox client, or a bootstrapper such as Bloxstrap).
  */
-pid: number, 
+pid: number,
 /**
  * The `browsertrackerid` this launch used; the client's log names it.
  */
-browserTrackerId: number, 
+browserTrackerId: number,
 /**
  * The place it was sent to, when known before the client starts.
  */
-placeId: number | null, 
+placeId: number | null,
 /**
  * Unix ms.
  */
-startedAt: number, 
+startedAt: number,
 /**
  * True when a bootstrapper (not RobloxPlayerBeta.exe) handled the launch.
  */
-viaBootstrapper: boolean, 
+viaBootstrapper: boolean,
 /**
  * Something the user should know (expired share link, launch data left out).
  */
-warning: string | null, 
+warning: string | null,
 /**
  * This launch's own FPS cap, used instead of the account's and the default; None: those.
  */

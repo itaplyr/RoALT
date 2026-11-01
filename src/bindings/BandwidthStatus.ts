@@ -3,11 +3,11 @@
 /**
  * The Roblox bandwidth limit (`bandwidth_status`).
  */
-export type BandwidthStatus = { 
+export type BandwidthStatus = {
 /**
  * The setting: what was last applied (0: none).
  */
-kbps: number, 
+kbps: number,
 /**
  * The policy RoALT set is in force: applied since Windows last started.
  */

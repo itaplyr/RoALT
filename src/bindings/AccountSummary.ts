@@ -4,32 +4,32 @@ import type { AccountStatus } from "./AccountStatus";
 /**
  * One stored account as the UI sees it. Never carries the cookie.
  */
-export type AccountSummary = { id: number, userId: number, username: string, displayName: string, alias: string, notes: string, color: string | null, favourite: boolean, sortOrder: number, groupIds: Array<number>, status: AccountStatus, 
+export type AccountSummary = { id: number, userId: number, username: string, displayName: string, alias: string, notes: string, color: string | null, favourite: boolean, sortOrder: number, groupIds: Array<number>, status: AccountStatus,
 /**
  * Unix ms.
  */
-statusCheckedAt: number | null, 
+statusCheckedAt: number | null,
 /**
  * Unix ms.
  */
-createdAt: number, 
+createdAt: number,
 /**
  * Its clients may stay disconnected: never rejoined or restarted, and a batch counts a
  * disconnect as done.
  */
-allowDisconnect: boolean, 
+allowDisconnect: boolean,
 /**
  * Extra client arguments, used instead of `Settings.launch_args`; None: the default.
  */
-launchArgs: string | null, 
+launchArgs: string | null,
 /**
  * No Discord alerts about this account's clients (batch summaries and status still go).
  */
-discordMuted: boolean, 
+discordMuted: boolean,
 /**
  * Target FPS for its launches, used instead of `Settings.fps_cap`; None: the default.
  */
-fpsCap: number | null, 
+fpsCap: number | null,
 /**
  * Its clients keep the user's own graphics: no lowest graphics or lighter rendering.
  */

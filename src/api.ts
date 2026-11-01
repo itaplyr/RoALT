@@ -165,7 +165,8 @@ export const api = {
   /** CPU cap, efficiency mode, trim interval and cores for one running client (they win over adaptive ones). */
   instanceSetLimits: (id: string, limits: Limits) => invoke<void>("instance_set_limits", { id, limits }),
   /** Pages the client's working set out now. */
-  instanceTrim: (id: string) => invoke<void>("instance_trim", { id }),
+  /** Trims the client: its Memory column before and after, in MB. */
+  instanceTrim: (id: string) => invoke<[number, number]>("instance_trim", { id }),
   /** Opts one running client in or out of anti-AFK. */
   instanceSetAntiAfk: (id: string, enabled: boolean) => invoke<void>("instance_set_anti_afk", { id, enabled }),
   /** The client's preview at most maxW wide: always a 24-byte header, then RGBA unless its picture number is `known` or it has no picture (`window::Preview::to_bytes`). */

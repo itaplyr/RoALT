@@ -3,7 +3,7 @@
 /**
  * One public server. Roblox may leave anything but id / maxPlayers / playing out.
  */
-export type GameServer = { 
+export type GameServer = {
 /**
  * The job id (a GUID).
  */

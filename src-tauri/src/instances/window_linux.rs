@@ -216,6 +216,8 @@ pub fn recover(_followed: &[u32]) {}
 
 pub fn sweep(_clients: &[(u32, Option<(u32, u32)>)]) {}
 
+pub fn set_live_hidden_previews(_on: bool) {}
+
 pub const MICRO: (u32, u32) = (320, 240);
 
 pub fn micro(_id: &str, _pid: u32, _on: bool, size: (u32, u32)) -> Result<(u32, u32)> {

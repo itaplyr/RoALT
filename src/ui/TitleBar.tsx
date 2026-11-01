@@ -5,11 +5,14 @@ import { Icon, Logo } from "./Icon";
 import { t } from "../i18n";
 
 /** Custom title bar (window decorations are off). Empty space drags; double-click maximizes. */
-export function TitleBar({ dark, onToggleTheme, onLock, onRefresh }: {
+export function TitleBar({ dark, onToggleTheme, onLock, onRefresh, sideTabs, onToggleTabs }: {
   dark: boolean;
   onToggleTheme?: () => void;
   onLock?: () => void;
   onRefresh?: () => void;
+  /** Accounts are on the side; `onToggleTabs` moves them. */
+  sideTabs?: boolean;
+  onToggleTabs?: () => void;
 }) {
   const win = useMemo(() => getCurrentWindow(), []);
   const fetching = useIsFetching() > 0;
@@ -31,6 +34,15 @@ export function TitleBar({ dark, onToggleTheme, onLock, onRefresh }: {
         {onRefresh && (
           <button className="wc" aria-label={t("ui.refresh")} title={t("ui.refreshKey", { key: "F5" })} onClick={onRefresh}>
             <Icon name="refresh" className={fetching ? "spin" : ""} />
+          </button>
+        )}
+        {onToggleTabs && (
+          <button className="wc" aria-label={sideTabs ? t("ui.accountsTop") : t("ui.accountsSide")} title={sideTabs ? t("ui.accountsTop") : t("ui.accountsSide")} onClick={onToggleTabs}>
+            {/* What a click gives. */}
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+              <rect x="1.5" y="2.5" width="13" height="11" rx="2" />
+              <path d={sideTabs ? "M1.5 6h13" : "M6 2.5v11"} />
+            </svg>
           </button>
         )}
         {onToggleTheme && (

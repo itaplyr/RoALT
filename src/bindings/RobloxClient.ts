@@ -3,25 +3,25 @@
 /**
  * The Roblox client RoALT would start.
  */
-export type RobloxClient = { 
+export type RobloxClient = {
 /**
  * None when Roblox isn't installed.
  */
-path: string | null, 
+path: string | null,
 /**
  * A bootstrapper (e.g. Bloxstrap) handles launches; it keeps Roblox up to date itself, so
  * RoALT never updates or installs over it.
  */
-bootstrapper: boolean, 
+bootstrapper: boolean,
 /**
  * The installed version: the `Versions\version-…` folder the client is in. None when not
  * installed, for a bootstrapper, or a client outside such a folder.
  */
-version: string | null, 
+version: string | null,
 /**
  * Roblox's live version (`clientVersionUpload`), once checked (at start, every 30 min).
  */
-latest: string | null, 
+latest: string | null,
 /**
  * Both versions are known and differ (`launcher::update::outdated`).
  */

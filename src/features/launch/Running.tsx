@@ -8,6 +8,7 @@ import { ConfirmDialog, Dialog } from "../../ui/Dialog";
 import { Icon } from "../../ui/Icon";
 import { toast, toastError } from "../../ui/Toast";
 import { accountName, Avatar } from "../accounts/shared";
+import { mb } from "../monitor/MonitorView";
 import { launchBlocked, launched, launchFailed } from "./LaunchView";
 
 // Getters: labels are translated when read (at render), not once at load.
@@ -78,7 +79,7 @@ function LimitsBody({ inst }: { inst: Instance }) {
     setTrimming(true);
     api
       .instanceTrim(inst.id)
-      .then(() => toast(t("launch.limits.trimmed")), toastError)
+      .then(([before, after]) => toast(t("dashboard.trimmedFrom", { before: mb(before), after: mb(after) })), toastError)
       .finally(() => setTrimming(false));
   };
   return (

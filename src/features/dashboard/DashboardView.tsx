@@ -13,7 +13,7 @@ import { launched, launchFailed } from "../launch/LaunchView";
 import { mb, pct } from "../monitor/MonitorView";
 import { menuKeys } from "../../ui/menu";
 import { AccountTabs } from "./AccountTabs";
-import { homeSorted, reordered, useHomeDetailed, useHomeOrder, useHomeSizes, type HomeTabs } from "./homeLayout";
+import { homeSorted, reordered, useHomeDetailed, useHomeSizes, type HomeTabs } from "./homeLayout";
 import { usePreviewFps, type PreviewFps } from "./previewFps";
 import { useGridDrag } from "./useGridDrag";
 
@@ -219,12 +219,17 @@ function ClientCard({ inst: i, account: a, metrics: m, now, afkOn, defaultFps, f
     : status === "pending" ? t("dashboard.waitingPicture")
     : status === "unsupported" ? t("dashboard.noPreview")
     : "";
+  // What it really has now. Set on the client itself or else from settings, which the tip says.
+  const on = i.appliedLimits;
+  const from = (own: boolean) => (own ? undefined : t("dashboard.fromSettings"));
   const badges:[string, string?][] = [
-    ...(i.throttled ? [[throttled, t("dashboard.throttledHint")] as [string, string]] : []),
-    ...(i.limits.cpuCap !== null ? [[t("dashboard.cpuPct", { pct: i.limits.cpuCap })] as [string]] : []),
-    ...(i.limits.eco ? [[t("dashboard.efficiency")] as [string]] : []),
-    ...(i.limits.trimEveryMin !== null ? [[capitalized(t("launch.limits.trimItem"))] as [string]] : []),
-    ...(i.limits.affinity !== null ? [[capitalized(t("launch.limits.coresItem"))] as [string]] : []),
+    ...(a?.fullQuality ? [[t("accounts.detail.fullQuality"), t("accounts.detail.fullQualityHint")] as [string, string]] : []),
+    // Only once the cap is on: it may have been refused.
+    ...(i.throttled && on.cpuCap !== null ? [[throttled, t("dashboard.throttledHint")] as [string, string]] : []),
+    ...(on.cpuCap !== null ? [[t("dashboard.cpuPct", { pct: on.cpuCap }), from(i.limits.cpuCap === on.cpuCap)] as [string, string?]] : []),
+    ...(on.eco ? [[t("dashboard.efficiency"), from(i.limits.eco)] as [string, string?]] : []),
+    ...(on.trimEveryMin ? [[capitalized(t("launch.limits.trimItem")), from(i.limits.trimEveryMin === on.trimEveryMin)] as [string, string?]] : []),
+    ...(on.affinity !== null ? [[capitalized(t("launch.limits.coresItem")), from(i.limits.affinity === on.affinity)] as [string, string?]] : []),
     ...(afkOn && i.antiAfk ? [[t("dashboard.antiAfk"), i.afkAt !== null ? t("dashboard.lastKeyPress", { time: uptime(i.afkAt, now) }) : t("dashboard.noKeyPress")] as [string, string]] : []),
     ...(i.micro ? [[t("dashboard.micro")] as [string]] : []),
     ...(i.fpsCap ? [[t("dashboard.fpsCap", { fps: i.fpsCap }), t("dashboard.launchFpsCap")] as [string, string]]
@@ -289,14 +294,14 @@ function ClientCard({ inst: i, account: a, metrics: m, now, afkOn, defaultFps, f
             </span>
           </div>
           {i.note && !rejoining && <span className="text-[13px] text-orange">{i.note}</span>}
-          <div className="flex items-center justify-between gap-2 text-xs text-dim min-w-0">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-dim min-w-0">
             <span className="flex flex-wrap gap-1 min-w-0">
               {badges.map(([b, tip]) => (
                 <span key={b} className={`tag ${b === throttled ? "text-orange" : ""}`} title={tip}>{b}</span>
               ))}
             </span>
-            <span className="mono flex-none ms-auto" title={m ? t("monitor.commit", { mb: mb(m.privateMb) }) : undefined} style={{ fontVariantNumeric: "tabular-nums" }}>
-              {m ? `${pct(m.cpuPct)} · ${mb(m.memoryMb)}` : "—"}
+            <span className="mono flex-none ms-auto" title={t("monitor.commitHint")} style={{ fontVariantNumeric: "tabular-nums" }}>
+              {m ? `${pct(m.cpuPct)} · ${t("dashboard.memCommit", { memory: mb(m.memoryMb), commit: mb(m.privateMb) })}` : "—"}
             </span>
           </div>
           <div className="flex gap-2.5">
@@ -398,7 +403,7 @@ function ClientMenu({ at, account, onClose, afkOn, closing, onLimits, onCloseCli
     api.instanceMicro(i.id, !i.micro).then(([w, h]) => {
       if (!i.micro && (w > tiny.w || h > tiny.h)) toast(t("dashboard.microKept", { w, h }));
     }, toastError);
-  const trim = () => i && api.instanceTrim(i.id).then(() => toast(t("dashboard.trimmed")), toastError);
+  const trim = () => i && api.instanceTrim(i.id).then(([before, after]) => toast(t("dashboard.trimmedFrom", { before: mb(before), after: mb(after) })), toastError);
 
   const items: Item[] = i
     ? [
@@ -497,6 +502,7 @@ function PcPanel({ metrics }: { metrics: ClientMetrics[] }) {
   const total = (of: (m: ClientMetrics) => number | null) => (metrics.some((m) => of(m) !== null) ? metrics.reduce((n, m) => n + (of(m) ?? 0), 0) : null);
   const memTotal = sys ? Math.max(1, sys.memTotalMb) : null;
   const memUsed = total((m) => m.memoryMb);
+  const commit = total((m) => m.privateMb);
   const pcMem = sys && memTotal ? (sys.memUsedMb / memTotal) * 100 : null;
   // Each client's own busiest engine: on one GPU the sum comes close, with clients on different
   // GPUs it says too much.
@@ -520,7 +526,7 @@ function PcPanel({ metrics }: { metrics: ClientMetrics[] }) {
         )}
       </div>
       <Dial value={total((m) => m.cpuPct)} label={t("home.cpu")} hint={t("home.allClients")} />
-      <Dial value={memUsed !== null && memTotal ? (memUsed / memTotal) * 100 : null} label={t("home.memory")} hint={memUsed !== null && sys ? t("home.memOf", { used: mb(memUsed), total: mb(sys.memTotalMb) }) : t("home.allClients")} />
+      <Dial value={memUsed !== null && memTotal ? (memUsed / memTotal) * 100 : null} label={t("home.memory")} hint={memUsed !== null && sys ? `${t("home.memOf", { used: mb(memUsed), total: mb(sys.memTotalMb) })} · ${t("home.commitAll", { commit: mb(commit ?? 0) })}` : t("home.allClients")} />
       <Dial value={gpu} label={t("home.gpu")} hint={t("home.allClients")} />
     </section>
   );
@@ -620,7 +626,7 @@ export function DashboardView({ accounts, home, onLaunch, onAdd, onImport, onAcc
   const qc = useQueryClient();
   const list = useInstances().data ?? [];
   const running = list.filter(isRunning);
-  const [order, setOrder] = useHomeOrder();
+  const { order, setOrder } = home;
   const [detailed, setDetailed] = useHomeDetailed();
   const [sizes, setSize] = useHomeSizes();
   const shown = homeSorted(running, order);

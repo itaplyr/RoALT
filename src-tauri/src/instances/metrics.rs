@@ -36,6 +36,8 @@ pub struct Reading {
     pub cpu: u64,
     /// Private working set: Task Manager's Memory column, what a trim lowers.
     pub memory: u64,
+    /// The whole working set, shared pages too.
+    pub working_set: u64,
     /// Private bytes: Task Manager's Commit size, what a leak grows and the memory limits watch.
     pub private: u64,
     pub read: u64,
@@ -155,7 +157,7 @@ fn cpu_times() -> Option<(u64, u64)> {
 }
 
 /// Physical memory in use and in all, bytes.
-fn memory() -> Option<(u64, u64)> {
+pub(super) fn memory() -> Option<(u64, u64)> {
     let mut m = MEMORYSTATUSEX { dwLength: size_of::<MEMORYSTATUSEX>() as u32, ..Default::default() };
     // SAFETY: a local MEMORYSTATUSEX whose dwLength says its size.
     unsafe { GlobalMemoryStatusEx(&mut m) }
@@ -199,6 +201,7 @@ pub fn read(pid: u32, t0: u64) -> Option<Reading> {
         cpu,
         // Zero on that older Windows, which can only say the whole working set.
         memory: if mem.PrivateWorkingSetSize > 0 { mem.PrivateWorkingSetSize } else { mem.WorkingSetSize } as u64,
+        working_set: mem.WorkingSetSize as u64,
         private: mem.PrivateUsage as u64,
         read: io.ReadTransferCount,
         write: io.WriteTransferCount,

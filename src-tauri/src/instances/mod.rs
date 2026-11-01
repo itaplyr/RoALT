@@ -9,6 +9,12 @@ pub mod afk;
 pub mod afk;
 
 #[cfg(windows)]
+mod autopsy;
+#[cfg(not(windows))]
+#[path = "autopsy_linux.rs"]
+mod autopsy;
+
+#[cfg(windows)]
 mod capture;
 #[cfg(windows)]
 mod gpu;
@@ -60,4 +66,4 @@ pub mod window;
 mod tracker;
 
 pub mod rejoin;
-pub use tracker::{Tracker, Transition, challenged, closed, hung, unexpected, wrong_account};
+pub use tracker::{Tracker, Transition, auth_failed, challenged, closed, hung, unexpected, wrong_account};

@@ -3,11 +3,11 @@
 /**
  * One private server of a place, as one account sees it.
  */
-export type PrivateServer = { vipServerId: number, name: string, ownerId: number | null, ownerName: string | null, playing: number, maxPlayers: number, 
+export type PrivateServer = { vipServerId: number, name: string, ownerId: number | null, ownerName: string | null, playing: number, maxPlayers: number,
 /**
  * The running server's job id, when it runs.
  */
-jobId: string | null, 
+jobId: string | null,
 /**
  * Only when this account can join it (launch with `LaunchTarget::PrivateAccess`).
  */

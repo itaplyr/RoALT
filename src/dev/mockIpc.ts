@@ -76,8 +76,8 @@ let settings: Settings = {
   adaptive: { enabled: false, background: { cpuCap: 25, eco: true, trimEveryMin: null, affinity: null } }, bandwidthKbps: 0,
   antiAfk: { enabled: false, intervalMin: 15, mode: "focus" },
   discord: { crash: true, hang: true, memRestart: true, disconnect: true, restart: true, breaker: true, batchDone: true, launch: false, statusEveryMin: 0 },
-  autoUpdate: false, selfUpdate: true, discordPresence: true, minimizeOnLaunch: false, microWidth: 320, microHeight: 240, tinyOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0, lowGraphics: true, skipSplash: false, lighterRendering: true, renderFlags: { msaa: "x1", texture: "lowest", mode: "default", graySky: false, noGrass: true, lowestFrm: true, pauseVoxelizer: false }, headless: false, keepRunningOnClose: false,
-  allowPublicNetworks: true, language: "",
+  autoUpdate: false, selfUpdate: true, tabLayout: "top", discordPresence: true, minimizeOnLaunch: false, liveHiddenPreviews: true, microWidth: 320, microHeight: 240, tinyOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0, lowGraphics: true, skipSplash: false, lighterRendering: true, renderFlags: { msaa: "x1", texture: "lowest", mode: "default", graySky: false, noGrass: true, lowestFrm: true, pauseVoxelizer: false },
+  allowPublicNetworks: true, language: "", headless: false, keepRunningOnClose: false,
 };
 
 // Outdated, so Settings offers the update and the Launch view warns before a batch.
@@ -201,7 +201,7 @@ function endInstance(id: string, note: string) {
 }
 /** The last performance profile "saved" in the preview (performance_export). */
 let lastProfile: string | null = null;
-const PERF_KEYS = ["fpsCap", "lowGraphics", "lighterRendering", "renderFlags", "minimizeOnLaunch", "microWidth", "microHeight", "tinyOnLaunch", "memRestartMb", "memThrottle", "trimEveryMin", "autoSpread", "fairCap", "adaptive"] as const;
+const PERF_KEYS = ["fpsCap", "lowGraphics", "lighterRendering", "renderFlags", "minimizeOnLaunch", "liveHiddenPreviews", "microWidth", "microHeight", "tinyOnLaunch", "memRestartMb", "memThrottle", "trimEveryMin", "autoSpread", "fairCap", "adaptive"] as const;
 
 function perfProfile(previewFps: number) {
   const s: Record<string, unknown> = {};
@@ -237,7 +237,7 @@ function track(accountId: number, pid: number, target: LaunchTarget, placeId: nu
   const i: Instance = {
     id: crypto.randomUUID(), accountId, pid, state: "starting", target, placeId, jobId: null,
     startedAt: Date.now(), endedAt: null, viaBootstrapper, note: null, rejoins, limits: { cpuCap: null, eco: false, trimEveryMin: null, affinity: null },
-    antiAfk: true, afkAt: null, throttled: false, micro: false, fpsCap, relaunching: false, relaunchProblem: null, signInProblem: false,
+    antiAfk: true, afkAt: null, throttled: false, micro: false, fpsCap, relaunching: false, relaunchProblem: null, signInProblem: false, appliedLimits: { cpuCap: 25, eco: true, affinity: null, trimEveryMin: 15 },
   };
   instances.push(i);
   if (!lockHeld) eventHolder = i.id;
@@ -944,7 +944,7 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     }
     case "instance_trim":
       await sleep(300);
-      return instances.some((x) => x.id === args.id && x.state !== "exited") ? null : fail("notFound", "Not found.");
+      return instances.some((x) => x.id === args.id && x.state !== "exited") ? [840, 210] : fail("notFound", "Not found.");
     case "instance_thumbnail": {
       const i = instances.find((x) => x.id === args.id);
       if (!i) return fail("notFound", "Not found.");

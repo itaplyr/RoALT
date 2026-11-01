@@ -29,6 +29,31 @@ const COLOR: Record<Level, string> = { error: "text-err", warn: "text-warn", inf
 
 let nextId = 0;
 
+/** The newest line Clear hid. roalt.log keeps everything (the diagnostics report reads it), so what
+ * the history shows starts after this line, across tab switches and restarts. */
+const CLEARED_KEY = "roalt.debug.clearedAfter";
+function clearedAfter(): string | null {
+  try {
+    return localStorage.getItem(CLEARED_KEY);
+  } catch {
+    return null;
+  }
+}
+function setClearedAfter(line: string) {
+  try {
+    localStorage.setItem(CLEARED_KEY, line);
+  } catch {
+    // Then Clear lasts until the tab closes.
+  }
+}
+
+/** The lines after the last `marker`; all of them when it has aged out of `lines`, as they are then
+ * all newer than it. */
+function afterMarker(lines: string[], marker: string | null): string[] {
+  const at = marker === null ? -1 : lines.lastIndexOf(marker);
+  return at < 0 ? lines : lines.slice(at + 1);
+}
+
 /** Everything RoALT logs (roalt.log), live, terminal-style. */
 export function DebugView() {
   const [lines, setLines] = useState<Line[]>([]);
@@ -62,7 +87,8 @@ export function DebugView() {
           prev = levelOf(s, prev);
           return { id: nextId++, level: prev, text: s };
         });
-        setLines([...history, ...early].slice(-KEEP));
+        const kept = afterMarker(text, clearedAfter()).length;
+        setLines([...history.slice(history.length - kept), ...early].slice(-KEEP));
       })
       .catch(toastError)
       .finally(() => {
@@ -98,6 +124,13 @@ export function DebugView() {
     if (!paused && box.current) box.current.scrollTop = box.current.scrollHeight;
   }, [visible, paused]);
 
+  const clear = () => {
+    const newest = held.current.at(-1) ?? lines.at(-1);
+    // A live line can span several of the file's.
+    if (newest) setClearedAfter(newest.text.split("\n").at(-1) ?? newest.text);
+    held.current = [];
+    setLines([]);
+  };
   const copy = () =>
     writeText(visible.map((l) => l.text).join("\n")).then(() => toast(t("debug.copied")), toastError);
   const copyReport = () =>
@@ -149,7 +182,7 @@ export function DebugView() {
           <Icon name="copy" />
           {t("debug.copy")}
         </button>
-        <button className="btn btn-sm" onClick={() => setLines([])}>
+        <button className="btn btn-sm" onClick={clear}>
           <Icon name="trash" />
           {t("debug.clear")}
         </button>

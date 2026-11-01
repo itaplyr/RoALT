@@ -3,19 +3,19 @@
 /**
  * Events sent to the Discord webhook (`discord`), each on or off.
  */
-export type DiscordEvents = { crash: boolean, hang: boolean, memRestart: boolean, disconnect: boolean, 
+export type DiscordEvents = { crash: boolean, hang: boolean, memRestart: boolean, disconnect: boolean,
 /**
  * Auto-rejoins and auto-restarts that went ahead.
  */
-restart: boolean, 
+restart: boolean,
 /**
  * The crash breaker gave up on an account.
  */
-breaker: boolean, batchDone: boolean, 
+breaker: boolean, batchDone: boolean,
 /**
  * A client first got into a game (not after a rejoin, restart or reconnect).
  */
-launch: boolean, 
+launch: boolean,
 /**
  * A summary of the running clients every this many minutes (0: off, else 5..=1440).
  */

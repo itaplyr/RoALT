@@ -214,6 +214,7 @@ mod tests {
             relaunching: false,
             relaunch_problem: None,
             sign_in_problem: false,
+            applied_limits: Limits::default(),
         }
     }
 

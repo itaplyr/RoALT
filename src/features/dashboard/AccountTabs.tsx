@@ -12,7 +12,8 @@ import { FavouritesRow } from "../launch/Favourites";
 import { launchBlocked, launched, launchFailed, MARK } from "../launch/LaunchView";
 import { isLive, isRunning, MultiNotice, STATES } from "../launch/Running";
 import { draftFor, readDraft, resolveTarget, type Draft } from "../launch/target";
-import { storedText, type HomeTab, type HomeTabs } from "./homeLayout";
+import { homeSorted, storedText, type HomeTab, type HomeTabs } from "./homeLayout";
+import { Sortable } from "./Sortable";
 
 const tabId = (id: number | null) => `home-tab-${id ?? "overview"}`;
 const inFlight = (tab: HomeTab) => tab.status === "queued" || tab.status === "launching";
@@ -182,11 +183,15 @@ export function AccountTabs({ accounts, home, onAdd, children }: { accounts: Acc
   const multi = useMultiStatus().data;
   const batch = useBulk().data;
   const settings = useSettings().data;
+  // With accounts on the side (`AccountRail`), that list stands in for the strip.
+  const side = settings?.tabLayout === "side";
   const network = useNetwork().data;
   const strip = useRef<HTMLDivElement>(null);
   const [who, setWho] = useState("");
   const byId = new Map(accounts.map((a) => [a.id, a]));
-  const { tabs, active } = home;
+  const { active } = home;
+  // In the order they were dragged to, which a launch of all of them goes by too.
+  const tabs = homeSorted(home.tabs, home.order);
   const open = tabs.find((tab) => tab.accountId === active);
   const ready = tabs.filter((tab) => {
     const { usable, pending } = readDraft(tab.draft);
@@ -220,7 +225,7 @@ export function AccountTabs({ accounts, home, onAdd, children }: { accounts: Acc
     };
     el.addEventListener("wheel", wheel, { passive: false });
     return () => el.removeEventListener("wheel", wheel);
-  }, []);
+  }, [side]);
 
   // Coming back to Home, the strip starts at its left end.
   useEffect(() => {
@@ -271,23 +276,30 @@ export function AccountTabs({ accounts, home, onAdd, children }: { accounts: Acc
   const openAccount = open && byId.get(open.accountId);
   return (
     <>
-      <div className="flex items-center gap-2.5">
+      <div className="flex items-center gap-2.5 empty:hidden">
+        {!side && <>
         <div ref={strip} role="tablist" aria-label={t("dashboard.tabs.label")} className="tab-strip" onKeyDown={tabKeys}>
           <div className="tab">
             <button type="button" role="tab" id={tabId(null)} aria-selected={active === null} aria-controls="home-tab-panel" tabIndex={active === null ? 0 : -1} onClick={() => home.setActive(null)}>
               {t("dashboard.tabs.overview")}
             </button>
           </div>
-          {tabs.map((tab) => {
-            const a = byId.get(tab.accountId);
-            if (!a) return null;
+          <Sortable
+            className="contents"
+            ids={tabs.filter((tab) => byId.has(tab.accountId)).map((tab) => tab.accountId)}
+            order={home.order}
+            onOrder={home.setOrder}
+            name={(id) => accountName(byId.get(id)!)}
+            render={(id, drag) => {
+            const tab = tabs.find((x) => x.accountId === id)!;
+            const a = byId.get(id)!;
             const inst = instances.find((i) => i.accountId === a.id && isLive(i));
             const mark = inFlight(tab) ? "var(--dim)" : inst ? STATES[inst.state][1] : tab.status === "failed" ? "var(--orange)" : null;
             const selected = active === a.id;
             const name = accountName(a);
             return (
               <div key={a.id} className="tab">
-                <button type="button" role="tab" id={tabId(a.id)} aria-selected={selected} aria-controls="home-tab-panel" tabIndex={selected ? 0 : -1} title={name} onClick={() => home.setActive(a.id)}>
+                <button type="button" role="tab" id={tabId(a.id)} aria-selected={selected} aria-controls="home-tab-panel" tabIndex={selected ? 0 : -1} title={name} onClick={() => home.setActive(a.id)} {...drag}>
                   {mark && <span aria-hidden="true" className={`led ${inFlight(tab) ? "pulse" : ""}`} style={{ color: mark }} />}
                   <span className="truncate">{name}</span>
                 </button>
@@ -306,7 +318,8 @@ export function AccountTabs({ accounts, home, onAdd, children }: { accounts: Acc
                 </button>
               </div>
             );
-          })}
+          }}
+          />
         </div>
         <button
           type="button"
@@ -361,6 +374,7 @@ export function AccountTabs({ accounts, home, onAdd, children }: { accounts: Acc
             {t("accounts.add.title")}
           </button>
         </div>
+        </>}
         {ready.length > 0 && (
           <button className="btn btn-primary flex-none ms-auto" disabled={launching || allBlock !== null} title={allBlock ?? undefined} onClick={() => void launch(ready)}>
             <Icon name="play" size={12} fill />
@@ -370,7 +384,7 @@ export function AccountTabs({ accounts, home, onAdd, children }: { accounts: Acc
       </div>
       {(open || ready.length > 1 || allReplace) && <MultiNotice wanted={ready.length > 1} replaces={allReplace || (!!open && replaces(open))} />}
       {open && otherBlock && <p className="alert">{otherBlock}</p>}
-      <div role="tabpanel" id="home-tab-panel" aria-labelledby={tabId(active)} className="flex flex-col gap-6 min-w-0">
+      <div role={side ? undefined : "tabpanel"} id="home-tab-panel" aria-labelledby={side ? undefined : tabId(active)} className="flex flex-col gap-6 min-w-0">
         {open && openAccount ? (
           <TabBody
             key={open.accountId}

@@ -416,7 +416,7 @@ fn recent(times: &mut VecDeque<Instant>, now: Instant, window: Duration) -> u32 
 
 /// The wait before a relaunch: the launch delay doubled for each recent relaunch of the
 /// account (`jittered` then caps it at 60 s).
-fn backoff(delay_ms: u32, recent: u32) -> u32 {
+pub(crate) fn backoff(delay_ms: u32, recent: u32) -> u32 {
     delay_ms.saturating_mul(1 << recent.min(16))
 }
 
