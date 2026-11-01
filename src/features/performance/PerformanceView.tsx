@@ -267,6 +267,12 @@ export function PerformanceView({ settings }: { settings: Settings }) {
               <NumberField unit={t("performance.tinyHeight")} short="px" min={16} max={4320} value={settings.microHeight} onCommit={(microHeight) => set.mutate({ microHeight })} />
             </div>
           </TuneRow>
+          <TuneRow title={t("performance.headlessResolution")} hint={t("performance.headlessResolutionHint")}>
+            <div className="flex flex-wrap items-center gap-2">
+              <NumberField unit={t("performance.headlessWidth")} short="×" min={320} max={7680} value={settings.headlessWidth} onCommit={(headlessWidth) => set.mutate({ headlessWidth })} />
+              <NumberField unit={t("performance.headlessHeight")} short="px" min={240} max={4320} value={settings.headlessHeight} onCommit={(headlessHeight) => set.mutate({ headlessHeight })} />
+            </div>
+          </TuneRow>
           <h3 id="perf-roalt" className="font-semibold pt-5 pb-2">{t("performance.section.roalt")}</h3>
           <TuneRow title={t("dashboard.previewFps")} hint={t("dashboard.previewFpsHint")}>
             <Segmented mono label={t("dashboard.previewFps")} value={previewFps} options={PREVIEW_FPS.map((f) => ({ value: f, label: t("dashboard.fps", { fps: f }) }))} onChange={setFps} />

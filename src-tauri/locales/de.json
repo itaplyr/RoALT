@@ -272,7 +272,6 @@
   "RoALT is up to date.": "RoALT ist aktuell.",
   "The downloaded RoALT installer was not run: its signature file is malformed.": "Der heruntergeladene RoALT-Installer wurde nicht ausgeführt: Seine Signaturdatei ist fehlerhaft.",
   "Could not start RoALT's installer: {why}": "Der RoALT-Installer konnte nicht gestartet werden: {why}",
-  "RoALT updates are handled by your Linux package or build. Update it the way you installed it.": "RoALT-Updates werden von deinem Linux-Paket oder Build verwaltet. Aktualisiere es so, wie du es installiert hast.",
   "That folder's name can't be used.": "Dieser Ordnername kann nicht verwendet werden.",
   "That folder already has a RoALT database.": "In diesem Ordner gibt es bereits eine RoALT-Datenbank.",
   "Favourite names need 1 to 60 characters.": "Favoritennamen brauchen 1 bis 60 Zeichen.",
@@ -351,5 +350,7 @@
   "{n} alts · {games} games": {
     "one": "{n} Alt · {games} Spiele",
     "other": "{n} Alts · {games} Spiele"
-  }
+  },
+  "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.": "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.",
+  "The downloaded update failed its SHA-256 check.": "The downloaded update failed its SHA-256 check."
 }

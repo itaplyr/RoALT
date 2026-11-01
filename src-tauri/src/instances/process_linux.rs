@@ -33,6 +33,18 @@ pub fn roblox_processes() -> Vec<ProcInfo> {
         .collect()
 }
 
+/// Cordial's launcher, nested cage and engine only. Sober and Wine clients are deliberately
+/// left out: RoALT's Linux path owns Cordial and must not kill somebody else's launcher.
+pub fn cordial_processes() -> Vec<ProcInfo> {
+    let Ok(entries) = std::fs::read_dir("/proc") else { return Vec::new() };
+    entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|pid| is_cordial_or_cage(*pid))
+        .filter_map(|pid| start_time(pid).map(|start_time| ProcInfo { pid, start_time }))
+        .collect()
+}
+
 pub fn installer_running() -> bool {
     false
 }

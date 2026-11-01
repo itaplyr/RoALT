@@ -410,17 +410,22 @@ fn flatpak_installed(id: &str) -> bool {
 /// own file stays, so only the frame target is forced for this launch. `CORDIAL_FLAGS` takes
 /// precedence over the profile file, which is why a user's own
 /// `DFIntTaskSchedulerTargetFps` no longer silently beats RoALT's setting.
-fn flags_with_fps(existing: Option<&str>, fps: u32) -> String {
+fn flags_with_launch(existing: Option<&str>, fps: u32, extra: &[(&str, &str)]) -> String {
     let mut flags = existing
         .and_then(|text| serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(text).ok())
         .unwrap_or_default();
-    flags.insert("DFIntTaskSchedulerTargetFps".into(), serde_json::Value::from(fps));
-    serde_json::to_string_pretty(&flags).unwrap_or_else(|_| format!(r#"{{"DFIntTaskSchedulerTargetFps":{fps}}}"#))
+    for (key, value) in extra {
+        flags.insert((*key).into(), (*value).into());
+    }
+    if fps > 0 {
+        flags.insert("DFIntTaskSchedulerTargetFps".into(), serde_json::Value::from(fps));
+    }
+    serde_json::to_string_pretty(&flags).unwrap_or_else(|_| String::from("{}"))
 }
 
-/// Writes a per-profile flags file for this launch. None when there is no cap to apply.
-fn write_launch_flags(profile: &str, profile_dir: Option<&Path>, fps: u32) -> Option<PathBuf> {
-    if fps == 0 {
+/// Writes a per-profile flags file for this launch. None when there is nothing to apply.
+fn write_launch_flags(profile: &str, profile_dir: Option<&Path>, fps: u32, extra: &[(&str, &str)]) -> Option<PathBuf> {
+    if fps == 0 && extra.is_empty() {
         return None;
     }
     let source = std::env::var_os("CORDIAL_FLAGS").map(PathBuf::from).or_else(|| profile_dir.map(|d| d.join("flags.json")));
@@ -434,7 +439,7 @@ fn write_launch_flags(profile: &str, profile_dir: Option<&Path>, fps: u32) -> Op
         return None;
     }
     let path = dir.join(format!("{profile}.json"));
-    match std::fs::write(&path, flags_with_fps(existing.as_deref(), fps)) {
+    match std::fs::write(&path, flags_with_launch(existing.as_deref(), fps, extra)) {
         Ok(()) => Some(path),
         Err(e) => {
             log::warn!("could not write Cordial flags file {}: {e}", path.display());
@@ -460,6 +465,8 @@ pub fn start(
     headless: bool,
     keep_running_on_close: bool,
     fps_cap: u32,
+    linux_flags: &[(&str, &str)],
+    headless_resolution: Option<(u32, u32)>,
 ) -> Result<(u32, u64)> {
     let profile = profile_name(user_id);
     let profile_dir = profiles_root().map(|root| root.join(profile_name(user_id)));
@@ -480,8 +487,13 @@ pub fn start(
             .args(["--host-libc", "--game-activity", "--run", "0"])
             .arg("--profile")
             .arg(&profile);
-        if let Some(flags) = write_launch_flags(&profile, profile_dir.as_deref(), fps_cap) {
+        if let Some(flags) = write_launch_flags(&profile, profile_dir.as_deref(), fps_cap, linux_flags) {
             cmd.env("CORDIAL_FLAGS", flags);
+        }
+        if let Some((w, h)) = headless_resolution
+            && std::env::var_os("CORDIAL_RESOLUTION").is_none()
+        {
+            cmd.env("CORDIAL_RESOLUTION", format!("{w}x{h}"));
         }
         if headless {
             cmd.arg("--headless");
@@ -564,7 +576,7 @@ pub fn start(
     if matches!(exe.kind, LauncherKind::Cordial | LauncherKind::FlatpakCordial) {
         // Cordial drops the launch ticket unless asked; without it the profile stays signed out.
         cmd.env("CORDIAL_DEEPLINK_CARRY_TICKET", "1");
-        if let Some(flags) = write_launch_flags(&profile, profile_dir.as_deref(), fps_cap) {
+        if let Some(flags) = write_launch_flags(&profile, profile_dir.as_deref(), fps_cap, linux_flags) {
             cmd.env("CORDIAL_FLAGS", flags);
         }
     }
@@ -617,10 +629,12 @@ mod tests {
 
     #[test]
     fn an_fps_cap_overrides_the_flag_but_keeps_the_other_ones() {
-        let text = flags_with_fps(Some(r#"{"DFIntTaskSchedulerTargetFps":"60","FFlagOther":true}"#), 30);
+        let text = flags_with_launch(Some(r#"{"DFIntTaskSchedulerTargetFps":"60","FFlagOther":true}"#), 30, &[("FFlagDebugSkyGray", "True")]);
         let flags: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(flags["DFIntTaskSchedulerTargetFps"], 30);
         assert_eq!(flags["FFlagOther"], true);
-        assert_eq!(flags_with_fps(None, 240), "{\n  \"DFIntTaskSchedulerTargetFps\": 240\n}");
+        assert_eq!(flags["FFlagDebugSkyGray"], "True");
+        assert_eq!(flags_with_launch(None, 240, &[]), "{\n  \"DFIntTaskSchedulerTargetFps\": 240\n}");
+        assert_eq!(flags_with_launch(None, 0, &[]), "{}");
     }
 }

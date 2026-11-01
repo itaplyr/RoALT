@@ -273,6 +273,9 @@ pub struct Settings {
     /// Width and height "Make it tiny" and "Tile tiny windows" use.
     pub micro_width: u32,
     pub micro_height: u32,
+    /// Linux/Cordial: render resolution for headless clients. Cordial reads it at launch.
+    pub headless_width: u32,
+    pub headless_height: u32,
     /// Each new client goes tiny as soon as it has a window, unless its account is Full quality.
     pub tiny_on_launch: bool,
     /// Linux/Cordial: start the client under `cage` with no game window (`cordial-run --headless`).
@@ -500,6 +503,8 @@ panic_hotkey: String::new(),
             render_flags: RenderFlags::default(),
             micro_width: 320,
             micro_height: 240,
+            headless_width: 640,
+            headless_height: 360,
             tiny_on_launch: false,
             headless: false,
             keep_running_on_close: false,
@@ -591,6 +596,10 @@ pub struct SettingsPatch {
     pub micro_width: Option<u32>,
     #[ts(optional)]
     pub micro_height: Option<u32>,
+    #[ts(optional)]
+    pub headless_width: Option<u32>,
+    #[ts(optional)]
+    pub headless_height: Option<u32>,
     #[ts(optional)]
     pub tiny_on_launch: Option<bool>,
     #[ts(optional)]

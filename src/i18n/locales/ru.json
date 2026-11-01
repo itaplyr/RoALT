@@ -1242,5 +1242,9 @@
   "settings.headless": "Headless clients",
   "settings.headlessHint": "Start Cordial clients without a game window (uses Cage). They keep running in the background; close them from RoALT.",
   "settings.keepRunning": "Keep running when closed",
-  "settings.keepRunningHint": "Closing a client's game window leaves it running in the background. Close it from RoALT when you are done."
+  "settings.keepRunningHint": "Closing a client's game window leaves it running in the background. Close it from RoALT when you are done.",
+  "performance.headlessResolution": "Headless resolution",
+  "performance.headlessResolutionHint": "Render resolution for headless clients. Lower values use less GPU and memory; a new value applies the next time a headless client starts.",
+  "performance.headlessWidth": "Headless width",
+  "performance.headlessHeight": "Headless height"
 }

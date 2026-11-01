@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use super::process::start_time;
+use super::process::{descendants, start_time};
 use crate::model::{ClientMetrics, Limits, SystemUsage};
 
 const CACHE: Duration = Duration::from_secs(2);
@@ -86,7 +86,10 @@ impl Sampler {
                 instance_id: id.clone(),
                 pid: *pid,
                 cpu_pct: rate(|r| r.cpu).map(|t| (t / hz / cores * 100.0).min(100.0)),
-                memory_mb: r.working_set as f64 / MB,
+                // Linux reports PSS for both columns: RSS would count shared libraries and the
+                // engine image once per client, which made a headless client look tiny when the
+                // tracked cage process was measured alone and enormous when the tree was summed.
+                memory_mb: r.private as f64 / MB,
                 private_mb: r.private as f64 / MB,
                 read_bps: rate(|r| r.read),
                 write_bps: rate(|r| r.write),
@@ -132,11 +135,34 @@ fn busy_pct(before: (u64, u64), now: (u64, u64)) -> Option<f64> {
     Some((total - idle) as f64 / total as f64 * 100.0)
 }
 
-/// One reading of `pid`, only while it is still the process started at `t0`.
+/// One reading of the tracked process and all of its descendants, only while the tracked process
+/// is still the one started at `t0`.
+///
+/// A headless Cordial client is `cage`, whose child is the actual `cordial-run` engine. Reading
+/// only the tracked PID reported the cage process (~230 MB RSS / ~40 MB PSS) instead of the
+/// client. Summing PSS is safe: a shared page is divided between its mappers, so the total is
+/// still counted once.
 pub fn read(pid: u32, t0: u64) -> Option<Reading> {
     if start_time(pid) != Some(t0) {
         return None;
     }
+    let mut family = vec![pid];
+    family.extend(descendants(pid));
+    let mut out = Reading { cpu: 0, working_set: 0, private: 0, read: 0, write: 0 };
+    let mut seen = false;
+    for p in family {
+        let Some(r) = read_one(p) else { continue };
+        seen = true;
+        out.cpu = out.cpu.saturating_add(r.cpu);
+        out.working_set = out.working_set.saturating_add(r.working_set);
+        out.private = out.private.saturating_add(r.private);
+        out.read = out.read.saturating_add(r.read);
+        out.write = out.write.saturating_add(r.write);
+    }
+    seen.then_some(out)
+}
+
+fn read_one(pid: u32) -> Option<Reading> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let after = stat.rsplit_once(')')?.1;
     let f: Vec<&str> = after.split_whitespace().collect();

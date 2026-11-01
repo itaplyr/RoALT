@@ -148,6 +148,8 @@ pub fn start(
     _headless: bool,
     _keep_running_on_close: bool,
     _fps_cap: u32,
+    _linux_flags: &[(&str, &str)],
+    _headless_resolution: Option<(u32, u32)>,
 ) -> Result<(u32, u64)> {
     let dir = exe.path.parent().ok_or_else(|| AppError::Internal(tr!("Roblox's folder is unknown.")))?;
     let mut cmd = Command::new(&exe.path);
@@ -332,7 +334,7 @@ mod tests {
         // follow the first one, space-separated.
         let arg = Secret::new(format!("/c cd > \"{}\" & ping -n", out.display()));
 
-        let (pid, started) = start(&exe, &arg, None, &["2".into(), "127.0.0.1".into(), ">nul".into()], 0, 0, "u", "u", &Secret::new("x"), 0, false, false, 0).unwrap();
+        let (pid, started) = start(&exe, &arg, None, &["2".into(), "127.0.0.1".into(), ">nul".into()], 0, 0, "u", "u", &Secret::new("x"), 0, false, false, 0, &[], None).unwrap();
         assert!(pid > 0 && started > 0);
         let deadline = Instant::now() + Duration::from_secs(10);
         let written = loop {

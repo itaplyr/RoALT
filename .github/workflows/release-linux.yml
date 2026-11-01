@@ -1,0 +1,79 @@
+name: Release Linux
+
+# Four-part tags are Linux-fork releases: v<upstream version>.<linux revision>, e.g. v0.9.0.1.
+# The Windows workflow ignores these tags. Draft releases are reviewed and published by hand.
+on:
+  push:
+    tags: ["v*.*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-linux-${{ github.ref }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check tag
+        if: github.ref_type == 'tag'
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          revision=$(grep -oP 'LINUX_REVISION: u32 = \K[0-9]+' src-tauri/src/self_update_linux.rs)
+          if [[ "$GITHUB_REF_NAME" != "v${version}.${revision}" ]]; then
+            echo "::error::tag $GITHUB_REF_NAME is not v$version.$revision (upstream version and LINUX_REVISION)"
+            exit 1
+          fi
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf libssl-dev libxdo-dev
+      - run: npm ci
+      - run: npm run build
+      - run: cargo build --release --manifest-path src-tauri/Cargo.toml
+      - name: Package
+        run: |
+          mkdir -p dist-linux
+          cp src-tauri/target/release/roalt dist-linux/roalt-linux-x86_64
+          cp scripts/install-linux.sh dist-linux/install-linux.sh
+          chmod +x dist-linux/roalt-linux-x86_64 dist-linux/install-linux.sh
+          cd dist-linux
+          sha256sum roalt-linux-x86_64 > roalt-linux-x86_64.sha256
+          sha256sum -- * > SHA256SUMS.txt
+      - name: Draft release
+        if: github.ref_type == 'tag'
+        working-directory: dist-linux
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cat > ../notes.md <<EOF
+          RoALT Linux $TAG.
+
+          Run \`install-linux.sh\` to install or update. It installs Cage and Cordial when missing, puts RoALT in \`~/.local/bin\`, and adds a desktop entry.
+
+          The binary's SHA-256 is in \`roalt-linux-x86_64.sha256\` and \`SHA256SUMS.txt\`.
+
+          ~~~
+          $(cat SHA256SUMS.txt)
+          ~~~
+          EOF
+          gh release create "$TAG" ./* --draft --target "$GITHUB_SHA" --title "RoALT $TAG" --notes-file ../notes.md

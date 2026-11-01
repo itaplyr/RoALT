@@ -27,7 +27,7 @@ const MODES: [&str; 3] = ["FFlagDebugGraphicsPreferD3D11", "FFlagDebugGraphicsPr
 
 /// The allowlisted flags for `r`, as strings like Bloxstrap writes them (pure). "Roblox default" is
 /// no flag at all, so a user's own value for it stays.
-fn flags_of(r: &RenderFlags) -> Vec<(&'static str, &'static str)> {
+pub(crate) fn flags_of(r: &RenderFlags) -> Vec<(&'static str, &'static str)> {
     let mut f = vec![
         ("DFIntCSGLevelOfDetailSwitchingDistance", "0"),
         ("DFIntCSGLevelOfDetailSwitchingDistanceL12", "0"),
@@ -67,6 +67,21 @@ fn flags_of(r: &RenderFlags) -> Vec<(&'static str, &'static str)> {
     }
     if r.pause_voxelizer {
         f.push(("DFFlagDebugPauseVoxelizer", "True"));
+    }
+    f
+}
+
+/// The flags that make sense on Cordial/Linux. The graphics-backend flags are Windows-only in
+/// practice (Cordial chooses the backend itself), so they are left out. `low` maps the Windows
+/// Graphics Quality row to the engine's quality override; `lighter` is the same set the Windows
+/// path uses.
+pub(crate) fn flags_for_linux(low: bool, lighter: Option<&RenderFlags>) -> Vec<(&'static str, &'static str)> {
+    let mut f = Vec::new();
+    if low {
+        f.push(("DFIntDebugFRMQualityLevelOverride", "1"));
+    }
+    if let Some(r) = lighter {
+        f.extend(flags_of(r).into_iter().filter(|(k, _)| !MODES.contains(k)));
     }
     f
 }
@@ -312,5 +327,21 @@ mod tests {
         assert!(apply(&exe, &r).is_none());
         assert_eq!(std::fs::read(&file).unwrap(), b"oops");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod linux_flags_tests {
+    use super::*;
+
+    #[test]
+    fn cordial_gets_quality_and_light_flags_but_no_backend_choice() {
+        let light = RenderFlags { gray_sky: true, ..RenderFlags::default() };
+        let f = flags_for_linux(true, Some(&light));
+        let get = |name: &str| f.iter().find(|(k, _)| *k == name).map(|(_, v)| *v);
+        assert_eq!(get("DFIntDebugFRMQualityLevelOverride"), Some("1"));
+        assert_eq!(get("FFlagDebugSkyGray"), Some("True"));
+        assert!(MODES.iter().all(|m| get(m).is_none()), "the backend stays Cordial's choice");
+        assert!(flags_for_linux(false, None).is_empty());
     }
 }

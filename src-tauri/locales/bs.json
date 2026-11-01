@@ -272,7 +272,6 @@
   "RoALT is up to date.": "RoALT je ažuran.",
   "The downloaded RoALT installer was not run: its signature file is malformed.": "Preuzeti RoALT instalater nije pokrenut: njegova datoteka potpisa je neispravna.",
   "Could not start RoALT's installer: {why}": "RoALT instalater se nije mogao pokrenuti: {why}",
-  "RoALT updates are handled by your Linux package or build. Update it the way you installed it.": "Ažuriranja RoALT-a obrađuje vaš Linux paket ili build. Ažurirajte ga onako kako ste ga instalirali.",
   "That folder's name can't be used.": "Ime te mape se ne može koristiti.",
   "That folder already has a RoALT database.": "Ta mapa već ima RoALT bazu podataka.",
   "Favourite names need 1 to 60 characters.": "Ime favorita mora imati 1 do 60 znakova.",
@@ -362,5 +361,7 @@
     "one": "{n} alt · igara: {games}",
     "few": "{n} alta · igara: {games}",
     "other": "{n} altova · igara: {games}"
-  }
+  },
+  "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.": "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.",
+  "The downloaded update failed its SHA-256 check.": "The downloaded update failed its SHA-256 check."
 }

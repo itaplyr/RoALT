@@ -12,12 +12,13 @@
 Status is for this Linux fork, not upstream Windows RoALT. Green means working or complete; gray means
 partial, untested, missing, or not applicable. The image covers accounts, launching, multi-client, headless
 mode, previews, recovery, servers, FPS, Discord, limits, metrics, window controls, updates, anti-AFK,
-bandwidth, resizing, Windows Hello, and self-update.
+bandwidth, resizing, re-authentication, self-update, interface, languages, Max alts, usage stats,
+and logs.
 
 RoALT is a local-only Roblox account manager and multi-client launcher, running as a Tauri desktop app.
 This branch is the Linux fork: it launches Roblox through **Cordial** and keeps cookies encrypted on
-your machine. It talks only to Roblox and your own Discord webhook if you configure one. Self-update is
-disabled on Linux.
+your machine. It talks only to Roblox, GitHub for Linux release updates, and your own Discord webhook
+if you configure one.
 
 No RoALT account, no RoALT server, no telemetry.
 
@@ -38,7 +39,16 @@ RoALT finds `cordial-run` on `PATH` and uses the newest build under Cordial's ca
 
 ## Install
 
-There is no Linux installer or prebuilt package in this fork. Build it from source:
+Install the latest Linux release with the installer script:
+
+```bash
+curl -fsSL https://github.com/itaplyr/RoALT/releases/latest/download/install-linux.sh | bash
+```
+
+It installs Cage and Cordial when missing, puts RoALT in `~/.local/bin`, and adds a desktop entry.
+To upgrade later, run the same command again or use the in-app update banner.
+
+Build from source instead:
 
 ```bash
 git clone https://github.com/itaplyr/RoALT.git
@@ -88,8 +98,9 @@ That avoids Cordial's profile picker and keeps each account isolated.
 ### FPS cap
 
 The **Performance → FPS cap** setting is applied on Linux through Cordial. It can still be ignored by
-some Cordial builds or after the client rewrites its settings, so treat it as best effort. The
-precedence is:
+some Cordial builds or after the client rewrites its settings, so treat it as best effort. RoALT also
+passes the lighter-rendering and lowest-graphics flags through Cordial; some builds may ignore them.
+The FPS precedence is:
 
 1. the cap chosen for this launch on the Play page;
 2. the account's own cap;
@@ -120,7 +131,9 @@ A true headless client has no host window to reveal. That means:
 - **Minimize** on a windowed client also switches it to headless, because the window's memory cannot be
   reclaimed in place.
 
-Headless clients also get `CORDIAL_AUDIO=aaudio-refuse`, so FMOD opens no audio stream.
+Headless clients also get `CORDIAL_AUDIO=aaudio-refuse`, so FMOD opens no audio stream. Their render
+resolution comes from **Performance → Headless resolution** (default `640x360`) and is passed to
+Cordial as `CORDIAL_RESOLUTION`; a new value applies the next time a headless client starts.
 
 ### Window controls
 
@@ -152,15 +165,15 @@ RoALT does not implement Windows Hello on Linux. Master-password re-authenticati
 | Accounts, avatars, presence, Robux, friends, groups, aliases, notes | Works |
 | Roblox sign-in through WebKitGTK, cookie import, cookie checks | Works |
 | Launch one account or many, same-server batches, favourites | Partial: launching does not always open the game directly |
-| Auto-rejoin, auto-restart, crash breaker, rejoin history | Untested |
+| Auto-rejoin, auto-restart, crash breaker, rejoin history | Verified: closing a client reopened it as configured |
 | Server browser and private servers | Works |
 | Home previews, live state, uptime, CPU, private memory, disk I/O | Works through `/proc` and Cordial devctl |
 | Per-client CPU niceness, core affinity, efficiency priority | Works through the Linux scheduler |
 | Adaptive limits, memory throttle, trim scheduling | Works; trim itself is a no-op on Linux |
-| FPS cap and lowest graphics (Cordial) | Partial: FPS is best effort and sometimes ignored; graphics depend on the Cordial build |
+| FPS cap and graphics flags (Cordial) | Partial: FPS is best effort; RoALT passes the render flags through `CORDIAL_FLAGS`, but some builds may ignore them |
 | Headless clients under cage | Partial: no host window, but headless handling can still be improved |
 | Hyprland focus, minimize, restore, hidden workspaces | Works |
-| Discord alerts and rich presence | Untested |
+| Discord alerts and rich presence | Verified |
 | Encrypted `.roalt` backups, recovery codes, performance profiles | Works |
 | Localization and themes | Works |
 
@@ -171,14 +184,28 @@ RoALT does not implement Windows Hello on Linux. Master-password re-authenticati
 - **GPU metrics are not available.** CPU, memory and disk I/O are sampled from `/proc`.
 - **Free per-window resizing is not implemented.** The compositor owns window geometry.
 - **Windows Hello is not available.** Use a master password for re-authentication.
-- **RoALT does not self-update.** Update it the way you built or installed it.
-- **Roblox client updates are handled by Cordial and have not been tested here.** RoALT does not run
-  Roblox's Windows installer.
+- **RoALT self-update replaces only the binary.** Use the installer script or reinstall when
+  Cordial, Cage or the desktop entry needs changing.
+- **Roblox client updates are handled automatically by Cordial.** RoALT does not run Roblox's Windows
+  installer.
 - **`Take over` and the Windows singleton lock do not apply.** Cordial profiles provide multi-instance.
 - **True headless clients cannot be shown without a restart.** They have no host window, and headless
   handling still has room for improvement.
-- **Rejoin, Discord, and update flows are not tested yet.** The UI may expose them, but do not rely on
-  them until they have been verified.
+
+## Linux versioning and releases
+
+Linux builds use four-part tags:
+
+```text
+v0.9.0.1
+v0.9.0.2
+v0.9.1.1
+```
+
+The first three parts follow the upstream RoALT version; the last part is the Linux
+revision. This keeps Linux releases independent of upstream's release tags. See
+[`docs/RELEASING-LINUX.md`](docs/RELEASING-LINUX.md) for the release steps, assets and
+auto-update behavior.
 
 ## Development
 

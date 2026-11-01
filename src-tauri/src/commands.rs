@@ -1825,8 +1825,8 @@ pub async fn multi_instance_take_over(app: AppHandle) -> Result<MultiInstanceSta
     .map_err(|e| AppError::Internal(e.to_string()))?
 }
 
-/// Closes every Roblox client, tracked or not (including Roblox's tray process), then takes
-/// the multi-instance lock if it is enabled.
+/// Closes every Cordial client, tracked or not, then takes the multi-instance lock if it is
+/// enabled. On Linux this deliberately leaves Sober and Wine clients alone.
 #[tauri::command]
 pub async fn roblox_close_all(s: State<'_, App>, force: bool) -> Result<MultiInstanceStatus> {
     close_roblox(&s, force, false).await
@@ -1894,7 +1894,7 @@ async fn close_roblox(s: &App, force: bool, keep_closing: bool) -> Result<MultiI
     for i in s.tracker.list() {
         s.tracker.mark_closing(&i.id);
     }
-    let procs = crate::instances::process::roblox_processes();
+    let procs = crate::instances::process::cordial_processes();
     let targets = procs.iter().map(|p| (p.pid, Some(p.start_time))).collect();
     for (p, r) in procs.iter().zip(close_all(targets, force, grace(s)).await?) {
         if let Err(e) = r {
@@ -2390,6 +2390,13 @@ pub(crate) fn apply_performance(v: &mut Settings, patch: &SettingsPatch) -> Resu
         let size = (patch.micro_width.unwrap_or(v.micro_width), patch.micro_height.unwrap_or(v.micro_height));
         check_window_size(size)?;
         (v.micro_width, v.micro_height) = size;
+    }
+    if patch.headless_width.is_some() || patch.headless_height.is_some() {
+        let size = (patch.headless_width.unwrap_or(v.headless_width), patch.headless_height.unwrap_or(v.headless_height));
+        if !(320..=7680).contains(&size.0) || !(240..=4320).contains(&size.1) {
+            return Err(AppError::Invalid(tr!("A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.")));
+        }
+        (v.headless_width, v.headless_height) = size;
     }
     if let Some(m) = patch.mem_restart_mb {
         if m != 0 && !(512..=65_536).contains(&m) {

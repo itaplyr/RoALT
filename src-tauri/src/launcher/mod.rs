@@ -183,6 +183,7 @@ pub async fn launch(
     let account = s.db.account(account_id)?;
     let fps = fps_cap.or(account.fps_cap).unwrap_or(settings.fps_cap);
     let undo = client_settings::apply(&s.db, fps, settings.low_graphics && !account.full_quality);
+    #[cfg(windows)]
     let flags = match (settings.lighter_rendering && !account.full_quality, exe.bootstrapper) {
         (false, _) => None,
         (true, true) => {
@@ -191,6 +192,12 @@ pub async fn launch(
         }
         (true, false) => flags::apply(&exe.path, &settings.render_flags),
     };
+    #[cfg(not(windows))]
+    let flags: Option<flags::Undo> = None;
+    let linux_flags = flags::flags_for_linux(
+        settings.low_graphics && !account.full_quality,
+        (settings.lighter_rendering && !account.full_quality).then_some(&settings.render_flags),
+    );
     let waiting = undo.is_some() || flags.is_some();
     let put_back = move |undo: Option<client_settings::Undo>| {
         if let Some(undo) = undo {
@@ -200,6 +207,7 @@ pub async fn launch(
             flags.put_back();
         }
     };
+    let headless_resolution = headless.then_some((settings.headless_width, settings.headless_height));
     let since = std::time::SystemTime::now();
     let mobile = uri::mobile_join_url(&join);
     let started = client::start(
@@ -216,6 +224,8 @@ pub async fn launch(
         headless,
         settings.keep_running_on_close,
         fps,
+        &linux_flags,
+        headless_resolution,
     );
     match &started {
         Ok((pid, pid_start)) if waiting => {

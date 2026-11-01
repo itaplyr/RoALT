@@ -159,6 +159,10 @@ lighterRendering: boolean, renderFlags: RenderFlags,
  */
 microWidth: number, microHeight: number,
 /**
+ * Linux/Cordial: render resolution for headless clients. Cordial reads it at launch.
+ */
+headlessWidth: number, headlessHeight: number,
+/**
  * Each new client goes tiny as soon as it has a window, unless its account is Full quality.
  */
 tinyOnLaunch: boolean,

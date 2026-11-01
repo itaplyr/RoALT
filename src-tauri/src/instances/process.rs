@@ -40,6 +40,11 @@ pub fn roblox_processes() -> Vec<ProcInfo> {
     named(CLIENT_EXE)
 }
 
+/// Windows closes Roblox itself; there is no separate Cordial process family.
+pub fn cordial_processes() -> Vec<ProcInfo> {
+    roblox_processes()
+}
+
 /// Windows has no Cordial/cage profiles to scan.
 pub fn profile_of(_pid: u32) -> Option<i64> {
     None

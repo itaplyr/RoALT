@@ -393,7 +393,8 @@
   "Could not write the Cordial identity store: {why}": "Could not write the Cordial identity store: {why}",
   "Headless launch needs Cage. Install cage, or turn Headless off in Settings.": "Headless launch needs Cage. Install cage, or turn Headless off in Settings.",
   "Roblox updates are handled by Cordial or Sober on Linux. Update the launcher with your package manager, then launch again.": "Roblox updates are handled by Cordial or Sober on Linux. Update the launcher with your package manager, then launch again.",
-  "RoALT updates are handled by your Linux package or build. Update it the way you installed it.": "RoALT updates are handled by your Linux package or build. Update it the way you installed it.",
   "Set a master password in Settings to protect cookies on this Linux desktop.": "Set a master password in Settings to protect cookies on this Linux desktop.",
-  "Could not set Roblox's cookie: {why}": "Could not set Roblox's cookie: {why}"
+  "Could not set Roblox's cookie: {why}": "Could not set Roblox's cookie: {why}",
+  "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.": "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.",
+  "The downloaded update failed its SHA-256 check.": "The downloaded update failed its SHA-256 check."
 }

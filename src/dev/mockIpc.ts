@@ -77,7 +77,7 @@ let settings: Settings = {
   antiAfk: { enabled: false, intervalMin: 15, mode: "focus" },
   discord: { crash: true, hang: true, memRestart: true, disconnect: true, restart: true, breaker: true, batchDone: true, launch: false, statusEveryMin: 0 },
   autoUpdate: false, selfUpdate: true, tabLayout: "top", discordPresence: true, minimizeOnLaunch: false, liveHiddenPreviews: true, microWidth: 320, microHeight: 240, tinyOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0, lowGraphics: true, skipSplash: false, lighterRendering: true, renderFlags: { msaa: "x1", texture: "lowest", mode: "default", graySky: false, noGrass: true, lowestFrm: true, pauseVoxelizer: false },
-  allowPublicNetworks: true, language: "", headless: false, keepRunningOnClose: false,
+  allowPublicNetworks: true, language: "", headless: false, keepRunningOnClose: false, headlessWidth: 640, headlessHeight: 360,
 };
 
 // Outdated, so Settings offers the update and the Launch view warns before a batch.
