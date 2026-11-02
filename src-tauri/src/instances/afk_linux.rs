@@ -5,7 +5,6 @@
 
 use tauri::AppHandle;
 
-use crate::model::AfkMode;
 
 const IDLE_MS: u32 = 5_000;
 
@@ -23,12 +22,12 @@ pub enum Plan {
     Press(Vec<String>),
 }
 
-pub fn plan(clients: &[AfkClient], now: i64, interval_min: u32, idle_ms: u32, mode: AfkMode) -> Plan {
+pub fn plan(clients: &[AfkClient], now: i64, interval_min: u32, idle_ms: u32) -> Plan {
     let every = i64::from(interval_min) * 60_000;
     let due: Vec<String> = clients.iter().filter(|c| now - c.since >= every).map(|c| c.id.clone()).collect();
     if due.is_empty() {
         Plan::Wait
-    } else if mode == AfkMode::Focus && idle_ms < IDLE_MS {
+    } else if idle_ms < IDLE_MS {
         Plan::Retry
     } else {
         Plan::Press(due)
@@ -50,8 +49,8 @@ mod tests {
     #[test]
     fn only_due_clients_are_pressed() {
         let clients = [c("a", 0), c("b", 10 * 60_000)];
-        assert_eq!(plan(&clients, 11 * 60_000, 10, 10_000, AfkMode::Background), Plan::Press(vec!["a".into()]));
-        assert_eq!(plan(&clients, 11 * 60_000, 10, 0, AfkMode::Focus), Plan::Retry);
-        assert_eq!(plan(&clients, 0, 10, 0, AfkMode::Focus), Plan::Wait);
+        assert_eq!(plan(&clients, 11 * 60_000, 10, 10_000), Plan::Press(vec!["a".into()]));
+        assert_eq!(plan(&clients, 11 * 60_000, 10, 0), Plan::Retry);
+        assert_eq!(plan(&clients, 0, 10, 0), Plan::Wait);
     }
 }

@@ -1,41 +1,36 @@
-//! Anti-AFK. Roblox disconnects a player after 20 minutes without input (reason 267). Every
+//! Anti-AFK. Roblox disconnects a player after 20 minutes without input (reason 278). Every
 //! `Settings.anti_afk.interval_min` minutes, each client in a game that hasn't opted out
-//! (`Instance.anti_afk`) gets one key press, the way `Settings.anti_afk.mode` says:
-//! - Focus: the client is brought to the front for a moment, gets the press through `SendInput`
-//!   of Space (by scan code, as a keyboard sends it), and the window that was in front gets the focus
-//!   back. One client at a time, about 100 ms each. Only while nobody has touched the keyboard or
-//!   mouse for 5 s (`GetLastInputInfo`); otherwise it tries again 30 s later. Hidden clients
-//!   (`window`) get it invisibly. A minimized one, asleep or minimized by hand, wakes as a hidden one
-//!   first, up to about 2 s each, so Background suits many clients. A hidden one goes back to the
-//!   bottom of the z-order after its press, and to sleep soon after.
-//! - Background: WM_ACTIVATE, then WM_KEYDOWN/WM_KEYUP for Tab are posted to the client's
-//!   window; the focus never moves, so it runs while the user is at the PC and in minimized
-//!   clients too. Roblox may not count posted input as activity in every game.
+//! (`Instance.anti_afk`) is brought to the front for a moment, gets a real F13 press through
+//! `SendInput` (by scan code, as a keyboard sends it; no game binds F13, so the character
+//! doesn't move), and the window that was in front gets the focus back. One client at a time,
+//! about 100 ms each. Only while nobody has touched the keyboard or mouse for 5 s
+//! (`GetLastInputInfo`); otherwise it tries again 30 s later. A minimized client is restored for
+//! its press (`window::unhide`) and minimized again.
 //!
-//! Nothing is injected into or read from the client; auto-rejoin on the 267 kick stays the
+//! Measured 2026-11-02 on minimized clients over 21 minutes: keys posted to the window
+//! (WM_KEYDOWN, with or without WM_ACTIVATE) and focus without a key don't count as activity
+//! and the client is kicked; a real Space or F13 does. Games with their own idle handling
+//! teleport such clients back to spawn before the kick, which stops egg hatching.
+//!
+//! Nothing is injected into or read from the client; auto-rejoin on the 278 kick stays the
 //! fallback.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::sleep;
 use std::time::Duration;
 
 use tauri::{AppHandle, Manager};
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::HWND;
 use windows::Win32::System::SystemInformation::GetTickCount;
 use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetLastInputInfo, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP,
     KEYEVENTF_SCANCODE, LASTINPUTINFO, MOUSEEVENTF_MOVE, MOUSEINPUT, SendInput, VIRTUAL_KEY,
 };
-use windows::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, PostMessageW, SetForegroundWindow, WA_ACTIVE, WA_INACTIVE,
-    WM_ACTIVATE, WM_KEYDOWN, WM_KEYUP,
-};
+use windows::Win32::UI::WindowsAndMessaging::{BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow};
 
 use super::{process, window};
 use crate::App;
 use crate::commands::{instances_changed, now_ms};
-use crate::model::AfkMode;
 
 /// No keyboard or mouse input for this long counts as the user being away.
 const IDLE_MS: u32 = 5_000;
@@ -43,20 +38,10 @@ const TICK: Duration = Duration::from_secs(10);
 /// After the user was active, or a client couldn't be brought to the front.
 const RETRY: Duration = Duration::from_secs(30);
 const BETWEEN: Duration = Duration::from_millis(100);
-/// Space's set-1 scan code.
-const SPACE: u16 = 0x39;
-/// Tab, for background mode: posted Space counts as activity less reliably than Tab.
-const TAB: u16 = 0x0F;
-const VK_TAB: usize = 0x09;
-/// Background mode, around its press: a capped or sleeping client may draw less than one frame in
-/// a shorter time, and would see activate, key and deactivate all at once.
-const POST_SETTLE: Duration = Duration::from_millis(200);
-const POST_HOLD: Duration = Duration::from_millis(300);
-/// After waking a client, before its press: it has to be taking input again.
-// ponytail: a guess; tune from real clients if pressed clients still get kicked.
-const AFTER_WAKE: Duration = Duration::from_millis(300);
-/// A press is under way: a hidden client in front is this, not something to get away from (`resize`).
-pub(super) static PRESSING: AtomicBool = AtomicBool::new(false);
+/// F13's set-1 scan code.
+const F13: u16 = 0x64;
+/// A restored client's time to draw again before it takes the focus.
+const RESTORED: Duration = Duration::from_millis(300);
 
 /// A client anti-AFK may press keys in (`Tracker::afk_clients`).
 #[derive(Clone, Debug, PartialEq)]
@@ -78,14 +63,14 @@ pub enum Plan {
     Press(Vec<String>),
 }
 
-/// Which clients are due (`interval_min` since their `since`); in focus mode gated on the user
-/// having been idle for 5 s, in background mode not (pure).
-pub fn plan(clients: &[AfkClient], now: i64, interval_min: u32, idle_ms: u32, mode: AfkMode) -> Plan {
+/// Which clients are due (`interval_min` since their `since`), gated on the user having been
+/// idle for 5 s (pure).
+pub fn plan(clients: &[AfkClient], now: i64, interval_min: u32, idle_ms: u32) -> Plan {
     let every = i64::from(interval_min) * 60_000;
     let due: Vec<String> = clients.iter().filter(|c| now - c.since >= every).map(|c| c.id.clone()).collect();
     if due.is_empty() {
         Plan::Wait
-    } else if mode == AfkMode::Focus && idle_ms < IDLE_MS {
+    } else if idle_ms < IDLE_MS {
         Plan::Retry
     } else {
         Plan::Press(due)
@@ -119,27 +104,11 @@ fn tick(app: &AppHandle) -> Duration {
     }
     // A hung client would block this one thread, and the others would get kicked for idling.
     let clients: Vec<_> = s.tracker.afk_clients().into_iter().filter(|c| !process::hung(c.pid)).collect();
-    let ids = match plan(&clients, now_ms(), v.anti_afk.interval_min, idle_ms(), v.anti_afk.mode) {
+    let ids = match plan(&clients, now_ms(), v.anti_afk.interval_min, idle_ms()) {
         Plan::Wait => return TICK,
         Plan::Retry => return RETRY,
         Plan::Press(ids) => ids,
     };
-    if v.anti_afk.mode == AfkMode::Background {
-        for c in clients.iter().filter(|c| ids.contains(&c.id)) {
-            let Some((hwnd, minimized)) = process::main_window(c.pid) else {
-                log::debug!("anti-AFK: instance {} has no main window", c.id);
-                continue;
-            };
-            if post_press(hwnd) {
-                log::info!("anti-AFK: posted Tab to instance {} (minimized: {minimized})", c.id);
-                s.tracker.mark_afk(&c.id, now_ms());
-            } else {
-                log::info!("anti-AFK: couldn't post a key to instance {}", c.id);
-            }
-        }
-        instances_changed(app);
-        return TICK;
-    }
     let mut failed = false;
     // Our own SendInput moves GetLastInputInfo too, so "the user came back" is any input newer
     // than our last injection.
@@ -154,22 +123,19 @@ fn tick(app: &AppHandle) -> Duration {
             continue;
         };
         if minimized {
-            if !window::wake_for_press(c.pid, hwnd) {
-                failed = true;
-                log::info!("anti-AFK: instance {} couldn't be woken for its press", c.id);
-                continue;
-            }
-            sleep(AFTER_WAKE);
-            // Waking took a while: the user may be back.
-            if last_input() != ours {
-                failed = true;
-                break;
-            }
+            window::unhide(c.pid, hwnd);
+            sleep(RESTORED);
         }
         let r = press(hwnd);
+        if minimized {
+            window::hide(hwnd);
+        }
         ours = last_input();
         match r {
-            Pressed::Yes => s.tracker.mark_afk(&c.id, now_ms()),
+            Pressed::Yes => {
+                log::info!("anti-AFK: pressed F13 in instance {} (minimized: {minimized})", c.id);
+                s.tracker.mark_afk(&c.id, now_ms());
+            }
             Pressed::No => {
                 failed = true;
                 log::info!("anti-AFK: instance {} couldn't be brought to the front", c.id);
@@ -211,16 +177,8 @@ enum Pressed {
     Interrupted,
 }
 
-/// Space in `hwnd`, then the focus back where it was, and a hidden client back down.
+/// F13 in `hwnd`, then the focus back where it was.
 fn press(hwnd: HWND) -> Pressed {
-    PRESSING.store(true, Ordering::Relaxed);
-    let pressed = press_key(hwnd);
-    window::back_down(hwnd);
-    PRESSING.store(false, Ordering::Relaxed);
-    pressed
-}
-
-fn press_key(hwnd: HWND) -> Pressed {
     // SAFETY: reads which window is in front.
     let prev = unsafe { GetForegroundWindow() };
     if !to_front(hwnd) {
@@ -229,14 +187,14 @@ fn press_key(hwnd: HWND) -> Pressed {
     // Never into another window: only while the client is still the one in front.
     // SAFETY: reads which window is in front.
     let sent = unsafe { GetForegroundWindow() } == hwnd;
-    // Input other than ours between Space down and up: the user is back.
+    // Input other than ours between F13 down and up: the user is back.
     let mut user = false;
     if sent {
-        key(VIRTUAL_KEY(0), SPACE, KEYEVENTF_SCANCODE);
+        key(VIRTUAL_KEY(0), F13, KEYEVENTF_SCANCODE);
         let after_down = last_input();
         sleep(Duration::from_millis(40));
         user = last_input() != after_down;
-        key(VIRTUAL_KEY(0), SPACE, KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP);
+        key(VIRTUAL_KEY(0), F13, KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP);
         sleep(Duration::from_millis(40));
     }
     if !prev.is_invalid() && prev != hwnd && !to_front(prev) {
@@ -248,39 +206,6 @@ fn press_key(hwnd: HWND) -> Pressed {
         (true, false) => Pressed::Yes,
         (false, false) => Pressed::No,
     }
-}
-
-/// Tab posted to `hwnd` without touching the focus: WM_ACTIVATE(WA_ACTIVE) first, since a
-/// client that thinks it is in the background may drop keys, and WA_INACTIVE after unless it
-/// really is in front. False if Windows wouldn't queue the messages (window gone or hung).
-fn post_press(hwnd: HWND) -> bool {
-    // lParam: repeat count 1, scan code in bits 16-23; key up also sets the previous-state and
-    // transition bits (30, 31).
-    let down = LPARAM(1 | ((TAB as isize) << 16));
-    let up = LPARAM(down.0 | (1 << 30) | (1 << 31));
-    // SAFETY: PostMessageW only queues a message to a top-level window handle; one that is gone
-    // just fails. None of these messages carries a pointer.
-    let post = |msg, w: usize, l: LPARAM| unsafe { PostMessageW(Some(hwnd), msg, WPARAM(w), l) }.is_ok();
-    // SAFETY: reads which window is in front.
-    let front = unsafe { GetForegroundWindow() } == hwnd;
-    if !front {
-        if !post(WM_ACTIVATE, WA_ACTIVE as usize, LPARAM(0)) {
-            return false;
-        }
-        sleep(POST_SETTLE);
-    }
-    let ok = post(WM_KEYDOWN, VK_TAB, down);
-    sleep(POST_HOLD);
-    let ok = ok && post(WM_KEYUP, VK_TAB, up);
-    if !front {
-        sleep(POST_SETTLE);
-        // The user may have brought it to the front meanwhile.
-        // SAFETY: reads which window is in front.
-        if unsafe { GetForegroundWindow() } != hwnd {
-            post(WM_ACTIVATE, WA_INACTIVE as usize, LPARAM(0));
-        }
-    }
-    ok
 }
 
 /// Brings `hwnd` to the front: plainly; else attached to the input of the window in front
@@ -347,19 +272,16 @@ mod tests {
         let clients = [client("a", 0), client("b", 10 * min), client("c", 15 * min + 1)];
         let ids = |v: &[&str]| Plan::Press(v.iter().map(|s| s.to_string()).collect());
         // Nobody due yet.
-        assert_eq!(plan(&clients, 15 * min - 1, 15, 60_000, AfkMode::Focus), Plan::Wait);
-        assert_eq!(plan(&[], 99 * min, 15, 60_000, AfkMode::Focus), Plan::Wait);
+        assert_eq!(plan(&clients, 15 * min - 1, 15, 60_000), Plan::Wait);
+        assert_eq!(plan(&[], 99 * min, 15, 60_000), Plan::Wait);
         // Due exactly at the interval.
-        assert_eq!(plan(&clients, 15 * min, 15, 60_000, AfkMode::Focus), ids(&["a"]));
-        assert_eq!(plan(&clients, 25 * min, 15, 5_000, AfkMode::Focus), ids(&["a", "b"]));
+        assert_eq!(plan(&clients, 15 * min, 15, 60_000), ids(&["a"]));
+        assert_eq!(plan(&clients, 25 * min, 15, 5_000), ids(&["a", "b"]));
         // The user touched the keyboard or mouse within 5 s: later.
-        assert_eq!(plan(&clients, 25 * min, 15, 4_999, AfkMode::Focus), Plan::Retry);
-        assert_eq!(plan(&clients, 25 * min, 15, 0, AfkMode::Focus), Plan::Retry);
+        assert_eq!(plan(&clients, 25 * min, 15, 4_999), Plan::Retry);
+        assert_eq!(plan(&clients, 25 * min, 15, 0), Plan::Retry);
         // Nobody due wins over a busy user: nothing to retry.
-        assert_eq!(plan(&clients, 5 * min, 15, 0, AfkMode::Focus), Plan::Wait);
-        assert_eq!(plan(&clients, 31 * min, 1, 10_000, AfkMode::Focus), ids(&["a", "b", "c"]));
-        // Background mode doesn't wait for the user to be away; nobody due is still nothing.
-        assert_eq!(plan(&clients, 25 * min, 15, 0, AfkMode::Background), ids(&["a", "b"]));
-        assert_eq!(plan(&clients, 5 * min, 15, 0, AfkMode::Background), Plan::Wait);
+        assert_eq!(plan(&clients, 5 * min, 15, 0), Plan::Wait);
+        assert_eq!(plan(&clients, 31 * min, 1, 10_000), ids(&["a", "b", "c"]));
     }
 }

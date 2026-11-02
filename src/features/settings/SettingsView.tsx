@@ -381,30 +381,10 @@ export function SettingsView({ vault, settings, onPerformance, onRecoveryCode }:
         </Row>
         <Row
           title={t("settings.antiAfk")}
-          hint={t("settings.antiAfkHint")}
+          hint={settings.antiAfk.enabled ? t("settings.antiAfkHowHint") : t("settings.antiAfkHint")}
         >
           <Switch label={t("settings.antiAfk")} checked={settings.antiAfk.enabled} onChange={(enabled) => set.mutate({ antiAfk: { ...settings.antiAfk, enabled } })} />
         </Row>
-        {settings.antiAfk.enabled && (
-          <Row
-            title={t("settings.antiAfkHow")}
-            hint={
-              settings.antiAfk.mode === "focus"
-                ? t("settings.antiAfkFocusHint")
-                : t("settings.antiAfkBackgroundHint")
-            }
-          >
-            <Segmented
-              label={t("settings.antiAfkMode")}
-              value={settings.antiAfk.mode}
-              options={[
-                { value: "focus", label: t("settings.antiAfkFocus") },
-                { value: "background", label: t("settings.inBackground") },
-              ]}
-              onChange={(mode) => set.mutate({ antiAfk: { ...settings.antiAfk, mode } })}
-            />
-          </Row>
-        )}
         {settings.antiAfk.enabled && (
           <Row title={t("settings.antiAfkEvery")} hint={t("settings.antiAfkEveryHint")}>
             <NumberField

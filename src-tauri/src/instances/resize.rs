@@ -6,30 +6,22 @@
 //! title bar goes the same way, since Windows' move loop would throw it up to the minimum too.
 //!
 //! What's left of Windows' own loops (keyboard moves, or no hook) `on_event` looks after.
-//!
-//! Hidden clients (`window`) are looked after here too (`on_show_event`): one minimized while its
-//! preview is watched comes straight back as a ghost, and a ghost only comes into view when the user
-//! asks: Alt-Tab, or a press on the taskbar or its thumbnails. Coming to the front alone isn't asking:
-//! anti-AFK does that, and Windows does it when it activates the next window. A ghost that comes to
-//! the front unasked gives up the focus again, so that it can't swallow what the user types.
 
-use std::sync::atomic::Ordering;
-use std::sync::{Mutex, TryLockError};
-use std::time::{Duration, Instant};
+
+use std::sync::Mutex;
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Graphics::Dwm::{DWMWA_CAPTION_BUTTON_BOUNDS, DwmGetWindowAttribute};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
 use windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
 use windows::Win32::UI::WindowsAndMessaging::{
-    EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_SWITCHEND, FindWindowW, GetClassNameW, GetForegroundWindow, WS_CAPTION,
     CallNextHookEx, GA_ROOT, GetAncestor, SW_MAXIMIZE, ShowWindowAsync, MSLLHOOKSTRUCT, SMTO_ABORTIFHUNG, SMTO_BLOCK, SendMessageTimeoutW, SetWindowsHookExW, WH_MOUSE_LL, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_NCHITTEST, WindowFromPoint,
     DispatchMessageW, EVENT_SYSTEM_MOVESIZEEND, EVENT_SYSTEM_MOVESIZESTART, GetCursorPos, GetMessageW, GetWindowRect, GetWindowThreadProcessId, IsZoomed, MSG, OBJID_WINDOW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
     WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
 };
-use windows::core::w;
 
-use super::{afk, window};
+use super::window;
 
 /// The pids of RoALT's clients: no other window is touched.
 static CLIENTS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
@@ -77,13 +69,6 @@ const NO_EDGES: Edges = Edges { left: false, right: false, top: false, bottom: f
 /// `WM_NCHITTEST`'s answer for a title bar.
 const HT_CAPTION: isize = 2;
 static EDGE: Mutex<Option<EdgeDrag>> = Mutex::new(None);
-/// When the user last pressed the taskbar or let go of Alt-Tab, and the window in front then.
-static ASKED: Mutex<Option<(Instant, isize)>> = Mutex::new(None);
-/// A window coming to the front this soon after that is the one the user asked for.
-const ASKED_FOR: Duration = Duration::from_secs(1);
-/// A ghost in front without being asked for gives up the focus after this: Alt-Tab's end may
-/// still be on its way.
-const UNASKED_GRACE: Duration = Duration::from_millis(300);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Edges {
@@ -143,10 +128,6 @@ unsafe extern "system" fn on_mouse(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
                 None => false,
             }
         };
-        // The release too: Windows acts on it, however long the button was held.
-        if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP) && on_taskbar(at) {
-            mark_asked();
-        }
         // Not holding the lock: a client answers in its own time.
         if !under_way
             && msg == WM_LBUTTONDOWN
@@ -183,53 +164,21 @@ fn follow(d: &mut EdgeDrag, msg: u32, at: POINT) -> bool {
     false
 }
 
-/// A window the user picks a client from: the taskbar on any monitor, or a flyout of the shell
-/// (`in_shell`, the taskbar's process), such as the thumbnails of grouped buttons, whose class differs
-/// between Windows builds. File Explorer windows live in that process too but have a caption; the
-/// desktop is no flyout (pure).
-fn is_taskbar(class: &[u16], in_shell: bool, caption: bool) -> bool {
-    let class = String::from_utf16_lossy(class);
-    class == "Shell_TrayWnd" || class == "Shell_SecondaryTrayWnd" || (in_shell && !caption && class != "Progman" && class != "WorkerW")
-}
-
-fn on_taskbar(at: POINT) -> bool {
-    if CLIENTS.lock().unwrap_or_else(|e| e.into_inner()).is_empty() {
-        return false;
+/// Whether `at` is on the window's minimize, maximize or close button, as DWM draws them.
+fn on_caption_buttons(hwnd: HWND, at: POINT) -> bool {
+    let (mut b, mut w) = (RECT::default(), RECT::default());
+    // SAFETY: reads one window's rectangles into locals of the size given.
+    unsafe {
+        DwmGetWindowAttribute(hwnd, DWMWA_CAPTION_BUTTON_BOUNDS, (&raw mut b).cast(), size_of::<RECT>() as u32).is_ok()
+            && GetWindowRect(hwnd, &mut w).is_ok()
+            && in_buttons(b, w, at)
     }
-    let mut class = [0u16; 64];
-    let (mut pid, mut shell) = (0, 0);
-    // SAFETY: read-only window calls that don't reach the window's owner; the rest are locals.
-    let (len, root) = unsafe {
-        let root = GetAncestor(WindowFromPoint(at), GA_ROOT);
-        GetWindowThreadProcessId(root, Some(&mut pid));
-        if let Ok(tray) = FindWindowW(w!("Shell_TrayWnd"), None) {
-            GetWindowThreadProcessId(tray, Some(&mut shell));
-        }
-        (GetClassNameW(root, &mut class), root)
-    };
-    let caption = window::style_of(root) as u32 & WS_CAPTION.0 == WS_CAPTION.0;
-    is_taskbar(&class[..len.max(0) as usize], pid != 0 && pid == shell, caption)
 }
 
-fn asked_lock() -> std::sync::MutexGuard<'static, Option<(Instant, isize)>> {
-    ASKED.lock().unwrap_or_else(|e| e.into_inner())
-}
-
-fn mark_asked() {
-    // SAFETY: reads which window is in front.
-    let front = unsafe { GetForegroundWindow() }.0 as isize;
-    *asked_lock() = Some((Instant::now(), front));
-}
-
-fn asked() -> bool {
-    asked_lock().is_some_and(|(t, _)| t.elapsed() < ASKED_FOR)
-}
-
-/// What is left of the asking when `minimized` starts minimizing: a press on the button of the window
-/// in front was for that, so the window Windows activates next wasn't asked for. Any other window
-/// (the sweep, another app) changes nothing (pure).
-fn asked_after_minimize(asked: Option<(Instant, isize)>, minimized: isize) -> Option<(Instant, isize)> {
-    asked.filter(|a| a.1 != minimized)
+/// `at` (screen) is inside `buttons` (relative to the window at `window`) (pure).
+fn in_buttons(buttons: RECT, window: RECT, at: POINT) -> bool {
+    let (x, y) = (at.x - window.left, at.y - window.top);
+    (buttons.left..buttons.right).contains(&x) && (buttons.top..buttons.bottom).contains(&y)
 }
 
 /// The client edge at `at`, if any.
@@ -251,7 +200,8 @@ fn edge_under(at: POINT) -> Option<EdgeDrag> {
             return None;
         }
         let h = hwnd.0 as isize;
-        let moving = hit as isize == HT_CAPTION && SMALL.lock().unwrap_or_else(|e| e.into_inner()).contains(&h) && !IsZoomed(hwnd).as_bool();
+        // Roblox answers caption for part of its minimize button: a press there is the button's.
+        let moving = hit as isize == HT_CAPTION && !on_caption_buttons(hwnd, at) && SMALL.lock().unwrap_or_else(|e| e.into_inner()).contains(&h) && !IsZoomed(hwnd).as_bool();
         let edges = if moving { NO_EDGES } else { edges_of(hit as isize)? };
         let mut from = RECT::default();
         GetWindowRect(hwnd, &mut from).ok()?;
@@ -392,77 +342,6 @@ fn remember_size(hwnd: HWND) {
     }
 }
 
-/// Shows a ghost the user asked for, if it still is the window in front. On its own thread: this
-/// waits for the client, and the hook's thread watches the whole desktop. Not only for a window that
-/// is a ghost yet: one being made one (`window::wake`) is told to stop.
-fn unhide_asked_for(hwnd: HWND) {
-    let Some(pid) = client_of(hwnd) else { return };
-    let h = hwnd.0 as isize;
-    std::thread::spawn(move || {
-        let hwnd = HWND(h as *mut _);
-        // SAFETY: reads which window is in front.
-        if unsafe { GetForegroundWindow() } == hwnd {
-            window::unhide(pid, hwnd);
-        }
-    });
-}
-
-/// A ghost came to the front and nobody asked: unless that is anti-AFK at work or the asking is still
-/// on its way, it goes back down and gives up the focus.
-fn hand_on(hwnd: HWND) {
-    let h = hwnd.0 as isize;
-    std::thread::spawn(move || {
-        std::thread::sleep(UNASKED_GRACE);
-        let hwnd = HWND(h as *mut _);
-        // SAFETY: reads which window is in front.
-        if unsafe { GetForegroundWindow() } == hwnd && !asked() && !afk::PRESSING.load(Ordering::Relaxed) {
-            window::back_down(hwnd);
-        }
-    });
-}
-
-unsafe extern "system" fn on_show_event(_: HWINEVENTHOOK, event: u32, hwnd: HWND, object: i32, _: i32, _: u32, _: u32) {
-    match event {
-        EVENT_SYSTEM_MINIMIZESTART if object == OBJID_WINDOW.0 => {
-            {
-                let mut a = asked_lock();
-                *a = asked_after_minimize(*a, hwnd.0 as isize);
-            }
-            if let Some(pid) = client_of(hwnd)
-                && window::watched(hwnd)
-            {
-                window::wake(pid, hwnd, true);
-            }
-        }
-        // The window asked for may be in front already, or come next.
-        EVENT_SYSTEM_SWITCHEND => {
-            mark_asked();
-            // SAFETY: reads which window is in front.
-            unhide_asked_for(unsafe { GetForegroundWindow() });
-        }
-        EVENT_SYSTEM_FOREGROUND if object == OBJID_WINDOW.0 => {
-            if asked() {
-                unhide_asked_for(hwnd);
-            } else if client_of(hwnd).is_some() && window::is_hidden(hwnd) {
-                hand_on(hwnd);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// RoALT is ending (or panicking, so no lock is waited for): its clients must not stay invisible. A
-/// hard kill can't get here; the next start does this (`window::recover`). `limit`: how long a client
-/// that is slow to answer is waited for.
-pub fn unhide_all(limit: Duration) {
-    let pids = match CLIENTS.try_lock() {
-        Ok(pids) => pids.clone(),
-        Err(TryLockError::Poisoned(e)) => e.into_inner().clone(),
-        Err(TryLockError::WouldBlock) => return,
-    };
-    window::unhide_quickly(&pids, limit);
-}
-
 /// This thread's messages, for as long as the app runs.
 fn pump() {
     let mut msg = MSG::default();
@@ -473,9 +352,8 @@ fn pump() {
     }
 }
 
-/// Watches for window drags and for clients being minimized or asked for, for as long as the app
-/// runs. A thread each: `on_event` can wait for a client, and every mouse event on the PC would wait
-/// with it; a hidden client shouldn't wait on a drag.
+/// Watches for window drags, for as long as the app runs. A thread each: `on_event` can wait for a
+/// client, and every mouse event on the PC would wait with it.
 pub fn start() {
     std::thread::spawn(|| {
         // SAFETY: out of context, so nothing is loaded into another process; the callback stays
@@ -494,22 +372,6 @@ pub fn start() {
         };
         if let Err(e) = mouse {
             log::warn!("no free resizing of clients: {e}");
-        }
-        pump();
-    });
-    std::thread::spawn(|| {
-        // SAFETY: as for the drags above. SWITCHEND and MINIMIZESTART are neighbours. RoALT's own
-        // window counts too: minimizing it from the taskbar uses up that press (`client_of` keeps
-        // it from anything else).
-        let (switch, front) = unsafe {
-            let flags = WINEVENT_OUTOFCONTEXT;
-            (
-                SetWinEventHook(EVENT_SYSTEM_SWITCHEND, EVENT_SYSTEM_MINIMIZESTART, None, Some(on_show_event), 0, 0, flags),
-                SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, None, Some(on_show_event), 0, 0, flags),
-            )
-        };
-        if switch.is_invalid() || front.is_invalid() {
-            log::warn!("could not watch for clients being minimized or asked for: use Restore on Home to bring a hidden client back");
         }
         pump();
     });
@@ -545,25 +407,12 @@ mod tests {
     }
 
     #[test]
-    fn only_the_taskbars_count_as_the_taskbar() {
-        let is = |c: &str, in_shell, caption| is_taskbar(&c.encode_utf16().collect::<Vec<_>>(), in_shell, caption);
-        assert!(is("Shell_TrayWnd", true, false));
-        assert!(is("Shell_SecondaryTrayWnd", true, false));
-        assert!(!is("WINDOWCLIENT", false, true));
-        assert!(!is("", false, false));
-        assert!(is("TaskListThumbnailWnd", true, false), "a flyout of the shell, whatever it's called");
-        assert!(is("XamlExplorerHostIslandWindow", true, false));
-        assert!(!is("TaskListThumbnailWnd", false, false), "another program's window of that name");
-        assert!(!is("CabinetWClass", true, true), "File Explorer");
-        assert!(!is("Progman", true, false), "the desktop");
-    }
-
-    #[test]
-    fn only_minimizing_the_window_in_front_uses_up_the_asking() {
-        let asked = Some((Instant::now(), 7));
-        assert!(asked_after_minimize(asked, 7).is_none(), "the press was for that");
-        assert!(asked_after_minimize(asked, 9).is_some(), "the sweep or another app");
-        assert!(asked_after_minimize(None, 7).is_none());
+    fn a_press_on_the_caption_buttons_is_theirs() {
+        // Measured on a client: buttons 663..809 x 0..30 of a window at (650, 143).
+        let (b, w) = (RECT { left: 663, top: 0, right: 809, bottom: 30 }, RECT { left: 650, top: 143, right: 1466, bottom: 781 });
+        assert!(in_buttons(b, w, p(650 + 687, 153)), "where Roblox says caption");
+        assert!(!in_buttons(b, w, p(650 + 400, 153)), "the rest of the title bar");
+        assert!(!in_buttons(b, w, p(650 + 687, 143 + 30)));
     }
 
     #[test]

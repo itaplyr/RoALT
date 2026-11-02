@@ -259,7 +259,6 @@ export function PerformanceView({ settings }: { settings: Settings }) {
           <SwitchRow title={t("settings.lighterRendering")} hint={t("performance.hintLight")} more={t("performance.hintLight")} checked={settings.lighterRendering} onChange={(lighterRendering) => set.mutate({ lighterRendering })} />
           {settings.lighterRendering && <RenderFlagRows settings={settings} />}
           <SwitchRow title={t("settings.minimize")} hint={t("performance.hintMinimize")} more={t("settings.minimizeHint")} checked={settings.minimizeOnLaunch} onChange={(minimizeOnLaunch) => set.mutate({ minimizeOnLaunch })} />
-          <SwitchRow title={t("performance.liveHidden")} hint={t("performance.hintLiveHidden")} more={t("performance.hintLiveHidden")} checked={settings.liveHiddenPreviews} onChange={(liveHiddenPreviews) => set.mutate({ liveHiddenPreviews })} />
           <SwitchRow title={t("performance.tinyOnLaunch")} hint={t("performance.hintTinyOnLaunch")} more={t("performance.hintTinySize")} checked={settings.tinyOnLaunch} onChange={(tinyOnLaunch) => set.mutate({ tinyOnLaunch })} />
           <TuneRow title={t("performance.tinySize")} hint={t("performance.hintTinySize")}>
             <div className="flex flex-wrap items-center gap-2">
@@ -303,7 +302,7 @@ const PRESETS: readonly { label: Key; tag: Key; facts: () => string[]; profile: 
     label: "performance.preset.maxAlts",
     tag: "performance.tagMaxAlts",
     facts: () => [
-      t("dashboard.fps", { fps: 10 }), t("settings.lowGraphics"), t("performance.tinyOnLaunch"), t("settings.minimize"), t("performance.factAsleep"), t("performance.factFair", { n: 25 }),
+      t("dashboard.fps", { fps: 10 }), t("settings.lowGraphics"), t("performance.tinyOnLaunch"), t("settings.minimize"), t("performance.factFair", { n: 25 }),
       t("performance.factMainAccount"), t("performance.factBootstrapper"), t("performance.factAfk"), t("performance.factNextLaunch"),
     ],
     profile: {

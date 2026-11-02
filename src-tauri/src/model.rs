@@ -377,35 +377,21 @@ impl Default for RenderFlags {
 }
 
 /// Anti-AFK: every `interval_min` (1..=19) minutes each client in a game that hasn't opted out
-/// gets a key press (`instances::afk`), the way `mode` says.
+/// gets a key press (`instances::afk`).
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", default)]
 #[ts(export)]
 pub struct AntiAfk {
     pub enabled: bool,
     pub interval_min: u32,
-    pub mode: AfkMode,
 }
 
 impl Default for AntiAfk {
     fn default() -> Self {
-        Self { enabled: false, interval_min: 15, mode: AfkMode::Focus }
+        Self { enabled: false, interval_min: 15 }
     }
 }
 
-/// How anti-AFK presses a key.
-#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[serde(rename_all = "lowercase")]
-#[ts(export)]
-pub enum AfkMode {
-    /// Brings the client to the front for a moment and presses Space through `SendInput`; only
-    /// while the user is away. A minimized client wakes hidden for it, invisibly.
-    #[default]
-    Focus,
-    /// Posts Tab to the client's window without changing the focus, also while the user is
-    /// at the PC and in minimized clients. Roblox may ignore posted input in some games.
-    Background,
-}
 
 /// Events sent to the Discord webhook (`discord`), each on or off.
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]

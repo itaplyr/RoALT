@@ -58,7 +58,6 @@ export type { Adaptive } from "./bindings/Adaptive";
 export type { Profile } from "./bindings/Profile";
 export type { SystemUsage } from "./bindings/SystemUsage";
 export type { ServerVisit } from "./bindings/ServerVisit";
-export type { AfkMode } from "./bindings/AfkMode";
 export type { AntiAfk } from "./bindings/AntiAfk";
 export type { BulkItem } from "./bindings/BulkItem";
 export type { BulkStage } from "./bindings/BulkStage";

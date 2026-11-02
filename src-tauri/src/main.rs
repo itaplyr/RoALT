@@ -422,7 +422,6 @@ fn panic_hook() {
         let thread = std::thread::current().name().unwrap_or("unnamed").to_string();
         log::error!("panic in thread {thread} at {at}: {what}");
         log::logger().flush();
-        instances::resize::unhide_all(std::time::Duration::from_millis(500));
         previous(info);
     }));
 }
@@ -724,7 +723,6 @@ fn main() {
                     launcher::client_settings::restore(&s.db);
                     launcher::flags::restore();
                 }
-                instances::resize::unhide_all(std::time::Duration::from_secs(2));
             }
         });
 }

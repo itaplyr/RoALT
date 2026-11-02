@@ -74,7 +74,7 @@ let settings: Settings = {
   breakerMax: 3, breakerWindowMin: 10, closeGraceS: 5, launchArgs: "", closeToTray: false,
   memRestartMb: 0, memThrottle: { mb: 0, cpuCap: 10 }, trimEveryMin: 0, autoSpread: false, fairCap: false,
   adaptive: { enabled: false, background: { cpuCap: 25, eco: true, trimEveryMin: null, affinity: null } }, bandwidthKbps: 0,
-  antiAfk: { enabled: false, intervalMin: 15, mode: "focus" },
+  antiAfk: { enabled: false, intervalMin: 15 },
   discord: { crash: true, hang: true, memRestart: true, disconnect: true, restart: true, breaker: true, batchDone: true, launch: false, statusEveryMin: 0 },
   autoUpdate: false, selfUpdate: true, tabLayout: "top", discordPresence: true, minimizeOnLaunch: false, liveHiddenPreviews: true, microWidth: 320, microHeight: 240, tinyOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0, lowGraphics: true, skipSplash: false, lighterRendering: true, renderFlags: { msaa: "x1", texture: "lowest", mode: "default", graySky: false, noGrass: true, lowestFrm: true, pauseVoxelizer: false },
   allowPublicNetworks: true, language: "", headless: false, keepRunningOnClose: false, headlessWidth: 640, headlessHeight: 360,

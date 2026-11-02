@@ -7,6 +7,7 @@ const paths = {
   accounts: <><rect x="5" y="2" width="6" height="6" /><path d="M2 14v-2h12v2" /></>,
   settings: <><rect x="5" y="5" width="6" height="6" /><path d="M8 1v3M8 12v3M1 8h3M12 8h3" /></>,
   plus: <path d="M8 2v12M2 8h12" />,
+  chat: <path d="M2 3h12v8H7l-3 3v-3H2z" strokeLinejoin="round" />,
   heart: <path d="M8 14L2.4 8.4a3.2 3.2 0 0 1 4.5-4.5L8 5l1.1-1.1a3.2 3.2 0 0 1 4.5 4.5z" strokeLinejoin="round" />,
   refresh: <><path d="M13 3v4H9" /><path d="M13 7A5.5 5.5 0 1 0 13.5 10" /></>,
   star: <path d="M8 1.5l1.9 4.2 4.6.4-3.5 3 1.1 4.5L8 11.2l-4.1 2.4L5 9.1l-3.5-3 4.6-.4z" />,

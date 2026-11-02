@@ -212,7 +212,7 @@ pub fn hide_on_launch(pid: u32) {
     let _ = hide(pid);
 }
 
-pub fn recover(_followed: &[u32]) {}
+pub fn recover() {}
 
 pub fn sweep(_clients: &[(u32, Option<(u32, u32)>)]) {}
 
