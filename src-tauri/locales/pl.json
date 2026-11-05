@@ -184,7 +184,6 @@
   "Roblox isn't installed. Install it from roblox.com, then try again. (The Microsoft Store version can't be used: install the one from roblox.com.)": "Roblox nie jest zainstalowany. Zainstaluj go z roblox.com i spróbuj ponownie. (Wersji z Microsoft Store nie można użyć: zainstaluj tę z roblox.com.)",
   "Roblox's folder is unknown.": "Folder Roblox jest nieznany.",
   "Could not start Roblox: {why}": "Nie udało się uruchomić Roblox: {why}",
-  "Roblox on Linux needs Cordial or Sober. Install Cordial (recommended for multiple clients) or Sober, then try again.": "Roblox w systemie Linux wymaga Cordiala lub Sobera. Zainstaluj Cordiala (zalecany do wielu klientów) lub Sobera, a następnie spróbuj ponownie.",
   "Cordial's profile folder could not be found.": "Nie znaleziono folderu profilu Cordiala.",
   "Could not write the Cordial cookie store: {why}": "Nie udało się zapisać magazynu ciasteczek Cordiala: {why}",
   "Could not write the Cordial identity store: {why}": "Nie udało się zapisać magazynu tożsamości Cordiala: {why}",
@@ -310,58 +309,71 @@
   "**{name}**: RoALT gave up after {n} relaunches in {minutes} min.": {
     "one": "**{name}**: RoALT poddał się po {n} ponownym uruchomieniu w {minutes} min.",
     "few": "**{name}**: RoALT poddał się po {n} ponownych uruchomieniach w {minutes} min.",
-    "many": "**{name}**: RoALT poddał się po {n} ponownych uruchomieniach w {minutes} min."
+    "many": "**{name}**: RoALT poddał się po {n} ponownych uruchomieniach w {minutes} min.",
+    "other": "**{name}**: RoALT gave up after {n} relaunches in {minutes} min."
   },
   "{n} clients running · {ram} MB RAM{cpu}.": {
     "one": "Działa {n} klient · {ram} MB RAM{cpu}.",
     "few": "Działają {n} klienty · {ram} MB RAM{cpu}.",
-    "many": "Działa {n} klientów · {ram} MB RAM{cpu}."
+    "many": "Działa {n} klientów · {ram} MB RAM{cpu}.",
+    "other": "{n} clients running · {ram} MB RAM{cpu}."
   },
   "…and {n} more.": {
     "one": "…i {n} więcej.",
     "few": "…i {n} więcej.",
-    "many": "…i {n} więcej."
+    "many": "…i {n} więcej.",
+    "other": "…and {n} more."
   },
   "Gave up after {n} rejoins": {
     "one": "Poddano się po {n} ponownym dołączeniu",
     "few": "Poddano się po {n} ponownych dołączeniach",
-    "many": "Poddano się po {n} ponownych dołączeniach"
+    "many": "Poddano się po {n} ponownych dołączeniach",
+    "other": "Gave up after {n} rejoins"
   },
   "{name} wasn't rejoined: it needed {n} rejoins in {minutes} minutes, so RoALT gave up.": {
     "one": "{name} nie dołączył ponownie: potrzebował {n} ponownego dołączenia w {minutes} min, więc RoALT się poddał.",
     "few": "{name} nie dołączył ponownie: potrzebował {n} ponownych dołączeń w {minutes} min, więc RoALT się poddał.",
-    "many": "{name} nie dołączył ponownie: potrzebował {n} ponownych dołączeń w {minutes} min, więc RoALT się poddał."
+    "many": "{name} nie dołączył ponownie: potrzebował {n} ponownych dołączeń w {minutes} min, więc RoALT się poddał.",
+    "other": "{name} wasn't rejoined: it needed {n} rejoins in {minutes} minutes, so RoALT gave up."
   },
   "Gave up after {n} restarts": {
     "one": "Poddano się po {n} restarcie",
     "few": "Poddano się po {n} restartach",
-    "many": "Poddano się po {n} restartach"
+    "many": "Poddano się po {n} restartach",
+    "other": "Gave up after {n} restarts"
   },
   "{name} wasn't restarted: it needed {n} restarts in {minutes} minutes, so RoALT gave up.": {
     "one": "{name} nie został zrestartowany: potrzebował {n} restartu w {minutes} min, więc RoALT się poddał.",
     "few": "{name} nie został zrestartowany: potrzebował {n} restartów w {minutes} min, więc RoALT się poddał.",
-    "many": "{name} nie został zrestartowany: potrzebował {n} restartów w {minutes} min, więc RoALT się poddał."
+    "many": "{name} nie został zrestartowany: potrzebował {n} restartów w {minutes} min, więc RoALT się poddał.",
+    "other": "{name} wasn't restarted: it needed {n} restarts in {minutes} minutes, so RoALT gave up."
   },
   "No server had room for all {n} accounts": {
     "one": "Żaden serwer nie miał miejsca dla {n} konta",
     "few": "Żaden serwer nie miał miejsca dla wszystkich {n} kont",
-    "many": "Żaden serwer nie miał miejsca dla wszystkich {n} kont"
+    "many": "Żaden serwer nie miał miejsca dla wszystkich {n} kont",
+    "other": "No server had room for all {n} accounts"
   },
   "{n} alts open": {
     "one": "Otwarty {n} alt",
     "few": "Otwarte {n} alty",
-    "many": "Otwartych {n} altów"
+    "many": "Otwartych {n} altów",
+    "other": "{n} alts open"
   },
   "Running {n} alts": {
     "one": "Działa {n} alt",
     "few": "Działają {n} alty",
-    "many": "Działa {n} altów"
+    "many": "Działa {n} altów",
+    "other": "Running {n} alts"
   },
   "{n} alts · {games} games": {
     "one": "{n} alt · gry: {games}",
     "few": "{n} alty · gry: {games}",
-    "many": "{n} altów · gry: {games}"
+    "many": "{n} altów · gry: {games}",
+    "other": "{n} alts · {games} games"
   },
   "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.": "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.",
-  "The downloaded update failed its SHA-256 check.": "The downloaded update failed its SHA-256 check."
+  "The downloaded update failed its SHA-256 check.": "The downloaded update failed its SHA-256 check.",
+  "That client's window could not be resized.": "That client's window could not be resized.",
+  "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run.": "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run."
 }

@@ -39,14 +39,20 @@ RoALT finds `cordial-run` on `PATH` and uses the newest build under Cordial's ca
 
 ## Install
 
-Install the latest Linux release with the installer script:
+Download the installer, review it, then run it:
 
 ```bash
-curl -fsSL https://github.com/itaplyr/RoALT/releases/latest/download/install-linux.sh | bash
+curl -fsSLO https://github.com/itaplyr/RoALT/releases/latest/download/install-linux.sh
+less install-linux.sh
+bash install-linux.sh
 ```
 
-It installs Cage and Cordial when missing, puts RoALT in `~/.local/bin`, and adds a desktop entry.
-To upgrade later, run the same command again or use the in-app update banner.
+It supports Arch, Debian/Ubuntu, Fedora, openSUSE, Alpine, Void, and unknown
+distributions with a supported package manager. It installs Cage and Cordial
+when missing, verifies the RoALT binary's SHA-256, puts RoALT in `~/.local/bin`,
+and adds a desktop entry. To upgrade later, run the same command again or use
+the in-app update banner. The script needs `bash`, `curl`, and `sha256sum`
+(Alpine: `sudo apk add bash` first).
 
 Build from source instead:
 
@@ -137,9 +143,10 @@ Cordial as `CORDIAL_RESOLUTION`; a new value applies the next time a headless cl
 
 ### Window controls
 
-On Hyprland, RoALT uses `hyprctl` for focus, hide, and reveal. It finds a window by the tracked PID and
-its child processes, because the window may belong to a Cordial child rather than the process RoALT
-started. Other compositors can launch clients, but the focus/minimize/restore controls may not work.
+RoALT finds a window by the tracked PID and its child processes, because the window may belong to a
+Cordial child rather than the process RoALT started. It supports Hyprland (`hyprctl`), Sway
+(`swaymsg`), and X11 through `xdotool` or `wmctrl`. KDE/GNOME Wayland sessions without one of those
+tools can still launch clients and show previews, but window controls may be unavailable.
 
 ## Data and privacy
 
@@ -172,14 +179,15 @@ RoALT does not implement Windows Hello on Linux. Master-password re-authenticati
 | Adaptive limits, memory throttle, trim scheduling | Works; trim itself is a no-op on Linux |
 | FPS cap and graphics flags (Cordial) | Partial: FPS is best effort; RoALT passes the render flags through `CORDIAL_FLAGS`, but some builds may ignore them |
 | Headless clients under cage | Partial: no host window, but headless handling can still be improved |
-| Hyprland focus, minimize, restore, hidden workspaces | Works |
+| Hyprland/Sway/X11 focus, minimize, restore | Partial: tools and compositor support vary |
 | Discord alerts and rich presence | Verified |
 | Encrypted `.roalt` backups, recovery codes, performance profiles | Works |
 | Localization and themes | Works |
 
 ## Linux limitations
 
-- **Anti-AFK is not available.** Linux input injection is not wired up.
+- **Anti-AFK works on Hyprland, Sway and X11 when the required input tool is available.** Other
+  Wayland compositors have no equivalent path yet.
 - **Bandwidth limiting is not available.** There is no QoS equivalent in this build.
 - **GPU metrics are not available.** CPU, memory and disk I/O are sampled from `/proc`.
 - **Free per-window resizing is not implemented.** The compositor owns window geometry.
@@ -254,7 +262,8 @@ Check that the account profile is being launched through Cordial. RoALT writes t
 merged `CORDIAL_FLAGS` file; confirm the launch log mentions the flags file and the client starts after it.
 
 **Window controls do nothing.**
-They currently require Hyprland (`hyprctl`). Launching and previews still work on other compositors.
+They need a supported compositor and tool: Hyprland (`hyprctl`), Sway (`swaymsg`), or X11
+(`xdotool`/`wmctrl`). Launching and previews still work without them.
 
 ## Credits
 
@@ -263,6 +272,10 @@ They currently require Hyprland (`hyprctl`). Launching and previews still work o
   [itaplyr/RoALT](https://github.com/itaplyr/RoALT).
 - [Cordial](https://github.com/luohoa97/cordial) — the Android Roblox runtime for Linux by
   [luohoa97](https://github.com/luohoa97), which RoALT uses to launch and manage Roblox clients.
+
+## License
+
+[MIT](LICENSE).
 
 ## Disclaimer
 

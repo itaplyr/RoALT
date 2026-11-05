@@ -17,7 +17,7 @@ statement about the upstream Windows application.
 The SVG uses green for ported areas and gray for partial, untested, missing, or
 not-applicable areas.
 
-Current totals: **11 ported, 9 partial, 3 missing/unverified**.
+Current totals: **11 ported, 10 partial, 2 missing/unverified**.
 
 ## Summary
 
@@ -32,20 +32,20 @@ Current totals: **11 ported, 9 partial, 3 missing/unverified**.
 | Servers | Ported | 100% | Server browser, private servers, same-server batches |
 | FPS cap | Partial | 60% | Passed through `CORDIAL_FLAGS`; some builds/settings still ignore it |
 | Discord | Ported | 100% | Webhook alerts and rich presence tested |
-| Limits | Partial | 90% | Niceness, affinity, eco, fair cap; trim is a no-op |
+| Limits | Partial | 95% | Applied to the whole Cordial process family; trim is a no-op |
 | Metrics | Partial | 70% | CPU, memory and disk I/O; no GPU counters |
-| Window controls | Partial | 50% | Hyprland only; micro/tile/resize are mostly no-ops |
+| Window controls | Partial | 80% | Hyprland/Sway/X11 focus, micro and tile; free drag resize missing |
 | Roblox updates | Ported | 100% | Handled automatically by Cordial |
-| Anti-AFK | Missing | 0% | Linux input injection is not wired up |
+| Anti-AFK | Partial | 80% | Hyprland/Sway/X11 F13 where tools exist; no idle detection |
 | Bandwidth limit | Missing | 0% | No QoS equivalent |
-| Free resizing | Missing | 0% | The compositor owns window geometry |
+| Free resizing | Missing | 0% | The compositor owns drag-resize geometry |
 | Re-authentication | Ported | 100% | Master password; Windows Hello is not available |
 | Self-update | Ported | 100% | Checks the Linux fork release, verifies SHA-256 and restarts |
 | Interface | Ported | 100% | Account tabs, layouts, drag sorting, themes |
 | Languages | Partial | 90% | 18 catalogs; some newer and Linux-only strings fall back to English |
-| Max alts | Partial | 50% | FPS, fair cap and render flags work; tiny windows and trim do not |
+| Max alts | Partial | 80% | FPS, fair cap, render flags and compositor tiny windows; trim still does not |
 | Usage stats | Ported | 100% | Process-tree PSS and CPU/I/O reporting |
-| Logs | Partial | 70% | Diagnostics and logs work; Windows autopsy is stubbed |
+| Logs | Partial | 95% | Diagnostics and Linux log-tail autopsy work; no crash dumps/event log |
 
 ## Accounts
 
@@ -192,16 +192,19 @@ Ported.
 
 Partial.
 
-Works on Hyprland:
+Works on:
 
-- Focus, hide and reveal through `hyprctl`.
-- Window lookup follows child processes and cage.
+- Hyprland, through the Hyprland Lua dispatch API.
+- Sway/i3-compatible Wayland, through `swaymsg`.
+- X11, through `xdotool` or `wmctrl`.
+
+On those, RoALT supports focus, hide/reveal, micro windows and grid tiling. Window lookup follows
+child processes and cage.
 
 Caveats:
 
-- Other compositors do not get these controls.
-- Micro windows and tiling are not implemented.
-- Free resizing is not implemented.
+- KDE/GNOME Wayland sessions without a supported control tool do not get these controls.
+- Free drag-resizing is still not implemented.
 - Headless clients have no host window to resize.
 
 ## Roblox updates
@@ -213,10 +216,13 @@ Ported.
 
 ## Anti-AFK
 
-Missing.
+Partial.
 
-- Linux input injection is not wired up.
-- The scheduling rules exist, but no key press is delivered.
+- On Hyprland, RoALT sends F13 directly to the client window with `hl.dsp.send_shortcut`.
+- On Sway it uses `wtype` or `ydotool`; on X11 it uses `xdotool`.
+- F13 is unbound in games, so it counts as activity without moving the character.
+- There is no portable last-input timestamp, so the interval is the only gate.
+- Compositors without a supported input tool have no equivalent path yet.
 
 ## Bandwidth limit
 
@@ -282,12 +288,12 @@ Works:
 - Low FPS.
 - Fair CPU share.
 - Lowest graphics and lighter-rendering flags.
+- Hyprland/Sway/X11 tiny windows where supported.
 
 Caveats:
 
-- Tiny window sizing is a no-op on Linux.
 - Memory trim is a no-op.
-- Free resizing is missing.
+- Free drag-resizing is missing.
 
 ## Logs and diagnostics
 
@@ -298,8 +304,9 @@ Works:
 - RoALT's own rotating logs.
 - Client stdout/stderr logs under `logs/clients/`.
 - Diagnostics report with redaction.
+- Linux autopsy: crash kind, uptime, reason, clues, and the redacted end of the
+  client log.
 
 Caveats:
 
-- The Windows autopsy report, crash dumps and Windows event-log details are not
-  implemented on Linux; a small no-op stub is used.
+- No crash dumps or Windows event-log details on Linux.

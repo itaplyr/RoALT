@@ -184,7 +184,6 @@
   "Roblox isn't installed. Install it from roblox.com, then try again. (The Microsoft Store version can't be used: install the one from roblox.com.)": "Roblox är inte installerat. Installera det från roblox.com och försök igen. (Versionen från Microsoft Store kan inte användas: installera den från roblox.com.)",
   "Roblox's folder is unknown.": "Roblox mapp är okänd.",
   "Could not start Roblox: {why}": "Kunde inte starta Roblox: {why}",
-  "Roblox on Linux needs Cordial or Sober. Install Cordial (recommended for multiple clients) or Sober, then try again.": "Roblox på Linux kräver Cordial eller Sober. Installera Cordial (rekommenderas för flera klienter) eller Sober och försök igen.",
   "Cordial's profile folder could not be found.": "Cordials profilmapp kunde inte hittas.",
   "Could not write the Cordial cookie store: {why}": "Kunde inte skriva Cordials cookielagring: {why}",
   "Could not write the Cordial identity store: {why}": "Kunde inte skriva Cordials identitetslagring: {why}",
@@ -352,5 +351,7 @@
     "other": "{n} alts · {games} spel"
   },
   "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.": "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.",
-  "The downloaded update failed its SHA-256 check.": "The downloaded update failed its SHA-256 check."
+  "The downloaded update failed its SHA-256 check.": "The downloaded update failed its SHA-256 check.",
+  "That client's window could not be resized.": "That client's window could not be resized.",
+  "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run.": "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run."
 }

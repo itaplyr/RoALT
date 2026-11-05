@@ -184,7 +184,6 @@
   "Roblox isn't installed. Install it from roblox.com, then try again. (The Microsoft Store version can't be used: install the one from roblox.com.)": "Roblox не установлен. Установите его с roblox.com и повторите. (Версию из Microsoft Store использовать нельзя: установите версию с roblox.com.)",
   "Roblox's folder is unknown.": "Папка Roblox неизвестна.",
   "Could not start Roblox: {why}": "Не удалось запустить Roblox: {why}",
-  "Roblox on Linux needs Cordial or Sober. Install Cordial (recommended for multiple clients) or Sober, then try again.": "Для Roblox в Linux нужен Cordial или Sober. Установите Cordial (рекомендуется для нескольких клиентов) или Sober и повторите попытку.",
   "Cordial's profile folder could not be found.": "Не удалось найти папку профиля Cordial.",
   "Could not write the Cordial cookie store: {why}": "Не удалось записать хранилище cookie Cordial: {why}",
   "Could not write the Cordial identity store: {why}": "Не удалось записать хранилище идентичности Cordial: {why}",
@@ -310,58 +309,71 @@
   "**{name}**: RoALT gave up after {n} relaunches in {minutes} min.": {
     "one": "**{name}**: RoALT сдался после {n} перезапуска за {minutes} мин.",
     "few": "**{name}**: RoALT сдался после {n} перезапусков за {minutes} мин.",
-    "many": "**{name}**: RoALT сдался после {n} перезапусков за {minutes} мин."
+    "many": "**{name}**: RoALT сдался после {n} перезапусков за {minutes} мин.",
+    "other": "**{name}**: RoALT gave up after {n} relaunches in {minutes} min."
   },
   "{n} clients running · {ram} MB RAM{cpu}.": {
     "one": "Запущен {n} клиент · {ram} MB RAM{cpu}.",
     "few": "Запущено {n} клиента · {ram} MB RAM{cpu}.",
-    "many": "Запущено {n} клиентов · {ram} MB RAM{cpu}."
+    "many": "Запущено {n} клиентов · {ram} MB RAM{cpu}.",
+    "other": "{n} clients running · {ram} MB RAM{cpu}."
   },
   "…and {n} more.": {
     "one": "…и ещё {n}.",
     "few": "…и ещё {n}.",
-    "many": "…и ещё {n}."
+    "many": "…и ещё {n}.",
+    "other": "…and {n} more."
   },
   "Gave up after {n} rejoins": {
     "one": "Сдался после {n} перезахода",
     "few": "Сдался после {n} перезаходов",
-    "many": "Сдался после {n} перезаходов"
+    "many": "Сдался после {n} перезаходов",
+    "other": "Gave up after {n} rejoins"
   },
   "{name} wasn't rejoined: it needed {n} rejoins in {minutes} minutes, so RoALT gave up.": {
     "one": "{name} не перезашёл: понадобился {n} перезаход за {minutes} мин, поэтому RoALT сдался.",
     "few": "{name} не перезашёл: понадобилось {n} перезахода за {minutes} мин, поэтому RoALT сдался.",
-    "many": "{name} не перезашёл: понадобилось {n} перезаходов за {minutes} мин, поэтому RoALT сдался."
+    "many": "{name} не перезашёл: понадобилось {n} перезаходов за {minutes} мин, поэтому RoALT сдался.",
+    "other": "{name} wasn't rejoined: it needed {n} rejoins in {minutes} minutes, so RoALT gave up."
   },
   "Gave up after {n} restarts": {
     "one": "Сдался после {n} перезапуска",
     "few": "Сдался после {n} перезапусков",
-    "many": "Сдался после {n} перезапусков"
+    "many": "Сдался после {n} перезапусков",
+    "other": "Gave up after {n} restarts"
   },
   "{name} wasn't restarted: it needed {n} restarts in {minutes} minutes, so RoALT gave up.": {
     "one": "{name} не перезапущен: понадобился {n} перезапуск за {minutes} мин, поэтому RoALT сдался.",
     "few": "{name} не перезапущен: понадобилось {n} перезапуска за {minutes} мин, поэтому RoALT сдался.",
-    "many": "{name} не перезапущен: понадобилось {n} перезапусков за {minutes} мин, поэтому RoALT сдался."
+    "many": "{name} не перезапущен: понадобилось {n} перезапусков за {minutes} мин, поэтому RoALT сдался.",
+    "other": "{name} wasn't restarted: it needed {n} restarts in {minutes} minutes, so RoALT gave up."
   },
   "No server had room for all {n} accounts": {
     "one": "Ни на одном сервере не было места для всех {n} аккаунта",
     "few": "Ни на одном сервере не было места для всех {n} аккаунтов",
-    "many": "Ни на одном сервере не было места для всех {n} аккаунтов"
+    "many": "Ни на одном сервере не было места для всех {n} аккаунтов",
+    "other": "No server had room for all {n} accounts"
   },
   "{n} alts open": {
     "one": "Открыт {n} альт",
     "few": "Открыто {n} альта",
-    "many": "Открыто {n} альтов"
+    "many": "Открыто {n} альтов",
+    "other": "{n} alts open"
   },
   "Running {n} alts": {
     "one": "Запущен {n} альт",
     "few": "Запущено {n} альта",
-    "many": "Запущено {n} альтов"
+    "many": "Запущено {n} альтов",
+    "other": "Running {n} alts"
   },
   "{n} alts · {games} games": {
     "one": "{n} альт · игр: {games}",
     "few": "{n} альта · игр: {games}",
-    "many": "{n} альтов · игр: {games}"
+    "many": "{n} альтов · игр: {games}",
+    "other": "{n} alts · {games} games"
   },
   "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.": "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.",
-  "The downloaded update failed its SHA-256 check.": "The downloaded update failed its SHA-256 check."
+  "The downloaded update failed its SHA-256 check.": "The downloaded update failed its SHA-256 check.",
+  "That client's window could not be resized.": "That client's window could not be resized.",
+  "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run.": "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run."
 }

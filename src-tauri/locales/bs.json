@@ -184,7 +184,6 @@
   "Roblox isn't installed. Install it from roblox.com, then try again. (The Microsoft Store version can't be used: install the one from roblox.com.)": "Roblox nije instaliran. Instalirajte ga s roblox.com, zatim pokušajte ponovo. (Verzija iz Microsoft Store ne može se koristiti: instalirajte onu s roblox.com.)",
   "Roblox's folder is unknown.": "Mapa Robloxa je nepoznata.",
   "Could not start Roblox: {why}": "Roblox se nije mogao pokrenuti: {why}",
-  "Roblox on Linux needs Cordial or Sober. Install Cordial (recommended for multiple clients) or Sober, then try again.": "Roblox na Linuxu zahtijeva Cordial ili Sober. Instalirajte Cordial (preporučeno za više klijenata) ili Sober, pa pokušajte ponovo.",
   "Cordial's profile folder could not be found.": "Cordialova mapa profila nije pronađena.",
   "Could not write the Cordial cookie store: {why}": "Nije moguće zapisati Cordialovu pohranu kolačića: {why}",
   "Could not write the Cordial identity store: {why}": "Nije moguće zapisati Cordialovu pohranu identiteta: {why}",
@@ -363,5 +362,7 @@
     "other": "{n} altova · igara: {games}"
   },
   "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.": "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.",
-  "The downloaded update failed its SHA-256 check.": "The downloaded update failed its SHA-256 check."
+  "The downloaded update failed its SHA-256 check.": "The downloaded update failed its SHA-256 check.",
+  "That client's window could not be resized.": "That client's window could not be resized.",
+  "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run.": "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run."
 }

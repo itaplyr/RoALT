@@ -9,13 +9,18 @@ use std::sync::Mutex;
 use crate::error::Result;
 use crate::model::{Limits, Settings};
 
-/// What has been applied to one instance's current process, so the tracker's once-a-second
-/// sync does not repeat syscalls.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// What has been applied to one instance's current process family, so the tracker's
+/// once-a-second sync does not repeat syscalls.
+///
+/// `children` records every descendant the limits were applied to, with the start time seen then.
+/// A headless client is `cage`; the `cordial-run` engine is its child, so limiting only `pid`
+/// leaves the process that does the work untouched. The start times let a later sync notice a
+/// reused pid and let `release_all` avoid resetting a process that inherited the pid.
 struct Applied {
     pid: u32,
     t0: u64,
     limits: Limits,
+    children: Vec<(u32, u64)>,
 }
 
 pub struct Limiter {
@@ -28,18 +33,30 @@ impl Limiter {
     }
 
     pub fn apply(&self, id: &str, pid: u32, t0: u64, limits: Limits) -> Result<()> {
+        // The tracked process is gone or its pid was reused: forget what was applied. There is
+        // nothing useful to reset, and a reused pid must not be treated as the old client.
+        if super::process::start_time(pid) != Some(t0) {
+            self.applied.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
+            return Ok(());
+        }
+        // Walked once per sync: a child (the engine under `cage`) can start after the parent was
+        // limited, and the next sync has to reach it.
+        let children = child_start_times(pid);
         let mut map = self.applied.lock().unwrap_or_else(|e| e.into_inner());
-        if map.get(id).is_some_and(|a| *a == Applied { pid, t0, limits }) {
+        if let Some(a) = map.get(id)
+            && a.pid == pid
+            && a.t0 == t0
+            && a.limits == limits
+            && a.children == children
+        {
             return Ok(());
         }
         let nice = nice_for(limits);
-        set_nice(pid, nice);
-        if let Some(mask) = limits.affinity {
-            set_affinity(pid, mask);
-        } else {
-            clear_affinity(pid);
+        apply_one(pid, nice, limits.affinity);
+        for &(child, _) in &children {
+            apply_one(child, nice, limits.affinity);
         }
-        map.insert(id.to_owned(), Applied { pid, t0, limits });
+        map.insert(id.to_owned(), Applied { pid, t0, limits, children });
         Ok(())
     }
 
@@ -62,8 +79,13 @@ impl Limiter {
     pub fn release_all(&self) {
         let applied = std::mem::take(&mut *self.applied.lock().unwrap_or_else(|e| e.into_inner()));
         for (_, a) in applied {
-            set_nice(a.pid, 0);
-            clear_affinity(a.pid);
+            apply_one(a.pid, 0, None);
+            for (child, t0) in a.children {
+                // Only reset a descendant that is still the one that was limited.
+                if super::process::start_time(child) == Some(t0) {
+                    apply_one(child, 0, None);
+                }
+            }
         }
     }
 
@@ -91,6 +113,22 @@ fn nice_for(l: Limits) -> i32 {
         nice = nice.max(15);
     }
     nice
+}
+
+fn child_start_times(pid: u32) -> Vec<(u32, u64)> {
+    super::process::descendants(pid)
+        .into_iter()
+        .filter_map(|child| super::process::start_time(child).map(|t0| (child, t0)))
+        .collect()
+}
+
+fn apply_one(pid: u32, nice: i32, affinity: Option<u64>) {
+    set_nice(pid, nice);
+    if let Some(mask) = affinity {
+        set_affinity(pid, mask);
+    } else {
+        clear_affinity(pid);
+    }
 }
 
 fn set_nice(pid: u32, nice: i32) {

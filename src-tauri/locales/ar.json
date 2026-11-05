@@ -387,7 +387,6 @@
     "other": "{n} حساب ثانوي · {games} ألعاب"
   },
   "Could not close Roblox (process {pid}).": "Could not close Roblox (process {pid}).",
-  "Roblox on Linux needs Cordial or Sober. Install Cordial (recommended for multiple clients) or Sober, then try again.": "Roblox on Linux needs Cordial or Sober. Install Cordial (recommended for multiple clients) or Sober, then try again.",
   "Cordial's profile folder could not be found.": "Cordial's profile folder could not be found.",
   "Could not write the Cordial cookie store: {why}": "Could not write the Cordial cookie store: {why}",
   "Could not write the Cordial identity store: {why}": "Could not write the Cordial identity store: {why}",
@@ -396,5 +395,7 @@
   "Set a master password in Settings to protect cookies on this Linux desktop.": "Set a master password in Settings to protect cookies on this Linux desktop.",
   "Could not set Roblox's cookie: {why}": "Could not set Roblox's cookie: {why}",
   "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.": "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.",
-  "The downloaded update failed its SHA-256 check.": "The downloaded update failed its SHA-256 check."
+  "The downloaded update failed its SHA-256 check.": "The downloaded update failed its SHA-256 check.",
+  "That client's window could not be resized.": "That client's window could not be resized.",
+  "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run.": "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run."
 }

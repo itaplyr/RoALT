@@ -299,40 +299,50 @@
   "WebView2 setup failed: {why}": "WebView2 のセットアップに失敗しました: {why}",
   "The Roblox sign-in window timed out after 15 minutes. Try again.": "Roblox のサインインウィンドウが 15 分でタイムアウトしました。もう一度試してください。",
   "**{name}**: RoALT gave up after {n} relaunches in {minutes} min.": {
-    "other": "**{name}**: {minutes} 分間に {n} 回再起動したので、RoALT は中止しました。"
+    "other": "**{name}**: {minutes} 分間に {n} 回再起動したので、RoALT は中止しました。",
+    "one": "**{name}**: RoALT gave up after {n} relaunch in {minutes} min."
   },
   "{n} clients running · {ram} MB RAM{cpu}.": {
-    "other": "{n} 個のクライアントが実行中・{ram} MB RAM{cpu}。"
+    "other": "{n} 個のクライアントが実行中・{ram} MB RAM{cpu}。",
+    "one": "{n} client running · {ram} MB RAM{cpu}."
   },
   "…and {n} more.": {
-    "other": "…他 {n} 件。"
+    "other": "…他 {n} 件。",
+    "one": "…and {n} more."
   },
   "Gave up after {n} rejoins": {
-    "other": "{n} 回再参加して中止しました"
+    "other": "{n} 回再参加して中止しました",
+    "one": "Gave up after {n} rejoin"
   },
   "{name} wasn't rejoined: it needed {n} rejoins in {minutes} minutes, so RoALT gave up.": {
-    "other": "{name} は再参加しませんでした: {minutes} 分間に {n} 回の再参加が必要になったため、RoALT は中止しました。"
+    "other": "{name} は再参加しませんでした: {minutes} 分間に {n} 回の再参加が必要になったため、RoALT は中止しました。",
+    "one": "{name} wasn't rejoined: it needed {n} rejoin in {minutes} minutes, so RoALT gave up."
   },
   "Gave up after {n} restarts": {
-    "other": "{n} 回再起動して中止しました"
+    "other": "{n} 回再起動して中止しました",
+    "one": "Gave up after {n} restart"
   },
   "{name} wasn't restarted: it needed {n} restarts in {minutes} minutes, so RoALT gave up.": {
-    "other": "{name} は再起動しませんでした: {minutes} 分間に {n} 回の再起動が必要になったため、RoALT は中止しました。"
+    "other": "{name} は再起動しませんでした: {minutes} 分間に {n} 回の再起動が必要になったため、RoALT は中止しました。",
+    "one": "{name} wasn't restarted: it needed {n} restart in {minutes} minutes, so RoALT gave up."
   },
   "No server had room for all {n} accounts": {
-    "other": "{n} 件のアカウントすべてが入れるサーバーはありませんでした"
+    "other": "{n} 件のアカウントすべてが入れるサーバーはありませんでした",
+    "one": "No server had room for all {n} accounts"
   },
   "{n} alts open": {
-    "other": "サブ垢 {n} 個を起動中"
+    "other": "サブ垢 {n} 個を起動中",
+    "one": "{n} alt open"
   },
   "Running {n} alts": {
-    "other": "サブ垢 {n} 個を実行中"
+    "other": "サブ垢 {n} 個を実行中",
+    "one": "Running {n} alt"
   },
   "{n} alts · {games} games": {
-    "other": "サブ垢 {n} 個・{games} ゲーム"
+    "other": "サブ垢 {n} 個・{games} ゲーム",
+    "one": "{n} alt · {games} games"
   },
   "Could not close Roblox (process {pid}).": "Could not close Roblox (process {pid}).",
-  "Roblox on Linux needs Cordial or Sober. Install Cordial (recommended for multiple clients) or Sober, then try again.": "Roblox on Linux needs Cordial or Sober. Install Cordial (recommended for multiple clients) or Sober, then try again.",
   "Cordial's profile folder could not be found.": "Cordial's profile folder could not be found.",
   "Could not write the Cordial cookie store: {why}": "Could not write the Cordial cookie store: {why}",
   "Could not write the Cordial identity store: {why}": "Could not write the Cordial identity store: {why}",
@@ -341,5 +351,7 @@
   "Set a master password in Settings to protect cookies on this Linux desktop.": "Set a master password in Settings to protect cookies on this Linux desktop.",
   "Could not set Roblox's cookie: {why}": "Could not set Roblox's cookie: {why}",
   "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.": "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.",
-  "The downloaded update failed its SHA-256 check.": "The downloaded update failed its SHA-256 check."
+  "The downloaded update failed its SHA-256 check.": "The downloaded update failed its SHA-256 check.",
+  "That client's window could not be resized.": "That client's window could not be resized.",
+  "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run.": "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run."
 }

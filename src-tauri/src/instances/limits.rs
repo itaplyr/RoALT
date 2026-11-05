@@ -614,6 +614,7 @@ mod tests {
     use std::os::windows::process::CommandExt;
     use std::process::{Child, Command, Stdio};
 
+    use windows::Win32::Foundation::E_INVALIDARG;
     use windows::Win32::System::Threading::GetProcessInformation;
 
     use super::*;
@@ -675,13 +676,19 @@ mod tests {
         own as u64
     }
 
-    /// The process's power throttling masks, as Windows has them: (control, state).
-    fn throttling(pid: u32) -> (u32, u32) {
+    /// The process's power throttling masks, as Windows has them: (control, state). None where
+    /// Windows can't read them back (before Windows 11), though it still sets them.
+    fn throttling(pid: u32) -> Option<(u32, u32)> {
         let h = open(pid, PROCESS_QUERY_LIMITED_INFORMATION).unwrap();
         let mut s = PROCESS_POWER_THROTTLING_STATE { Version: PROCESS_POWER_THROTTLING_CURRENT_VERSION, ControlMask: 0, StateMask: 0 };
         // SAFETY: `h` is live with that right; `s` is a local of the size passed.
-        unsafe { GetProcessInformation(*h, ProcessPowerThrottling, (&raw mut s).cast(), size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32) }.unwrap();
-        (s.ControlMask, s.StateMask)
+        match unsafe { GetProcessInformation(*h, ProcessPowerThrottling, (&raw mut s).cast(), size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32) } {
+            Err(e) if e.code() == E_INVALIDARG => None,
+            r => {
+                r.unwrap();
+                Some((s.ControlMask, s.StateMask))
+            }
+        }
     }
 
     #[test]
@@ -689,9 +696,13 @@ mod tests {
         let (mut child, pid, t0) = ping();
         set_eco(pid, t0, true).unwrap();
         let both = PROCESS_POWER_THROTTLING_EXECUTION_SPEED | PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
-        assert_eq!(throttling(pid), (both, both));
+        if let Some(masks) = throttling(pid) {
+            assert_eq!(masks, (both, both));
+        }
         set_eco(pid, t0, false).unwrap();
-        assert_eq!(throttling(pid), (0, 0));
+        if let Some(masks) = throttling(pid) {
+            assert_eq!(masks, (0, 0));
+        }
         child.kill().unwrap();
         child.wait().unwrap();
     }
@@ -702,7 +713,9 @@ mod tests {
         // What a RoALT that was killed leaves behind: it never told this one.
         Limiter::new().apply("i", pid, t0, Limits { eco: true, affinity: Some(1), ..Limits::default() }).unwrap();
         reset_followed(pid, t0);
-        assert_eq!(throttling(pid), (0, 0));
+        if let Some(masks) = throttling(pid) {
+            assert_eq!(masks, (0, 0));
+        }
         assert_eq!(affinity(pid), system());
         child.kill().unwrap();
         child.wait().unwrap();

@@ -1,11 +1,11 @@
-//! Finding and starting Roblox on Linux through Cordial or Sober.
+//! Finding and starting Roblox on Linux through Cordial.
 //!
 //! Cordial supports one profile per account and several clients at once. RoALT launches the
 //! loader (`cordial-run`) directly with `--profile roalt_<user id>` and `--join-url`, which is
 //! what the Cordial shell itself does after the user picks a profile. That works with Cordial
 //! 0.21 (whose shell has no `--profile` command-line option) and with newer shells. If the
-//! loader/build isn't available, it falls back to `cordial --profile ... --play ...` on newer
-//! Cordials, then a plain link, then Sober. A system `roblox-player` handler is the last resort.
+//! direct loader/build isn't available, it falls back to Cordial's shell or Flatpak Cordial.
+//! It deliberately does not fall back to Sober.
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
@@ -43,6 +43,7 @@ pub struct ClientExe {
 }
 
 const CORDIAL_ID: &str = "io.github.luohua97.Cordial";
+/// Only reachable through an explicit `ROALT_LAUNCHER`; the automatic finder stays Cordial-only.
 const SOBER_ID: &str = "org.vinegarhq.Sober";
 
 pub fn find() -> Result<ClientExe> {
@@ -55,9 +56,8 @@ pub fn find() -> Result<ClientExe> {
     // Preferred: bypass the shell and give the loader the profile directly. The shell's
     // profile picker is what produced "Roblox link waiting" and put every account on the
     // same profile. ROALT_CORDIAL_RUN points at a self-built engine.
-    let loader = std::env::var_os("ROALT_CORDIAL_RUN").map(PathBuf::from).or_else(|| in_path("cordial-run"));
-    if let Some(loader) = loader {
-        if let Some(build) = latest_build() {
+    if let Some(loader) = cordial_loader() {
+        if let Some(build) = latest_build(&loader) {
             return Ok(ClientExe {
                 path: loader.clone(),
                 bootstrapper: true,
@@ -66,6 +66,16 @@ pub fn find() -> Result<ClientExe> {
                 direct: Some(CordialBuild { loader, ..build }),
             });
         }
+        // Not silent: without a complete build this run cannot use the direct
+        // `--join-url` contract, and Cordial's shell is the path that produced the home/login
+        // landing page before. Say which stores were checked.
+        let stores = build_dirs().iter().map(|d| d.display().to_string()).collect::<Vec<_>>().join(", ");
+        log::warn!(
+            "found {} but no complete Roblox build (libroblox.so + base.apk) under [{}]; \
+             falling back to Cordial's shell",
+            loader.display(),
+            stores
+        );
     }
     if let Some(path) = in_path("cordial") {
         let profiles = supports_profiles(&path, LauncherKind::Cordial);
@@ -76,23 +86,8 @@ pub fn find() -> Result<ClientExe> {
         let profiles = supports_profiles(&path, LauncherKind::FlatpakCordial);
         return Ok(ClientExe { path, bootstrapper: true, kind: LauncherKind::FlatpakCordial, profiles, direct: None });
     }
-    if let Some(path) = in_path("sober") {
-        return Ok(ClientExe { path, bootstrapper: true, kind: LauncherKind::Sober, profiles: false, direct: None });
-    }
-    if flatpak_installed(SOBER_ID) {
-        return Ok(ClientExe {
-            path: PathBuf::from("flatpak"),
-            bootstrapper: true,
-            kind: LauncherKind::FlatpakSober,
-            profiles: false,
-            direct: None,
-        });
-    }
-    if let Some(path) = in_path("xdg-open") {
-        return Ok(ClientExe { path, bootstrapper: true, kind: LauncherKind::Handler, profiles: false, direct: None });
-    }
     Err(AppError::Invalid(tr!(
-        "Roblox on Linux needs Cordial or Sober. Install Cordial (recommended for multiple clients) or Sober, then try again."
+        "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run."
     )))
 }
 
@@ -114,22 +109,55 @@ fn supports_profiles(path: &Path, kind: LauncherKind) -> bool {
         .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("--profile"))
 }
 
-/// Cordial's cache root for downloaded Roblox builds.
-fn builds_dir() -> Option<PathBuf> {
-    let cache = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
-    Some(cache.join("cordial").join("builds"))
+/// The Cordial loader: the explicit override, PATH, or the usual per-user bin folders.
+///
+/// A desktop-launched RoALT often does not inherit the shell's `~/.local/bin` in `PATH`, which
+/// is why a `cordial-run` that `which` finds can otherwise be missed.
+fn cordial_loader() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("ROALT_CORDIAL_RUN").map(PathBuf::from).filter(|p| p.is_file()) {
+        return Some(path);
+    }
+    in_path("cordial-run")
+        .or_else(|| env_home().map(|h| h.join(".local").join("bin").join("cordial-run")))
+        .or_else(|| env_home().map(|h| h.join("bin").join("cordial-run")))
+        .filter(|p| p.is_file())
 }
 
-/// The newest complete build under Cordial's cache.
-fn latest_build() -> Option<CordialBuild> {
-    let dir = builds_dir()?;
-    let mut builds: Vec<(Vec<u64>, PathBuf)> = std::fs::read_dir(&dir)
-        .ok()?
-        .filter_map(|e| e.ok())
+fn env_home() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
+}
+
+/// Cordial's build stores: the data store used since 0.25, then the old cache for upgrades.
+fn build_dirs() -> Vec<PathBuf> {
+    let data = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share")));
+    let cache = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")));
+    [data.map(|d| d.join("cordial").join("builds")), cache.map(|c| c.join("cordial").join("builds"))]
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// Whether a build directory holds both files and neither is empty.
+///
+/// A directory name is reserved before the download finishes, so presence alone is not enough:
+/// running a truncated engine or APK is a launch that never reaches a place.
+fn build_is_complete(dir: &Path) -> bool {
+    ["libroblox.so", "base.apk"]
+        .iter()
+        .all(|name| std::fs::metadata(dir.join(name)).is_ok_and(|m| m.is_file() && m.len() > 0))
+}
+
+/// The newest complete build under either Cordial store, with `loader` as the executable.
+fn latest_build(loader: &Path) -> Option<CordialBuild> {
+    let mut builds: Vec<(Vec<u64>, PathBuf)> = build_dirs()
+        .into_iter()
+        .flat_map(|dir| std::fs::read_dir(dir).into_iter().flatten().flatten())
         .map(|e| e.path())
-        .filter(|p| p.join("libroblox.so").is_file() && p.join("base.apk").is_file())
+        .filter(|p| build_is_complete(p))
         .filter_map(|p| {
             let name = p.file_name()?.to_str()?;
             let key = name.split('.').map(|n| n.parse().unwrap_or(0)).collect();
@@ -138,7 +166,8 @@ fn latest_build() -> Option<CordialBuild> {
         .collect();
     builds.sort_by(|a, b| a.0.cmp(&b.0));
     let dir = builds.pop()?.1;
-    Some(CordialBuild { loader: in_path("cordial-run")?, lib_dir: dir.clone(), apk: dir.join("base.apk") })
+    log::info!("Cordial direct launch: {} running {}", loader.display(), dir.display());
+    Some(CordialBuild { loader: loader.to_owned(), lib_dir: dir.clone(), apk: dir.join("base.apk") })
 }
 
 /// `$XDG_DATA_HOME/cordial/profiles` (or `~/.local/share/cordial/profiles`).
@@ -184,10 +213,17 @@ pub fn ensure_profile(user_id: i64) {
     }
     // The engine's own storage can reach a signed-out app state that makes it drop the
     // cold-start join link even though Cordial restored the cookie and identity. A launch that
-    // succeeds writes `.roalt-good`; a launch that reports the link was dropped removes it
-    // (`watch_launch`). So the next launch starts from clean engine storage, automatically.
-    if !dir.join(".roalt-good").exists() {
+    // loads a real place writes `.roalt-good`. A launch in flight writes `.roalt-launching`, and
+    // `watch_launch` clears it on success or failure. Anything else means the previous launch
+    // never proved it loaded a place (a failure, a crash, or RoALT exiting first), so the next
+    // launch starts from clean engine storage. This is what makes the retry deterministic instead
+    // of leaving it to the same cold-start race.
+    let good = dir.join(".roalt-good");
+    let launching = dir.join(".roalt-launching");
+    if !good.exists() || launching.exists() {
         reset_engine_state(&dir);
+        let _ = std::fs::remove_file(&good);
+        let _ = std::fs::remove_file(&launching);
     }
     log::info!("Cordial profile ready at {}", dir.display());
 }
@@ -316,33 +352,57 @@ fn client_log(browser_tracker_id: i64) -> Option<(std::fs::File, PathBuf)> {
     Some((file, path))
 }
 
-/// Follow this launch's log: mark the profile good once the link is accepted, and remove the
-/// marker if Cordial says the app shell dropped it. The next launch then clears the engine's
-/// cached state and tries again.
+/// The place id the engine actually finished loading, from its own `game loaded` line.
+///
+/// `place 0` is the app shell's own root and appears on every launch, including the runs that end
+/// on Home, so only a nonzero id is a join. Two earlier signals were wrong: "the app shell asked
+/// to launch an experience" fires before the place loads, and "this link did not reach an
+/// experience" fires on runs whose log then shows a real place loaded. Neither is used here.
+fn loaded_place(line: &str) -> Option<i64> {
+    let id = line.split_once("game loaded: place ")?.1.split_whitespace().next()?.parse::<i64>().ok()?;
+    (id > 0).then_some(id)
+}
+
+/// Follow this launch's log and mark the profile good only once a real place loaded. If no place
+/// loads before the deadline, the marker is removed so `ensure_profile` clears the engine's
+/// cached state before the next launch. That makes the retry deterministic instead of leaving the
+/// next launch to the same cold-start race.
 fn watch_launch(log: PathBuf, profile_dir: PathBuf) {
     std::thread::Builder::new()
         .name("cordial-launch".into())
         .spawn(move || {
             let marker = profile_dir.join(".roalt-good");
+            let launching = profile_dir.join(".roalt-launching");
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
             while std::time::Instant::now() < deadline {
-                if let Ok(text) = std::fs::read_to_string(&log) {
-                    if text.contains("the app shell asked to launch an experience")
-                        || text.contains("[cordial] game: joined")
-                    {
-                        let _ = std::fs::write(&marker, b"1\n");
-                        return;
-                    }
-                    if text.contains("this link did not reach an experience") {
-                        log::warn!("Cordial dropped the join link; the next launch will reset this profile's engine state");
-                        let _ = std::fs::remove_file(&marker);
-                        return;
-                    }
+                if let Ok(text) = std::fs::read_to_string(&log)
+                    && text.lines().any(|line| loaded_place(line).is_some())
+                {
+                    let _ = std::fs::write(&marker, b"1\n");
+                    let _ = std::fs::remove_file(&launching);
+                    return;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(250));
             }
+            log::warn!(
+                "launch never loaded a place; the next launch will reset this profile's engine state"
+            );
+            let _ = std::fs::remove_file(&marker);
+            let _ = std::fs::remove_file(&launching);
         })
         .ok();
+}
+
+/// The direct build to run for this launch, rediscovering it if `find` ran before the build was
+/// complete. An explicit `ROALT_LAUNCHER` is the user's choice and is never overridden.
+fn direct_build(exe: &ClientExe) -> Option<CordialBuild> {
+    if let Some(build) = &exe.direct {
+        return Some(build.clone());
+    }
+    if exe.kind == LauncherKind::Cordial && std::env::var_os("ROALT_LAUNCHER").is_none() {
+        return cordial_loader().and_then(|loader| latest_build(&loader));
+    }
+    None
 }
 
 /// The title-bar choice from Cordial's own settings (`~/.config/cordial/shell.json`). The
@@ -470,14 +530,37 @@ pub fn start(
 ) -> Result<(u32, u64)> {
     let profile = profile_name(user_id);
     let profile_dir = profiles_root().map(|root| root.join(profile_name(user_id)));
-    if let Some(build) = &exe.direct {
+    // The shell/Flatpak fallback also reads the profile's cookie and identity. Write them before
+    // branching: a fresh account otherwise lands on Roblox's login page even though RoALT has
+    // its cookie.
+    if matches!(exe.kind, LauncherKind::Cordial | LauncherKind::FlatpakCordial) {
+        write_cookies(user_id, cookie)?;
+        write_identity(user_id, username, display_name)?;
+        // `ensure_profile` has just consumed the previous outcome; mark this launch in flight so
+        // an early close, a crash, or RoALT exiting before the watcher finishes still makes the
+        // next launch start clean.
+        if let Some(dir) = &profile_dir
+            && let Err(e) = std::fs::write(dir.join(".roalt-launching"), b"1\n")
+        {
+            log::warn!("could not mark Cordial profile {} in flight: {e}", dir.display());
+        }
+    }
+    if let Some(build) = direct_build(exe) {
+        // A build directory that lost a file after `find` (an interrupted update, a prune) must
+        // not be spawned: a missing engine is a launch that lands on Home instead of a place.
+        if !build.loader.is_file() || !build_is_complete(&build.lib_dir) {
+            let why = if build.loader.is_file() {
+                "Cordial's Roblox build is incomplete"
+            } else {
+                "Cordial's loader is missing"
+            };
+            return Err(AppError::Internal(tr!("Could not start Roblox: {why}", why = why)));
+        }
         if headless && in_path("cage").is_none() {
             return Err(AppError::Invalid(tr!(
                 "Headless launch needs Cage. Install cage, or turn Headless off in Settings."
             )));
         }
-        write_cookies(user_id, cookie)?;
-        write_identity(user_id, username, display_name)?;
         let log = client_log(browser_tracker_id);
         let mut cmd = Command::new(&build.loader);
         cmd.arg("--lib-dir")
@@ -573,17 +656,38 @@ pub fn start(
             cmd.arg(uri.expose());
         }
     }
-    if matches!(exe.kind, LauncherKind::Cordial | LauncherKind::FlatpakCordial) {
-        // Cordial drops the launch ticket unless asked; without it the profile stays signed out.
-        cmd.env("CORDIAL_DEEPLINK_CARRY_TICKET", "1");
+    let cordshell = matches!(exe.kind, LauncherKind::Cordial | LauncherKind::FlatpakCordial);
+    if cordshell {
+        // The shell hands this environment to the `cordial-run` child it starts, so a host
+        // Cordial reads RoALT's file cookie/identity store instead of the desktop keyring. This
+        // is the fallback path that used to land on the login page with a perfectly good cookie.
+        // A Flatpak's profile lives inside its sandbox home, so its own store choice is left alone.
+        if exe.kind == LauncherKind::Cordial {
+            cmd.env("CORDIAL_SECRET_STORE", "file");
+        }
+        // Do not force the one-time browser ticket through. Cordial's own setting decides (its
+        // shell only exports "1" when the user enabled it), and its source documents the ticket
+        // as unverified and dropped by default.
+        cmd.env("CORDIAL_DEEPLINK_CARRY_TICKET", "0");
         if let Some(flags) = write_launch_flags(&profile, profile_dir.as_deref(), fps_cap, linux_flags) {
             cmd.env("CORDIAL_FLAGS", flags);
         }
     }
     // Launch arguments are Roblox flags for the Windows client; the loader does not take them.
     let _ = extra;
-    let log = client_log(browser_tracker_id).map(|(file, _)| file);
-    spawn_tracked(cmd, log)
+    let log = client_log(browser_tracker_id);
+    let (log, path) = match log {
+        Some((file, path)) => (Some(file), Some(path)),
+        None => (None, None),
+    };
+    let started = spawn_tracked(cmd, log);
+    if started.is_ok()
+        && cordshell
+        && let (Some(path), Some(profile_dir)) = (path, profile_dir)
+    {
+        watch_launch(path, profile_dir);
+    }
+    started
 }
 
 fn spawn_tracked(mut cmd: Command, log: Option<std::fs::File>) -> Result<(u32, u64)> {
@@ -625,6 +729,14 @@ mod tests {
         assert_eq!(kind_for(Path::new("/usr/bin/sober")), LauncherKind::Sober);
         assert_eq!(kind_for(Path::new("flatpak")), LauncherKind::FlatpakCordial);
         assert_eq!(kind_for(Path::new("/usr/bin/xdg-open")), LauncherKind::Handler);
+    }
+
+    #[test]
+    fn a_loaded_place_is_only_the_engine_reporting_a_real_place() {
+        assert_eq!(loaded_place("[roblox] game loaded: place 72858262610964"), Some(72858262610964));
+        assert_eq!(loaded_place("  [roblox] game loaded: place 0"), None);
+        assert_eq!(loaded_place("the app shell asked to launch an experience"), None);
+        assert_eq!(loaded_place("this link did not reach an experience"), None);
     }
 
     #[test]

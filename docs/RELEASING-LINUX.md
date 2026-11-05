@@ -81,15 +81,33 @@ The updater only replaces the binary. It does not install Cordial or Cage. Use
 `scripts/install-linux.sh`:
 
 - checks Linux and x86_64
-- installs Cage if missing, through the system package manager
-- installs Cordial if missing, through the AUR helper on Arch or Flatpak elsewhere
-- downloads the latest `roalt-linux-x86_64` and its SHA-256
+- detects Arch, Debian/Ubuntu, Fedora/RHEL, openSUSE, Alpine, Void, and unknown
+  distributions that provide a supported package manager
+- installs Cage if missing, through the matching package manager
+  (`pacman`, `apt-get`, `dnf`, `zypper`, `apk`, or `xbps-install`)
+- installs Cordial if missing: paru/yay, the official package, or Flatpak on
+  Arch; Flatpak (installed first when missing) on other distributions
+- downloads the latest `roalt-linux-x86_64` and its SHA-256, then verifies the
+  binary before installing it
 - installs it to `${XDG_BIN_HOME:-$HOME/.local/bin}/roalt`
 - writes `~/.local/share/applications/roalt.desktop`
-- refreshes the desktop database when available
+- installs an icon only when one is already bundled with the release or source
+  tree; it never downloads an icon
+- warns when `~/.local/bin` is not on `PATH` instead of editing shell rc files
+- refreshes the desktop database and icon cache when available
 
-Run it with:
+The script requires `bash`, `curl`, and `sha256sum`. Alpine does not ship `bash`
+by default; install it with `sudo apk add bash` first. Package-manager installs
+use `sudo` only when they are actually needed; run the script as a normal user.
+
+Run it after downloading and reviewing it:
 
 ```bash
-curl -fsSL https://github.com/itaplyr/RoALT/releases/latest/download/install-linux.sh | bash
+curl -fsSLO https://github.com/itaplyr/RoALT/releases/latest/download/install-linux.sh
+less install-linux.sh
+bash install-linux.sh
 ```
+
+Unknown distributions are not refused: the script falls back to whichever
+supported package manager is installed, and still installs RoALT when Cage or
+Cordial cannot be installed automatically.
