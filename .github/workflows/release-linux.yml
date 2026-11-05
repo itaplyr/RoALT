@@ -47,7 +47,7 @@ jobs:
             librsvg2-dev patchelf libssl-dev libxdo-dev
       - run: npm ci
       - run: npm run build
-      - run: cargo build --release --manifest-path src-tauri/Cargo.toml
+      - run: cargo build --release --features custom-protocol --manifest-path src-tauri/Cargo.toml
       - name: Package
         run: |
           mkdir -p dist-linux

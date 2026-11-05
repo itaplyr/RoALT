@@ -25,7 +25,7 @@ use crate::model::AppUpdate;
 
 pub const UPDATE_EVENT: &str = "app://update";
 /// Bumped for each Linux release: `v<Cargo version>.<this>`.
-pub const LINUX_REVISION: u32 = 1;
+pub const LINUX_REVISION: u32 = 2;
 
 const LATEST: &str = "https://api.github.com/repos/itaplyr/RoALT/releases/latest";
 const CHECK_EVERY: Duration = Duration::from_secs(5 * 60);

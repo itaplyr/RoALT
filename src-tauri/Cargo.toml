@@ -7,6 +7,10 @@ license = "MIT"
 edition = "2024"
 rust-version = "1.95"
 
+[features]
+# Tauri uses the embedded frontend in release builds; `tauri dev` uses devUrl instead.
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2.7", features = [] }
 
