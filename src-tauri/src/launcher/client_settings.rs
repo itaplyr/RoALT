@@ -552,7 +552,6 @@ pub fn spawn(app: AppHandle) {
     #[cfg(not(windows))]
     {
         let _ = app;
-        return;
     }
     #[cfg(windows)]
     let watching = std::thread::Builder::new().name("client-settings".into()).spawn(move || {

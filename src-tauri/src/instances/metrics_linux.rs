@@ -27,11 +27,13 @@ struct Last {
     r: Reading,
 }
 
+type SystemSample = (Instant, SystemUsage, (u64, u64));
+
 pub struct Sampler {
     last: Mutex<HashMap<String, Last>>,
     cache: Mutex<Option<(Instant, Vec<ClientMetrics>)>>,
     /// The PC's last sample and its CPU times (idle, total), for `system`.
-    system: Mutex<Option<(Instant, SystemUsage, (u64, u64))>>,
+    system: Mutex<Option<SystemSample>>,
 }
 
 impl Sampler {

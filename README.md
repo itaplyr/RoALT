@@ -12,8 +12,7 @@
 Status is for this Linux fork, not upstream Windows RoALT. Green means working or complete; gray means
 partial, untested, missing, or not applicable. The image covers accounts, launching, multi-client, headless
 mode, previews, recovery, servers, FPS, Discord, limits, metrics, window controls, updates, anti-AFK,
-bandwidth, resizing, re-authentication, self-update, interface, languages, Max alts, usage stats,
-and logs.
+resizing, re-authentication, self-update, interface, languages, Max alts, usage stats, and logs.
 
 RoALT is a local-only Roblox account manager and multi-client launcher, running as a Tauri desktop app.
 This branch is the Linux fork: it launches Roblox through **Cordial** and keeps cookies encrypted on
@@ -188,9 +187,8 @@ RoALT does not implement Windows Hello on Linux. Master-password re-authenticati
 
 - **Anti-AFK works on Hyprland, Sway and X11 when the required input tool is available.** Other
   Wayland compositors have no equivalent path yet.
-- **Bandwidth limiting is not available.** There is no QoS equivalent in this build.
 - **GPU metrics are not available.** CPU, memory and disk I/O are sampled from `/proc`.
-- **Free per-window resizing is not implemented.** The compositor owns window geometry.
+- **Drag-resizing is compositor-managed.** RoALT adds micro/tile controls where supported.
 - **Windows Hello is not available.** Use a master password for re-authentication.
 - **RoALT self-update replaces only the binary.** Use the installer script or reinstall when
   Cordial, Cage or the desktop entry needs changing.

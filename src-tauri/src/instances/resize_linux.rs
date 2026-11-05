@@ -6,4 +6,5 @@ pub fn start() {}
 
 pub fn set_clients(_pids: Vec<u32>) {}
 
+#[allow(dead_code)]
 pub fn unhide_all(_limit: std::time::Duration) {}

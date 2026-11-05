@@ -33,7 +33,7 @@ getrandom = "0.4"
 zeroize = { version = "1.9", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 url = "2"
-ts-rs = "12"
+ts-rs = { version = "12", features = ["no-serde-warnings"] }
 sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["png"] }
 

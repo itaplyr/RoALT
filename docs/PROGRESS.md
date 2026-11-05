@@ -17,7 +17,7 @@ statement about the upstream Windows application.
 The SVG uses green for ported areas and gray for partial, untested, missing, or
 not-applicable areas.
 
-Current totals: **11 ported, 10 partial, 2 missing/unverified**.
+Current totals: **12 ported, 10 partial**.
 
 ## Summary
 
@@ -37,8 +37,7 @@ Current totals: **11 ported, 10 partial, 2 missing/unverified**.
 | Window controls | Partial | 80% | Hyprland/Sway/X11 focus, micro and tile; free drag resize missing |
 | Roblox updates | Ported | 100% | Handled automatically by Cordial |
 | Anti-AFK | Partial | 80% | Hyprland/Sway/X11 F13 where tools exist; no idle detection |
-| Bandwidth limit | Missing | 0% | No QoS equivalent |
-| Free resizing | Missing | 0% | The compositor owns drag-resize geometry |
+| Free resizing | Ported | 100% | Handled by the compositor; RoALT adds micro/tile |
 | Re-authentication | Ported | 100% | Master password; Windows Hello is not available |
 | Self-update | Ported | 100% | Checks the Linux fork release, verifies SHA-256 and restarts |
 | Interface | Ported | 100% | Account tabs, layouts, drag sorting, themes |
@@ -224,19 +223,13 @@ Partial.
 - There is no portable last-input timestamp, so the interval is the only gate.
 - Compositors without a supported input tool have no equivalent path yet.
 
-## Bandwidth limit
-
-Missing.
-
-- No Linux QoS equivalent.
-- The Windows implementation uses a Windows QoS policy.
 
 ## Free resizing
 
-Missing.
+Ported.
 
-- The compositor owns window geometry.
-- The Windows mouse-hook resize path does not apply.
+- Wayland and X11 compositors own drag-resize geometry, so the Windows mouse-hook path is not needed.
+- RoALT adds micro-window sizing and grid tiling where the compositor tools support it.
 
 ## Re-authentication
 

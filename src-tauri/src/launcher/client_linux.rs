@@ -289,6 +289,23 @@ fn write_cookies(user_id: i64, cookie: &Secret) -> Result<()> {
     })
 }
 
+/// Remove the plaintext Cordial session and identity once no client is using the profile.
+/// RoALT's encrypted vault still has the account; the next launch seeds the profile again.
+pub fn remove_profile_secrets(user_id: i64) {
+    let Some(root) = profiles_root() else { return };
+    let dir = root.join(profile_name(user_id));
+    for name in ["cookies", "identity", "cookies.roalt", "identity.roalt"] {
+        match std::fs::remove_file(dir.join(name)) {
+            Ok(()) => log::info!("removed Cordial profile secret {name} for {user_id}"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => log::warn!(
+                "could not remove Cordial profile {} for {user_id}: {e}",
+                name
+            ),
+        }
+    }
+}
+
 /// Cordial's identity store, so the app shell routes straight to the game on the first launch
 /// of a new profile instead of landing on the home screen while the cookie is applied.
 fn write_identity(user_id: i64, username: &str, display_name: &str) -> Result<()> {
@@ -508,6 +525,26 @@ fn write_launch_flags(profile: &str, profile_dir: Option<&Path>, fps: u32, extra
     }
 }
 
+/// WebKit workarounds are for RoALT's own window, not the Cordial/Roblox child. Remove the ones
+/// this process set for RoALT's own window before spawning the game.
+fn clear_webview_env(cmd: &mut Command) {
+    if std::env::var_os("ROALT_DESKTOP_GRAPHICS").is_none() {
+        return;
+    }
+    for key in [
+        "GDK_BACKEND",
+        "WEBKIT_DISABLE_DMABUF_RENDERER",
+        "WEBKIT_DISABLE_COMPOSITING_MODE",
+        "ROALT_DESKTOP_GRAPHICS",
+    ] {
+        cmd.env_remove(key);
+    }
+    if std::env::var_os("ROALT_DESKTOP_LIBGL").is_some() {
+        cmd.env_remove("LIBGL_ALWAYS_SOFTWARE");
+        cmd.env_remove("ROALT_DESKTOP_LIBGL");
+    }
+}
+
 /// Starts the game with the URI as its argument. Returns the PID of the launcher process and its
 /// start time; that process lives as long as the game for Cordial and Sober.
 #[allow(clippy::too_many_arguments)]
@@ -622,6 +659,7 @@ pub fn start(
             // Cordial's own switch: closing the game window does not end the client.
             cmd.env("CORDIAL_NO_CLOSE_EXIT", "1");
         }
+        clear_webview_env(&mut cmd);
         let (log, path) = match log {
             Some((file, path)) => (Some(file), Some(path)),
             None => (None, None),

@@ -508,6 +508,10 @@ fn init(app: &TauriApp, data_dir: &Path, moved_from: Option<&Path>) -> std::resu
         )
     })?;
     spawn_auto_lock(app.handle().clone());
+    {
+        let s = app.state::<App>();
+        commands::remove_all_stopped_secrets(&s);
+    }
     instances::Tracker::spawn(app.handle().clone());
     instances::afk::spawn(app.handle().clone());
     network::spawn(app.handle().clone());
@@ -553,7 +557,58 @@ fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
     }
 }
 
+/// WebKitGTK on Wayland can end at a black window or `Gdk-Message: Error 71 (Protocol error)
+/// dispatching to Wayland display`, especially with NVIDIA and the DMA-BUF/compositing path.
+/// Before Tauri or GTK starts, use XWayland (when one exists) and WebKit's non-DMA-BUF path.
+/// An existing user value wins; `ROALT_DESKTOP_GRAPHICS=0` disables this and `=1` forces it.
+#[cfg(not(windows))]
+fn configure_desktop_graphics() {
+    if std::env::var_os("ROALT_DESKTOP_GRAPHICS").is_some_and(|v| v == "0") {
+        return;
+    }
+    let forced = std::env::var_os("ROALT_DESKTOP_GRAPHICS").is_some_and(|v| v == "1");
+    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some()
+        || std::env::var("XDG_SESSION_TYPE").is_ok_and(|v| v.eq_ignore_ascii_case("wayland"));
+    if !forced && !wayland {
+        return;
+    }
+    let set = |key: &str, value: &str| -> bool {
+        if std::env::var_os(key).is_some() {
+            return false;
+        }
+        // SAFETY: this runs before Tauri, GTK, or any worker thread starts.
+        unsafe { std::env::set_var(key, value) };
+        true
+    };
+    let mut changed = false;
+    // XWayland gives WebKit a path that does not fail in the middle of the Wayland protocol.
+    // Without DISPLAY there is nothing to switch to, so leave GDK alone.
+    if std::env::var_os("DISPLAY").is_some() {
+        changed |= set("GDK_BACKEND", "x11");
+    }
+    changed |= set("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    changed |= set("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+    // NVIDIA's Wayland/WebKit path is the reproducible black-screen case. Keep the software
+    // fallback for a forced/tested run, but do not override a user's own GL choice.
+    if (std::path::Path::new("/proc/driver/nvidia/version").exists()
+        || std::path::Path::new("/dev/dri").read_dir().is_err())
+        && set("LIBGL_ALWAYS_SOFTWARE", "1")
+    {
+        unsafe { std::env::set_var("ROALT_DESKTOP_LIBGL", "1") };
+        changed = true;
+    }
+    if changed {
+        // Cordial launches remove these again; they are only for RoALT's WebKit window.
+        unsafe { std::env::set_var("ROALT_DESKTOP_GRAPHICS", "1") };
+        eprintln!(
+            "[RoALT] Wayland desktop detected; using X11/WebKit-safe rendering for the app window"
+        );
+    }
+}
+
 fn main() {
+    #[cfg(not(windows))]
+    configure_desktop_graphics();
     webview::clear_webview2_env();
     // Windows' language until the settings are read.
     i18n::set("");
@@ -720,6 +775,7 @@ fn main() {
                 if let Some(s) = app.try_state::<App>() {
                     s.tracker.persist(&s.db, true);
                     s.limiter.release_all();
+                    commands::remove_all_stopped_secrets(&s);
                     launcher::client_settings::restore(&s.db);
                     launcher::flags::restore();
                 }

@@ -1371,12 +1371,45 @@ pub async fn instance_close(s: State<'_, App>, id: String, force: bool) -> Resul
     // Closed by the user: a relaunch waiting on it is over.
     s.tracker.end_relaunch(&id);
     // Its process already gone: the next poll ends the entry.
-    let Some(target) = s.tracker.mark_closing(&id) else { return Ok(()) };
-    let r = close_all(vec![target], force, grace(&s)).await?.pop().unwrap_or(Ok(()));
+    let Some(target) = s.tracker.mark_closing(&id) else {
+        return Ok(());
+    };
+    let account_id = s.tracker.get(&id).map(|i| i.account_id);
+    let r = close_all(vec![target], force, grace(&s))
+        .await?
+        .pop()
+        .unwrap_or(Ok(()));
     if r.is_err() {
         s.tracker.clear_closing(&id);
+    } else if let Some(account_id) = account_id {
+        remove_secrets_if_stopped(&s, account_id);
     }
     r
+}
+
+/// Deletes the plaintext Cordial cookie/identity for an account once its profile has no live
+/// Cordial process. The encrypted vault remains the source for the next launch.
+pub(crate) fn remove_secrets_if_stopped(s: &App, account_id: i64) {
+    let Some(user_id) = s.db.account(account_id).ok().map(|a| a.user_id) else {
+        return;
+    };
+    match crate::instances::process::profiles_by_user() {
+        Some(users) if !users.contains(&user_id) => {
+            crate::launcher::client::remove_profile_secrets(user_id)
+        }
+        Some(_) => {}
+        None => log::debug!("kept Cordial profile {user_id}: could not scan running profiles"),
+    }
+}
+
+/// Clear every stopped account's plaintext Cordial session. Called at start and exit; a profile
+/// with a live Cordial process is left alone, so a client RoALT keeps running stays signed in.
+pub(crate) fn remove_all_stopped_secrets(s: &App) {
+    if let Ok(accounts) = s.db.accounts() {
+        for a in accounts {
+            remove_secrets_if_stopped(s, a.id);
+        }
+    }
 }
 
 /// How long a closed client gets before it is terminated (`settings.close_grace_s`).
@@ -1412,13 +1445,26 @@ pub async fn instances_close_all(s: State<'_, App>, force: bool) -> Result<()> {
 /// Asks every running client to close (also the tray's "Close all clients").
 pub(crate) async fn close_running(s: &App, force: bool) -> Result<()> {
     s.tracker.cancel_relaunches();
-    let running: Vec<Instance> = s.tracker.list().into_iter().filter(|i| i.state != InstanceState::Exited).collect();
-    let (ids, targets): (Vec<String>, Vec<_>) =
-        running.into_iter().filter_map(|i| Some((i.id.clone(), s.tracker.mark_closing(&i.id)?))).unzip();
-    for (id, r) in ids.iter().zip(close_all(targets, force, grace(s)).await?) {
+    let running: Vec<Instance> = s
+        .tracker
+        .list()
+        .into_iter()
+        .filter(|i| i.state != InstanceState::Exited)
+        .collect();
+    let mut ids = Vec::new();
+    let mut targets = Vec::new();
+    for i in &running {
+        if let Some(target) = s.tracker.mark_closing(&i.id) {
+            ids.push((i.id.clone(), i.account_id));
+            targets.push(target);
+        }
+    }
+    for ((id, account_id), r) in ids.iter().zip(close_all(targets, force, grace(s)).await?) {
         if let Err(e) = r {
             log::warn!("could not close Roblox client of instance {id}: {e}");
             s.tracker.clear_closing(id);
+        } else {
+            remove_secrets_if_stopped(s, *account_id);
         }
     }
     Ok(())
@@ -1584,7 +1630,7 @@ pub async fn instance_show(app: AppHandle, s: State<'_, App>, id: String, what: 
     #[cfg(not(windows))]
     {
         let has = instance_has_window(&s, &id);
-        return match what {
+        match what {
             crate::instances::window::Show::Minimize if has => {
                 set_instance_headless(&app, &s, &id, true).await
             }
@@ -1596,7 +1642,7 @@ pub async fn instance_show(app: AppHandle, s: State<'_, App>, id: String, what: 
             crate::instances::window::Show::Focus | crate::instances::window::Show::Restore => {
                 set_instance_headless(&app, &s, &id, false).await
             }
-        };
+        }
     }
     #[cfg(windows)]
     {
@@ -1634,7 +1680,7 @@ pub async fn instances_show_all(app: AppHandle, s: State<'_, App>, what: crate::
                 _ => {}
             }
         }
-        return Ok(());
+        Ok(())
     }
     #[cfg(windows)]
     {
@@ -1904,6 +1950,9 @@ async fn close_roblox(s: &App, force: bool, keep_closing: bool) -> Result<MultiI
                 s.tracker.clear_closing(&i.id);
             }
         }
+    }
+    for i in s.tracker.list() {
+        remove_secrets_if_stopped(s, i.account_id);
     }
     let v = s.db.settings()?;
     retake_multi(s, &v);

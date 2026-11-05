@@ -186,6 +186,9 @@ fn handler_exe(command: &str) -> Option<PathBuf> {
     (!exe.is_empty()).then(|| PathBuf::from(exe))
 }
 
+/// Windows has no Cordial profile secrets to clear.
+pub fn remove_profile_secrets(_user_id: i64) {}
+
 /// A bootstrapper owns this install, so Roblox's installer must not run over it: `exe` is a
 /// bootstrapper, sits under a `Bloxstrap`/`Fishstrap` folder (they set `clientExe` to their own
 /// `Versions` copy), or the `roblox-player` protocol handler isn't RobloxPlayerBeta.exe.

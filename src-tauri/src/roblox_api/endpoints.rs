@@ -43,4 +43,5 @@ pub fn fill(template: &str, value: impl std::fmt::Display) -> String {
 
 // Roblox client updates (no cookie). The installer URL is `{SETUP}{clientVersionUpload}-RobloxPlayerInstaller.exe`.
 pub const CLIENT_VERSION: &str = "https://clientsettingscdn.roblox.com/v2/client-version/WindowsPlayer";
+#[allow(dead_code)]
 pub const SETUP: &str = "https://setup.rbxcdn.com/";

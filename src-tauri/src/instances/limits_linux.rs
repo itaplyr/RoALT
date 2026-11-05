@@ -170,6 +170,7 @@ fn clear_affinity(pid: u32) {
     }
 }
 
+#[allow(dead_code)]
 pub fn plan(
     clients: &[(String, u32, u64, Limits)],
     v: &Settings,
@@ -192,6 +193,7 @@ pub fn plan_now(s: &crate::App, v: &Settings, clients: &[(String, u32, u64, Limi
     plan_full(clients, v, super::process::foreground_pid(), cores, throttled, &free, fair, &[])
 }
 
+#[allow(clippy::too_many_arguments)]
 fn plan_full(
     clients: &[(String, u32, u64, Limits)],
     v: &Settings,
@@ -222,6 +224,7 @@ fn plan_full(
         .collect()
 }
 
+#[allow(dead_code)]
 pub fn effective(manual: Limits, foreground: bool, v: &Settings, share: Option<u64>) -> Limits {
     effective_with(manual, foreground, v, share, None)
 }
@@ -276,10 +279,12 @@ pub fn spread(i: u32, n: u32, cores: u32) -> u64 {
     (0..cores).filter(|c| c % n == i % n).fold(0, |m, c| m | 1 << c)
 }
 
+#[allow(dead_code)]
 pub fn clamp_affinity(mask: u64, system: u64) -> Option<u64> {
     Some(mask & system).filter(|&m| m != 0)
 }
 
+#[allow(dead_code)]
 pub fn trim(_pid: u32, _t0: u64) -> Result<()> {
     Ok(())
 }

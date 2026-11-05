@@ -34,6 +34,7 @@ pub struct Shot {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum Status {
     Live = 0,
     Minimized = 1,
@@ -722,6 +723,7 @@ pub fn has_window(pid: u32) -> bool {
     window_info(pid).is_some()
 }
 
+#[allow(dead_code)]
 pub fn unpark_client(pid: u32) {
     let _ = reveal(pid, false);
 }
@@ -738,6 +740,7 @@ pub fn show(pid: u32, what: Show) -> Result<()> {
     }
 }
 
+#[allow(dead_code)]
 pub fn show_all(pids: &[u32], what: Show) {
     for &pid in pids {
         if let Err(e) = show(pid, what) {
@@ -754,8 +757,10 @@ pub fn recover() {}
 
 pub fn sweep(_clients: &[(u32, Option<(u32, u32)>)]) {}
 
+#[allow(dead_code)]
 pub fn set_live_hidden_previews(_on: bool) {}
 
+#[allow(dead_code)]
 pub const MICRO: (u32, u32) = (320, 240);
 
 static MICRO_OLD: Mutex<Vec<(u32, (i32, i32))>> = Mutex::new(Vec::new());

@@ -1190,6 +1190,7 @@ pub struct AppUpdate {
 #[derive(Serialize, TS, Clone, Debug, PartialEq)]
 #[serde(tag = "stage", rename_all = "camelCase")]
 #[ts(export)]
+#[allow(dead_code)]
 pub enum InstallProgress {
     Downloading { percent: u8 },
     /// Checking the installer's Authenticode signature.
