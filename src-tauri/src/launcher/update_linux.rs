@@ -64,6 +64,9 @@ pub async fn update_hold(_s: &App, _closing: usize) -> Option<String> {
     None
 }
 
+/// Cordial and Sober own the Roblox build here, so RoALT has no rollout probe to remember.
+pub fn note_started(_s: &App, _exe: &client::ClientExe, _production: bool, _pid: u32, _started: u64) {}
+
 /// Linux has no RoALT-managed client update; the launcher is supplied by Cordial/Sober. The
 /// production channel flag is what a normal launch uses.
 pub async fn launch_client(_s: &App) -> Result<(client::ClientExe, bool)> {

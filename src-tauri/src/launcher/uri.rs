@@ -55,7 +55,7 @@ pub fn place_launcher_url(p: &PlaceLaunch) -> String {
 /// `roblox-player:1+launchmode:play+gameinfo:<enc ticket>+launchtime:<ms>+placelauncherurl:<enc url>+
 /// browsertrackerid:<id>+robloxLocale:en_us+gameLocale:en_us+LaunchExp:InApp`. `production` adds an
 /// empty `channel:` before `LaunchExp`: the client then asks for production's version, whatever
-/// channel Roblox left in the registry (research multi-instance M9). The result holds the ticket,
+/// channel Roblox left in the registry. The result holds the ticket,
 /// so it is a `Secret`.
 pub fn player_uri(ticket: &Secret, launch_time_ms: i64, p: &PlaceLaunch, production: bool) -> Secret {
     let url = place_launcher_url(p);

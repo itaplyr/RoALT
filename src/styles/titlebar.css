@@ -1,0 +1,113 @@
+/* The custom title bar: the app menu, the island centred, then tools and Windows' caption keys.
+   Empty space drags the window (data-tauri-drag-region="deep"); the island and every popover in the
+   header opt out. Left to right in every language: the window keys stay where Windows has them. */
+@layer components {
+  .titlebar {
+    position: relative;
+    z-index: 30;
+    flex: none;
+    height: var(--titlebar-h);
+    display: grid;
+    /* The ends keep their own width; the island gets what is left between them (centred while it
+       fits), so it never runs over the tools. */
+    grid-template-columns: minmax(max-content, 1fr) minmax(0, auto) minmax(max-content, 1fr);
+    align-items: center;
+    container: titlebar / inline-size;
+  }
+  .titlebar-start {
+    justify-self: start;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    padding-inline-start: 10px;
+  }
+  .titlebar-center {
+    justify-self: center;
+    min-width: 0;
+    display: flex;
+  }
+  .titlebar-end {
+    justify-self: end;
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    min-width: 0;
+  }
+  .title-tools {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding-inline-end: 6px;
+  }
+  .title-sep {
+    width: 1px;
+    height: 20px;
+    margin: 0 4px;
+    background: var(--line);
+  }
+
+  /* The logo and name: the app menu. */
+  .app-menu-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    height: 36px;
+    padding: 0 10px 0 9px;
+    border-radius: var(--r-pill);
+    color: var(--fg);
+    transition: background-color var(--dur-fast) var(--ease-out);
+  }
+  .app-menu-btn:hover,
+  .app-menu-btn[aria-expanded="true"] {
+    background: var(--hover);
+  }
+  .app-menu-btn .wordmark {
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+  .app-menu-btn .app-menu-chevron {
+    color: var(--fg-3);
+    transition: rotate var(--dur-base) var(--ease-out);
+  }
+  .app-menu-btn[aria-expanded="true"] .app-menu-chevron {
+    rotate: 180deg;
+  }
+  @container titlebar (width < 1060px) {
+    .app-menu-btn .wordmark {
+      display: none;
+    }
+  }
+
+  /* Windows' own keys: the whole bar's height, flush to the corner. */
+  .caption-btn {
+    width: 46px;
+    height: 100%;
+    display: grid;
+    place-content: center;
+    color: var(--fg-2);
+    transition:
+      background-color var(--dur-instant) var(--ease-out),
+      color var(--dur-instant) var(--ease-out);
+  }
+  .caption-btn:hover {
+    background: var(--hover);
+    color: var(--fg);
+  }
+  .caption-btn:focus-visible {
+    outline-offset: -2px;
+  }
+  .caption-close:hover {
+    background: #c42b1c;
+    color: #ffffff;
+  }
+
+  /* The vault's state when no lock key applies (Windows-account mode). */
+  .vault-glyph {
+    width: var(--h-md);
+    height: var(--h-md);
+    display: grid;
+    place-content: center;
+    color: var(--fg-3);
+  }
+}

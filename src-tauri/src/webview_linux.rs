@@ -16,66 +16,107 @@ use crate::roblox_api::endpoints;
 use crate::vault::Secret;
 
 const TMP_DIR: &str = "tmp-webview";
+const LOGIN_DIR: &str = "webview-login";
+const SESSIONS_DIR: &str = "webview-sessions";
+/// In a kept profile while its window is open; still there at start-up → the profile may hold a
+/// cookie or a sign-in left by a window that never closed normally.
+const OPEN_MARK: &str = ".roalt-open";
 const POLL: Duration = Duration::from_millis(700);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const HOME_PAGE: &str = "https://www.roblox.com/home";
 
 static LOGIN_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// Session windows from close request until their close path has finished with the profile.
+static CLOSING: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 pub async fn capture_login(app: &AppHandle, data_dir: &Path) -> Result<Secret> {
     let slot = LoginSlot::take(app)?;
-    let id = uuid::Uuid::new_v4();
-    let label = format!("login-{id}");
-    let profile = data_dir.join(TMP_DIR).join(id.to_string());
-    let built = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(parse_url(endpoints::LOGIN_PAGE)?))
+    let login = parse_url(endpoints::LOGIN_PAGE)?;
+    let label = format!("login-{}", uuid::Uuid::new_v4());
+    let profile = login_profile(data_dir);
+    mark_open(&profile);
+    // Blank first: the old cookie goes before anything loads from Roblox.
+    let built = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(parse_url("about:blank")?))
         .title(tr!("Sign in to Roblox — RoALT"))
         .inner_size(480.0, 760.0)
         .center()
         .data_directory(profile.clone())
-        .incognito(true)
+        .incognito(false)
         .devtools(cfg!(debug_assertions))
         .general_autofill_enabled(false)
+        .on_navigation(allowed)
         .build();
     let window = match built {
         Ok(w) => w,
         Err(e) => {
-            cleanup(profile).await;
+            mark_closed(&profile);
             return Err(e.into());
         }
     };
-    let cookie = wait_for_cookie(app.clone(), label).await;
+    // A Google / Apple sign-in left by an earlier window goes before the page loads.
+    let cookie = if clear_auth_cookies(&window) {
+        match window.navigate(login) {
+            Ok(()) => wait_for_cookie(app.clone(), label.clone()).await,
+            Err(e) => Err(e.into()),
+        }
+    } else {
+        Err(AppError::Internal(tr!("Could not clear the previous Roblox sign-in. Try again.")))
+    };
+    // Keep the profile (a captcha solved in it stays solved), but only when its auth cookies are gone.
+    let cleared = app.get_webview_window(&label).is_some() && clear_auth_cookies(&window);
+    if cleared {
+        mark_closed(&profile);
+    }
     if let Err(e) = window.destroy() {
-        log::debug!("could not destroy login window login-{id}: {e}");
+        log::debug!("could not destroy login window {label}: {e}");
     }
     drop(slot);
-    cleanup(profile).await;
     cookie
 }
 
 pub async fn open_session(
     app: &AppHandle,
     data_dir: &Path,
+    account_id: i64,
     title: &str,
     cookie: Secret,
     on_close: impl FnOnce(Option<Secret>) + Send + 'static,
 ) -> Result<()> {
     let home = parse_url(HOME_PAGE)?;
-    let id = uuid::Uuid::new_v4();
-    let label = format!("session-{id}");
-    let profile = data_dir.join(TMP_DIR).join(id.to_string());
+    let label = format!("session-{account_id}");
+    // Still closing: the profile isn't free yet.
+    if CLOSING.lock().unwrap_or_else(|e| e.into_inner()).contains(&label) {
+        return Err(AppError::Invalid(tr!("That Roblox window is still closing. Try again in a moment.")));
+    }
+    // One profile, one window: its cookie jar is shared.
+    if let Some(w) = app.get_webview_window(&label) {
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    let profile = session_profile(data_dir, account_id);
+    // Marked with no window open: left by a crash or a removal that failed (maybe of an earlier
+    // account with this id), so nothing of it is reused.
+    if profile.join(OPEN_MARK).exists() {
+        let p = profile.clone();
+        let _ = tokio::task::spawn_blocking(move || remove_profile(&p)).await;
+    }
+    mark_open(&profile);
+    // Blank first, so nothing loads from Roblox before the cookie is in place.
     let built = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(parse_url("about:blank")?))
         .title(title)
         .inner_size(1180.0, 800.0)
         .center()
         .data_directory(profile.clone())
-        .incognito(true)
+        .incognito(false)
         .devtools(cfg!(debug_assertions))
         .general_autofill_enabled(false)
+        .on_navigation(allowed)
         .build();
     let window = match built {
         Ok(w) => w,
         Err(e) => {
-            cleanup(profile).await;
+            mark_closed(&profile);
             return Err(e.into());
         }
     };
@@ -90,12 +131,13 @@ pub async fn open_session(
         if let Err(e) = window.destroy() {
             log::debug!("could not destroy session window {label}: {e}");
         }
-        cleanup(profile).await;
+        mark_closed(&profile);
         return Err(AppError::Internal(tr!("Could not set Roblox's cookie: {why}", why = e)));
     }
-    let (app, title) = (app.clone(), title.to_owned());
-    let pending = Mutex::new(Some(move || end_session(&app, &label, &title, &profile, on_close)));
+    let (app2, title2) = (app.clone(), title.to_owned());
+    let pending = Mutex::new(Some(move || end_session(&app2, &label, &title2, &profile, on_close)));
     window.on_window_event(move |event| {
+        // `cookies()` deadlocks in here: keep the window and finish on another thread.
         if let WindowEvent::CloseRequested { api, .. } = event {
             api.prevent_close();
             if let Some(end) = take_once(&pending) {
@@ -105,6 +147,110 @@ pub async fn open_session(
     });
     window.navigate(home)?;
     Ok(())
+}
+
+/// Marks `profile` as in use (created if needed). Logged, not an error: the window still works.
+fn mark_open(profile: &Path) {
+    if let Err(e) = std::fs::create_dir_all(profile).and_then(|()| std::fs::write(profile.join(OPEN_MARK), b"")) {
+        log::warn!("could not mark browser profile {} as open: {e}", profile.display());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) = std::fs::set_permissions(profile, std::fs::Permissions::from_mode(0o700)) {
+            log::warn!("could not restrict browser profile {}: {e}", profile.display());
+        }
+    }
+}
+
+/// After a normal close, once the cookies were deleted.
+fn mark_closed(profile: &Path) {
+    match std::fs::remove_file(profile.join(OPEN_MARK)) {
+        Err(e) if e.kind() != ErrorKind::NotFound => log::warn!("could not unmark browser profile {}: {e}", profile.display()),
+        _ => {}
+    }
+}
+
+/// Deletes the kept profiles a window never closed normally in (crash, quit with it open):
+/// they may still hold a `.ROBLOSECURITY` or a Google / Apple sign-in. At start-up and exit.
+pub fn sweep_dirty_profiles(data_dir: &Path) {
+    for p in std::iter::once(login_profile(data_dir)).chain(profile_dirs(data_dir)) {
+        if p.join(OPEN_MARK).exists() {
+            log::info!("browser profile {} was left open: deleted", p.display());
+            remove_profile(&p);
+        }
+    }
+}
+
+fn login_profile(data_dir: &Path) -> PathBuf {
+    data_dir.join(LOGIN_DIR)
+}
+
+fn session_profile(data_dir: &Path, account_id: i64) -> PathBuf {
+    data_dir.join(SESSIONS_DIR).join(account_id.to_string())
+}
+
+/// Deletes the sign-in profile and every session profile (blocking: removal retries), unless a
+/// sign-in or session window is open, whose browser holds them: then nothing, and `false`.
+pub fn reset_profiles(app: &AppHandle, data_dir: &Path) -> bool {
+    if browsing(app) {
+        return false;
+    }
+    let login_gone = remove_profile(&login_profile(data_dir));
+    let mut sessions_gone = true;
+    for p in profile_dirs(data_dir) {
+        sessions_gone &= remove_profile(&p);
+    }
+    login_gone && sessions_gone
+}
+
+/// A sign-in or session window is open, or one is still closing: its browser holds a profile,
+/// and a closing session may yet hand over a newer cookie.
+pub fn browsing(app: &AppHandle) -> bool {
+    let closing = !CLOSING.lock().unwrap_or_else(|e| e.into_inner()).is_empty();
+    closing || LOGIN_ACTIVE.load(Ordering::Acquire) || app.webview_windows().keys().any(|l| l.starts_with("login-") || l.starts_with("session-"))
+}
+
+/// Waits (blocking, up to ~5 s) for session windows to finish closing: `end_session` stores the
+/// last cookie each one had. Never on the main thread, which those closes need.
+pub fn wait_sessions_closed(app: &AppHandle) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let open = || {
+        !CLOSING.lock().unwrap_or_else(|e| e.into_inner()).is_empty() || app.webview_windows().keys().any(|l| l.starts_with("session-"))
+    };
+    while Instant::now() < deadline && open() {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// The folders in `webview-sessions` (none if it is missing).
+fn profile_dirs(data_dir: &Path) -> impl Iterator<Item = PathBuf> {
+    std::fs::read_dir(data_dir.join(SESSIONS_DIR)).into_iter().flatten().filter_map(|e| e.ok()).map(|e| e.path())
+}
+
+/// Deletes the session profiles of accounts that no longer exist (start-up, before any window),
+/// so a later account can't get an old one's.
+pub fn sweep_orphan_profiles(data_dir: &Path, account_ids: &[i64]) {
+    for p in profile_dirs(data_dir) {
+        let id = p.file_name().and_then(|n| n.to_str()).and_then(|n| n.parse::<i64>().ok());
+        if !id.is_some_and(|id| account_ids.contains(&id)) {
+            log::info!("browser profile {} has no account: deleted", p.display());
+            remove_profile(&p);
+        }
+    }
+}
+
+/// Deletes a removed account's session profile (blocking; logged, never an error). Its window
+/// was asked to close: waits up to ~5 s for it and its close path to go first.
+pub fn remove_account_profile(app: &AppHandle, data_dir: &Path, account_id: i64) {
+    let label = format!("session-{account_id}");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline
+        && (app.get_webview_window(&label).is_some() || CLOSING.lock().unwrap_or_else(|e| e.into_inner()).contains(&label))
+    {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    remove_profile(&session_profile(data_dir, account_id));
 }
 
 pub fn sweep_temp_profiles(data_dir: &Path) {
@@ -158,6 +304,7 @@ fn take_once<T>(slot: &Mutex<Option<T>>) -> Option<T> {
 }
 
 fn end_session(app: &AppHandle, label: &str, title: &str, profile: &Path, on_close: impl FnOnce(Option<Secret>)) {
+    CLOSING.lock().unwrap_or_else(|e| e.into_inner()).push(label.to_owned());
     if let Some(window) = app.get_webview_window(label) {
         let _ = window.hide();
         let last = match window.cookies().map(pick_roblosecurity) {
@@ -172,11 +319,60 @@ fn end_session(app: &AppHandle, label: &str, title: &str, profile: &Path, on_clo
             }
         };
         on_close(last);
+        // The cookie is the vault's job: drop it from the kept profile, and keep the profile
+        // (a captcha solved in it stays solved). If that fails, the mark stays and the next
+        // start deletes the whole profile.
+        if clear_auth_cookies(&window) {
+            mark_closed(profile);
+        }
         if let Err(e) = window.destroy() {
             log::debug!("could not destroy session window {label}: {e}");
         }
     }
-    remove_profile(profile);
+    // No window here means its cookies couldn't be read or deleted: the mark stays, so the next
+    // start deletes the whole profile (`sweep_dirty_profiles`) rather than trust it.
+    CLOSING.lock().unwrap_or_else(|e| e.into_inner()).retain(|l| l != label);
+}
+
+/// Deletes every `.ROBLOSECURITY` and every Google / Apple sign-in cookie from a window's
+/// profile; false when one couldn't be deleted (the profile is then swept the next start).
+fn clear_auth_cookies(window: &WebviewWindow) -> bool {
+    match window.cookies() {
+        Ok(all) => {
+            let mut ok = true;
+            for c in all.into_iter().filter(|c| {
+                c.domain().is_some_and(|d| (c.name() == ".ROBLOSECURITY" && is_roblox(d)) || is_sign_in_provider(d))
+            }) {
+                if let Err(e) = window.delete_cookie(c) {
+                    log::warn!("could not delete an auth cookie from a window's profile: {e}");
+                    ok = false;
+                }
+            }
+            ok
+        }
+        Err(e) => {
+            log::warn!("could not read a window's cookies to delete them: {e}");
+            false
+        }
+    }
+}
+
+/// Where a Roblox window may go: Roblox over https, and the sign-in providers it hands off to.
+fn allowed(url: &url::Url) -> bool {
+    let ok = url.as_str() == "about:blank"
+        || (url.scheme() == "https"
+            && url.username().is_empty()
+            && url.port().is_none()
+            && url.host_str().is_some_and(|h| is_roblox(h) || is_sign_in_provider(h)));
+    if !ok {
+        log::debug!("Roblox window: navigation to another site refused");
+    }
+    ok
+}
+
+fn is_sign_in_provider(domain: &str) -> bool {
+    let d = domain.trim_start_matches('.').to_ascii_lowercase();
+    d == "google.com" || d.ends_with(".google.com") || d == "apple.com" || d.ends_with(".apple.com")
 }
 
 async fn wait_for_cookie(app: AppHandle, label: String) -> Result<Secret> {
@@ -223,19 +419,22 @@ fn is_roblox(domain: &str) -> bool {
     d == "roblox.com" || d.ends_with(".roblox.com")
 }
 
-async fn cleanup(profile: PathBuf) {
-    let _ = tauri::async_runtime::spawn_blocking(move || remove_profile(&profile)).await;
-}
-
-fn remove_profile(dir: &Path) {
+/// Child processes can hold files a moment longer, so retry; a final failure is logged and
+/// returns false (gone or never there: true). What is left is marked open, so the next sweep
+/// tries again (the mark may have been among the files already deleted).
+fn remove_profile(dir: &Path) -> bool {
     for attempt in 1..=5 {
         match std::fs::remove_dir_all(dir) {
-            Ok(()) => return,
-            Err(e) if e.kind() == ErrorKind::NotFound => return,
+            Ok(()) => return true,
+            Err(e) if e.kind() == ErrorKind::NotFound => return true,
             Err(e) if attempt == 5 => log::warn!("could not delete browser profile {}: {e}", dir.display()),
             Err(_) => std::thread::sleep(Duration::from_millis(500)),
         }
     }
+    if dir.is_dir() {
+        let _ = std::fs::write(dir.join(OPEN_MARK), b"");
+    }
+    false
 }
 
 #[cfg(test)]

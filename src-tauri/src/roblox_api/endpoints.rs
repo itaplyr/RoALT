@@ -1,4 +1,4 @@
-//! Every Roblox URL in one place (verified 2026-10-24, see docs/DESIGN.md).
+//! Every Roblox URL in one place (verified 2026-10-24).
 
 pub const USERS_AUTHENTICATED: &str = "https://users.roblox.com/v1/users/authenticated";
 pub const LOGIN_PAGE: &str = "https://www.roblox.com/login";
@@ -29,9 +29,21 @@ pub const GAMES: &str = "https://games.roblox.com/v1/games?universeIds={}";
 pub const USERS_BY_NAME: &str = "https://users.roblox.com/v1/usernames/users";
 pub const FRIENDS_ONLINE: &str = "https://friends.roblox.com/v1/users/{}/friends/online";
 
+// Friending stored accounts with each other. Statuses is in the public spec (Experimental); the
+// two POSTs are no longer listed there but are what the website calls.
+pub const FRIEND_STATUSES: &str = "https://friends.roblox.com/v1/users/{}/friends/statuses";
+pub const REQUEST_FRIENDSHIP: &str = "https://friends.roblox.com/v1/users/{}/request-friendship";
+pub const ACCEPT_FRIEND: &str = "https://friends.roblox.com/v1/users/{}/accept-friend-request";
+
 // Servers (query string appended by the caller).
 pub const SERVERS_PUBLIC: &str = "https://games.roblox.com/v2/games/{}/servers/Public";
 pub const SERVERS_PRIVATE: &str = "https://games.roblox.com/v1/games/{}/private-servers";
+// Private servers, as their owner (cookie + CSRF). Shapes from the public spec, unrecorded signed in.
+pub const VIP_SERVER: &str = "https://games.roblox.com/v1/vip-servers/{}";
+pub const VIP_SERVER_PERMISSIONS: &str = "https://games.roblox.com/v1/vip-servers/{}/permissions";
+pub const VIP_SERVER_SUBSCRIPTION: &str = "https://games.roblox.com/v1/vip-servers/{}/subscription";
+/// Buys a private server of a universe: spends Robux.
+pub const VIP_SERVER_CREATE: &str = "https://games.roblox.com/v1/games/vip-servers/{}";
 pub const PLACE_UNIVERSE: &str = "https://apis.roblox.com/universes/v1/places/{}/universe";
 pub const PLACE_ICONS: &str =
     "https://thumbnails.roblox.com/v1/places/gameicons?placeIds={}&returnPolicy=PlaceHolder&size=150x150&format=Png&isCircular=false";

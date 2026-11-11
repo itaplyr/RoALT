@@ -1,128 +1,195 @@
-import { useState, type FormEvent } from "react";
+import "./discord.css";
+import { useId, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type DiscordEvents, type Settings } from "../../api";
-import { qk, useSetSettings } from "../../data";
-import { NumberField, Switch } from "../../ui/controls";
-import { toast, toastError } from "../../ui/Toast";
-import { Heading, Row } from "../settings/SettingsView";
+import { api, asError, type DiscordStatus } from "../../api";
+import { qk } from "../../data";
 import { t, type Key } from "../../i18n";
+import { Disclosure, Skeleton } from "../../ui/Bits";
+import { Button } from "../../ui/Button";
+import { Input } from "../../ui/Field";
+import { DUR, EASE_CSS, Morph, Swap } from "../../ui/motion";
+import { friendly } from "../../ui/Toast";
+import { useRow, type RowApi } from "../settings/kit/rowError";
+import { Renderers, SettingRow, type RowRenderers } from "../settings/kit/SettingRow";
+import { SettingSection } from "../settings/kit/SettingSection";
+import { DISCORD_ENTRIES } from "./entries";
 
-const EVENTS: [key: Exclude<keyof DiscordEvents, "statusEveryMin">, title: Key, hint: Key][] = [
-  ["launch", "discord.evLaunch", "discord.evLaunchHint"],
-  ["crash", "discord.evCrash", "discord.evCrashHint"],
-  ["hang", "discord.evHang", "discord.evHangHint"],
-  ["disconnect", "discord.evDisconnect", "discord.evDisconnectHint"],
-  ["restart", "discord.evRestart", "discord.evRestartHint"],
-  ["memRestart", "discord.evMemRestart", "discord.evMemRestartHint"],
-  ["breaker", "discord.evBreaker", "discord.evBreakerHint"],
-  ["batchDone", "discord.evBatchDone", "discord.evBatchDoneHint"],
-];
+/** Discord's rows of one group, in the order entries.ts gives them. */
+const ids = (group?: Key) => DISCORD_ENTRIES.filter((e) => ("group" in e.place ? e.place.group : undefined) === group).map((e) => e.id);
 
-/** Alerts to a Discord channel through a webhook; the URL itself stays in the vault. */
-export function DiscordView({ settings }: { settings: Settings }) {
+type Busy = "save" | "test" | "remove" | null;
+
+/** The row's API for what one component draws in two of its slots (the control and under the row). */
+function WithRow({ children }: { children: (row: RowApi) => ReactNode }) {
+  return children(useRow());
+}
+
+/** Where alerts go. The vault never gives the URL back: the field only takes a new one, and it
+ * empties once that is saved (or the view closes). */
+function WebhookRow() {
   const qc = useQueryClient();
-  const set = useSetSettings();
-  const status = useQuery({ queryKey: qk.discord, queryFn: api.discordGet }).data;
+  const status = useQuery({ queryKey: qk.discord, queryFn: api.discordGet });
+  const s = status.data;
+  const [busy, setBusy] = useState<Busy>(null);
   const [url, setUrl] = useState("");
-  const [busy, setBusy] = useState<"save" | "test" | "remove" | null>(null);
-  const events = settings.discord;
-  const setEvents = (patch: Partial<DiscordEvents>) => set.mutate({ discord: { ...events, ...patch } });
+  const [bad, setBad] = useState(false);
+  const field = useRef<HTMLInputElement>(null);
+  const test = useRef<HTMLButtonElement>(null);
+  const lineId = useId();
+  // Set, but its id unreadable: the vault is locked.
+  const locked = !!s?.configured && !s.webhook;
+  const line = status.isError ? friendly(asError(status.error)) : !s ? null : s.webhook ? t("discord.setId", { id: s.webhook }) : t(s.configured ? "discord.setLocked" : "discord.notSet");
 
-  const save = (e: FormEvent) => {
-    e.preventDefault();
-    if (!url.trim() || busy) return;
-    setBusy("save");
-    api
-      .discordSet(url.trim())
-      .then((st) => {
-        qc.setQueryData(qk.discord, st);
-        setUrl("");
-        toast(t("discord.saved"));
-      }, toastError)
+  /** One action at a time; what came of it shows at the row. Settles true when it worked. */
+  const act = (row: RowApi, what: NonNullable<Busy>, run: () => Promise<DiscordStatus | void>, done: Key) => {
+    setBusy(what);
+    setBad(false);
+    row.setError(null);
+    row.setResult(null);
+    return run()
+      .then(
+        (st) => {
+          if (st) qc.setQueryData(qk.discord, st);
+          row.setResult(t(done));
+          return true;
+        },
+        (e) => {
+          row.fail(e);
+          return false;
+        },
+      )
       .finally(() => setBusy(null));
   };
-  const remove = () => {
-    setBusy("remove");
-    api
-      .discordSet(null)
-      .then((st) => {
-        qc.setQueryData(qk.discord, st);
-        toast(t("discord.removed"));
-      }, toastError)
-      .finally(() => setBusy(null));
+  const save = (row: RowApi) => {
+    const u = url.trim();
+    if (!u || busy) return;
+    void act(row, "save", () => api.discordSet(u), "discord.saved").then((ok) => {
+      if (!ok) return setBad(true);
+      setUrl("");
+      field.current?.animate([{ opacity: 0.3 }, { opacity: 1 }], { duration: DUR.base, easing: EASE_CSS.out });
+      // The result line says what's next: a test.
+      requestAnimationFrame(() => test.current?.focus());
+    });
   };
-  const test = () => {
-    setBusy("test");
-    api
-      .discordTest()
-      .then(() => toast(t("discord.testSent")), toastError)
-      .finally(() => setBusy(null));
-  };
+  const remove = (row: RowApi) => void act(row, "remove", () => api.discordSet(null), "discord.removed").then((ok) => ok && requestAnimationFrame(() => field.current?.focus()));
+  const why = locked ? lineId : undefined;
+  // The running action's button stays enabled, so the keyboard focus stays on it; a press meanwhile does nothing.
+  const other = (what: NonNullable<Busy>) => busy !== null && busy !== what;
+  const saveLabel: Key = busy === "save" ? "discord.saving" : s?.configured ? "discord.replace" : "common.save";
+  const testLabel: Key = busy === "test" ? "discord.sending" : "discord.sendTest";
 
   return (
-    <main className="scroll flex-1 min-w-0 px-8 pt-5 pb-12">
-      <div className="enter max-w-[860px] flex flex-col">
-        <h1 className="page-title mb-2">{t("app.nav.discord")}</h1>
-        <p className="text-dim">
-          {t("discord.intro")}
-        </p>
-
-        <Heading id="discord-webhook">{t("discord.webhook")}</Heading>
-        <div className="panel px-5 py-1 mt-3 [&>*:last-child]:border-b-0">
-        <Row
-          title={t("discord.webhook")}
-          hint={
-            status?.configured && !status.webhook
-              ? t("discord.setLocked")
-              : status?.configured
-              ? t("discord.setId", { id: status.webhook ?? t("discord.unknown") })
-              : t("discord.notSet")
-          }
-        >
-          {status?.configured && (
-            <div className="flex gap-2">
-              <button className="btn" disabled={busy !== null} onClick={test}>{busy === "test" ? t("discord.sending") : t("discord.sendTest")}</button>
-              <button className="btn" disabled={busy !== null} onClick={remove}>{t("common.remove")}</button>
-            </div>
+    <SettingRow
+      id="webhook"
+      detail={
+        <Morph axis="height">
+          <div id={lineId} className="dc-line">
+            {line === null ? (
+              <>
+                <Skeleton width={280} height={12} className="my-1" />
+                <span className="sr-only">{t("common.loading")}</span>
+              </>
+            ) : (
+              <Swap k={line}>{status.isError ? <span className="alert">{line}</span> : line}</Swap>
+            )}
+          </div>
+        </Morph>
+      }
+      below={
+        <WithRow>
+          {(row) => (
+            <form
+              className="dc-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                save(row);
+              }}
+            >
+              <Input
+                ref={field}
+                type="password"
+                mono
+                className="dc-url"
+                aria-label={t("discord.urlLabel")}
+                aria-describedby={[lineId, row.describedBy].filter(Boolean).join(" ")}
+                placeholder="https://discord.com/api/webhooks/…"
+                autoComplete="off"
+                value={url}
+                invalid={bad}
+                disabled={locked}
+                onChange={(e) => {
+                  setUrl(e.target.value);
+                  setBad(false);
+                  row.setError(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key !== "Escape" || !url) return;
+                  e.stopPropagation();
+                  setUrl("");
+                  setBad(false);
+                  row.setError(null);
+                }}
+              />
+              <Morph>
+                <Button type="submit" size="md" variant={s?.configured ? "secondary" : "primary"} busy={busy === "save"} disabled={locked || other("save") || !url.trim()} aria-describedby={why}>
+                  <Swap k={saveLabel}>{t(saveLabel)}</Swap>
+                </Button>
+              </Morph>
+            </form>
           )}
-        </Row>
-        <form onSubmit={save} className="flex flex-wrap items-center gap-2 py-4 border-b border-line">
-          <input
-            type="password"
-            className="field mono flex-[1_1_320px] min-w-0"
-            aria-label={t("discord.urlLabel")}
-            placeholder="https://discord.com/api/webhooks/…"
-            value={url}
-            autoComplete="off"
-            spellCheck={false}
-            onChange={(e) => setUrl(e.target.value)}
-          />
-          <button type="submit" className="btn btn-primary" disabled={!url.trim() || busy !== null}>
-            {busy === "save" ? t("discord.saving") : status?.configured ? t("discord.replace") : t("common.save")}
-          </button>
-        </form>
+        </WithRow>
+      }
+    >
+      {status.isError ? (
+        <Button size="md" icon="refresh" busy={status.isFetching} onClick={() => void status.refetch()}>
+          {t("common.tryAgain")}
+        </Button>
+      ) : (
+        <WithRow>
+          {(row) => (
+            <Morph innerClassName="gap-2">
+              <Swap k={s?.configured ? "set" : "unset"}>
+                {s?.configured && (
+                  <>
+                    <Morph>
+                      <Button ref={test} size="md" busy={busy === "test"} disabled={locked || other("test")} aria-describedby={why} onClick={() => !busy && void act(row, "test", api.discordTest, "discord.testSent")}>
+                        <Swap k={testLabel}>{t(testLabel)}</Swap>
+                      </Button>
+                    </Morph>
+                    <Button size="md" variant="danger" busy={busy === "remove"} disabled={locked || other("remove")} aria-describedby={why} onClick={() => !busy && remove(row)}>
+                      {t("discord.removeWebhook")}
+                    </Button>
+                  </>
+                )}
+              </Swap>
+            </Morph>
+          )}
+        </WithRow>
+      )}
+    </SettingRow>
+  );
+}
 
-        </div>
+const RENDERERS: RowRenderers = { webhook: WebhookRow };
 
-        <Heading id="discord-events">{t("discord.events")}</Heading>
-        <div className="panel px-5 py-1 mt-3 [&>*:last-child]:border-b-0">
-        {EVENTS.map(([key, title, hint]) => (
-          <Row key={key} title={t(title)} hint={t(hint)}>
-            <Switch label={t(title)} checked={events[key]} onChange={(on) => setEvents({ [key]: on })} />
-          </Row>
-        ))}
-        <Row title={t("discord.statusSummary")} hint={t("discord.statusSummaryHint")} last>
-          <NumberField
-            unit={t("discord.minutesUnit")}
-            short={t("discord.min")}
-            min={0}
-            max={1440}
-            value={events.statusEveryMin}
-            onCommit={(statusEveryMin) => setEvents({ statusEveryMin })}
-          />
-        </Row>
+/** Discord: the status on your profile, and alerts to a channel through a webhook (kept in the vault). */
+export function DiscordView() {
+  return (
+    <main className="scroll flex-1 min-w-0 page">
+      <Renderers value={RENDERERS}>
+        <div className="dc-page">
+          <header className="dc-head">
+            <h1 className="page-title">{t("app.nav.discord")}</h1>
+            <Disclosure className="dc-lead" summary={t("discord.lead")}>
+              {t("discord.intro")}
+            </Disclosure>
+          </header>
+          <SettingSection ids={ids()} />
+          <div className="dc-events">
+            <SettingSection label="discord.events" ids={ids("discord.events")} />
+          </div>
         </div>
-      </div>
+      </Renderers>
     </main>
   );
 }

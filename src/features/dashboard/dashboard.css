@@ -1,0 +1,604 @@
+/* Home: the header and its pill, the client cards and their pictures, the notices, the account tab
+   strip and the side rail. */
+@layer views {
+  /* ---- Header ---- */
+  .home-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px 24px;
+  }
+  .home-head-end {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    max-width: 100%;
+    margin-inline-start: auto;
+  }
+  .home-sub {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  /* The pill's parts: the PC's room, Anti-AFK. */
+  .home-pc,
+  .home-afk {
+    display: inline-flex;
+    align-items: center;
+    flex: none;
+    height: var(--tile);
+    border-radius: var(--r-pill);
+    color: var(--fg-2);
+    font-size: var(--fs-small);
+    font-weight: 500;
+    white-space: nowrap;
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out);
+  }
+  .home-pc {
+    gap: 12px;
+    padding-block: 0;
+    padding-inline: 6px 12px;
+  }
+  .home-pc:hover,
+  .home-pc[aria-expanded="true"] {
+    background: var(--hover);
+    color: var(--fg);
+  }
+  .home-afk {
+    gap: 10px;
+    padding-inline: 12px 8px;
+    cursor: pointer;
+  }
+  .home-afk:hover {
+    color: var(--fg);
+  }
+  .home-pc-pop {
+    width: min(320px, calc(100vw - 24px));
+  }
+  /* A share as a bar and its number. The number keeps its width, so the pill doesn't spring to every
+     sample. */
+  .home-mini {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--fs-meta);
+    white-space: nowrap;
+  }
+  .home-mini-label {
+    color: var(--fg-3);
+    font-weight: 500;
+  }
+  .home-mini > :last-child {
+    display: inline-block;
+    min-width: 4ch;
+    color: var(--fg);
+    font-weight: 500;
+  }
+  .home-mini-bar.meter {
+    width: 32px;
+    min-width: 32px;
+    height: 4px;
+  }
+
+  /* ---- Cards ---- */
+  .home-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+  .home-grid:has(.home-card-compact) {
+    gap: 12px;
+  }
+  .home-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 6px;
+    outline-offset: 2px;
+  }
+  .home-card-compact {
+    gap: 6px;
+  }
+  /* Tiles glide when dragged into a new place (useGridDrag). */
+  .home-grid > .tile {
+    transition: transform var(--dur-move) var(--ease-out);
+  }
+
+  /* The picture: a click brings the client to the front. The first one fades in. */
+  .home-pic {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    border-radius: var(--r-sm);
+    background: var(--ground);
+    overflow: clip;
+    cursor: pointer;
+  }
+  /* Out of flow: a 4:3 picture would otherwise stretch the 16:9 box. */
+  .home-pic canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    opacity: 0;
+    transition: opacity 180ms var(--ease-out);
+  }
+  .home-pic[data-painted] canvas {
+    opacity: 1;
+  }
+  .home-pic[data-dim] canvas {
+    opacity: 0.5;
+  }
+  .home-pic-wait {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 0 12px;
+    color: var(--fg-3);
+    font-size: var(--fs-meta);
+    text-align: center;
+  }
+  .home-pic-wait[data-breathe] {
+    background: var(--surface-2);
+    animation: breathe 1.6s ease-in-out infinite;
+  }
+  /* The one status pill, on a solid backing (no blur over the live pictures). Its mark morphs. */
+  .home-pill {
+    position: absolute;
+    top: 6px;
+    inset-inline-start: 6px;
+    max-width: calc(100% - 48px);
+    border-radius: var(--r-pill);
+    background: var(--island);
+    box-shadow: var(--shadow-island); /* taste-skill-ignore: it floats over the live picture */
+  }
+  .home-pill .status-pill {
+    transition: color var(--dur-base) var(--ease-out);
+  }
+  .home-pill .status-mark {
+    transition:
+      transform var(--dur-base) var(--ease-out),
+      border-radius var(--dur-base) var(--ease-out),
+      background-color var(--dur-base) var(--ease-out),
+      box-shadow var(--dur-base) var(--ease-out);
+  }
+  .home-card .grip {
+    position: absolute;
+    top: 6px;
+    inset-inline-end: 6px;
+    border-radius: var(--r-xs);
+    background: var(--island);
+  }
+  .home-card:hover .grip,
+  .home-card:focus-within .grip {
+    opacity: 1;
+  }
+  /* Small to look at, big enough to hit. */
+  .home-card .grip::before,
+  .home-card .size-handle::before {
+    content: "";
+    position: absolute;
+    inset: -6px;
+  }
+  /* Compact cards: their keys on a pill at the picture's foot, on hover or focus; it leaves faster
+     than it came. Hidden it stays in the accessibility tree, so a screen reader still reaches it. */
+  .home-act {
+    position: absolute;
+    inset-inline: 0;
+    bottom: 6px;
+    display: flex;
+    gap: 2px;
+    width: max-content;
+    margin-inline: auto;
+    padding: 3px;
+    border-radius: var(--r-pill);
+    background: var(--island);
+    box-shadow: var(--shadow-island); /* taste-skill-ignore: it floats over the live picture */
+    opacity: 0;
+    pointer-events: none;
+    scale: calc(1 - (1 - var(--pop-scale)) * 3);
+    transition:
+      opacity var(--dur-exit) var(--ease-in),
+      scale var(--dur-exit) var(--ease-in);
+  }
+  .home-card:hover .home-act,
+  .home-card:focus-within .home-act {
+    opacity: 1;
+    pointer-events: auto;
+    scale: 1;
+    transition:
+      opacity var(--dur-fast) var(--ease-out),
+      scale var(--dur-spring) var(--spring);
+  }
+  /* Cards in a row end level: the keys sit at the foot. */
+  .home-info {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 8px;
+    padding: 2px 6px 6px;
+  }
+  .home-info > :last-child {
+    margin-top: auto;
+  }
+  .home-usage {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+  }
+  .home-usage .home-mini-bar.meter {
+    width: 40px;
+    min-width: 40px;
+  }
+  .home-usage .home-mini > :last-child {
+    min-width: 0;
+  }
+  .home-card .size-handle {
+    position: absolute;
+    inset-inline-end: 1px;
+    bottom: 1px;
+    width: 18px;
+    height: 18px;
+    display: grid;
+    place-content: center;
+    border-end-end-radius: var(--r-lg);
+    color: var(--fg-3);
+    opacity: 0;
+    cursor: nwse-resize;
+    touch-action: none;
+    transition: opacity var(--dur-fast) var(--ease-out);
+  }
+  :root[dir="rtl"] .home-card .size-handle {
+    cursor: nesw-resize;
+  }
+  :root[dir="rtl"] .home-card .size-handle svg {
+    transform: scaleX(-1);
+  }
+  .home-card:hover .size-handle,
+  .home-card:focus-within .size-handle {
+    opacity: 1;
+  }
+  .home-card[data-drop]::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    border-radius: var(--r-pill);
+    background: var(--accent-text);
+  }
+  .home-card[data-drop="before"]::before {
+    inset-inline-start: -9px;
+  }
+  .home-card[data-drop="after"]::before {
+    inset-inline-end: -9px;
+  }
+
+  /* The client menu is placed by measuring it as it opens: it fades and slides, never scales. */
+  .home-menu,
+  .home-menu:popover-open {
+    scale: none;
+  }
+  @starting-style {
+    .home-menu:popover-open {
+      scale: none;
+    }
+  }
+  .home-menu-swap {
+    animation: rise var(--dur-base) var(--ease-out) backwards;
+  }
+  .home-menu-caps {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    min-height: 40px;
+    padding-inline: 10px 4px;
+    color: var(--fg-2);
+    font-size: var(--fs-small);
+  }
+  .home-menu-caps .seg {
+    min-height: var(--h-sm);
+    padding: 0 7px;
+    font-size: var(--fs-meta);
+    font-variant-numeric: tabular-nums;
+  }
+  /* LimitsDialog (Home and Monitor): what the limits do, under them. */
+  .home-limits-help {
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+    color: var(--fg-3);
+    font-size: var(--fs-meta);
+    line-height: 1.5;
+    text-wrap: pretty;
+  }
+
+  /* ---- Notices and lists ---- */
+  .home-trouble > .status-mark {
+    align-self: flex-start;
+    margin-top: 7px;
+  }
+  .home-trouble-list {
+    flex-basis: 100%;
+    display: flex;
+    flex-direction: column;
+    margin-bottom: -6px;
+  }
+  .home-trouble-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 40px;
+    border-top: 1px solid var(--line);
+  }
+  .home-ended + .home-ended {
+    border-top: 1px solid var(--line);
+  }
+  .home-ended-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 12px;
+    min-height: 44px;
+    padding: 6px 0;
+  }
+  .home-chevron {
+    transition: rotate var(--dur-base) var(--ease-out);
+  }
+  .home-steps {
+    display: flex;
+    flex-direction: column;
+    max-width: 760px;
+    padding: 4px 20px;
+  }
+  .home-step {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px 16px;
+    padding: 16px 0;
+  }
+  .home-step + .home-step {
+    border-top: 1px solid var(--line);
+  }
+  .home-favs {
+    display: flex;
+    flex-direction: column;
+    max-width: 880px;
+    padding: 2px 16px;
+  }
+  .home-fav + .home-fav {
+    border-top: 1px solid var(--line);
+  }
+  .home-fav-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 14px;
+    padding: 12px 0;
+  }
+  .home-who {
+    display: inline-flex;
+    align-items: center;
+  }
+  .home-who > [aria-hidden] {
+    outline: 2px solid var(--surface-1);
+  }
+  .home-who > [aria-hidden] + [aria-hidden] {
+    margin-inline-start: -6px;
+  }
+  .home-who-more {
+    padding-inline-start: 8px;
+    color: var(--fg-3);
+    font-size: var(--fs-meta);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---- Account tabs: one row however many; the padding keeps focus rings from being cut off. ---- */
+  .home-strip {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    min-width: 0;
+  }
+  .home-strip .tab-strip {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    min-height: var(--h-lg);
+    margin: -4px;
+    padding: 4px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .home-strip .tab-strip {
+    position: relative;
+  }
+  .home-strip .tab {
+    position: relative;
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    max-width: 240px;
+    min-height: var(--h-md);
+    border: 1px solid var(--line);
+    border-radius: var(--r-pill);
+    background: var(--surface-1);
+    color: var(--fg-2);
+    transition:
+      color var(--dur-fast) var(--ease-out),
+      transform var(--dur-move) var(--ease-out);
+  }
+  .home-strip .tab:hover {
+    color: var(--fg);
+  }
+  .home-strip .tab:has([aria-selected="true"]) {
+    color: var(--on-accent);
+  }
+  /* The selected tab's light, over the tabs' own fills and under their words: one drop that flows
+     from tab to tab (ui/motion/liquid). */
+  .home-tab-on {
+    z-index: 1;
+    border-radius: var(--r-pill);
+    background: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent-ring); /* taste-skill-ignore: a pale user accent's edge (app/theme.ts) */
+  }
+  .home-strip .tab > [role="tab"],
+  .home-strip .tab > .home-tab-x {
+    position: relative;
+    z-index: 2;
+  }
+  .home-strip .tab > [role="tab"] {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    min-height: calc(var(--h-md) - 2px);
+    padding: 0 14px;
+    border-radius: inherit;
+    color: inherit;
+    font-weight: 500;
+    font-size: var(--fs-small);
+  }
+  .home-strip .tab:has(.home-tab-x) > [role="tab"] {
+    padding-inline-end: 6px;
+  }
+  .home-tab-x {
+    margin-inline-end: 3px;
+    color: inherit;
+  }
+  .home-ready {
+    flex: none;
+    width: 9px;
+    height: 9px;
+    border: 1.5px solid currentColor;
+    border-radius: 50%;
+  }
+  /* The tab's launch side, and "This account" beside it (under it when there is no room). */
+  .home-tab-cols {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 20px;
+  }
+  .home-tab-body {
+    flex: 999 1 520px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    max-width: 880px;
+    padding: 20px;
+  }
+  .acct-col {
+    flex: 1 1 320px;
+    min-width: 0;
+    max-width: 880px;
+    padding: 0;
+  }
+  .acct-meters {
+    display: grid;
+    grid-template-columns: auto 1fr 5.5em;
+    align-items: center;
+    gap: 10px 12px;
+  }
+  .home-tab-opts {
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+  }
+  .home-tab-opts .disclosure-body {
+    max-width: none;
+    padding-top: 4px;
+    color: var(--fg);
+    font-size: var(--fs-body);
+  }
+  .home-tab-opts .acc-sec {
+    padding-inline: 0;
+  }
+  .home-add-pop {
+    width: min(300px, calc(100vw - 24px));
+  }
+
+  /* ---- The side rail ---- */
+  .home-rail .rail-item {
+    isolation: isolate;
+  }
+  .home-rail .rail-item[aria-current="page"] {
+    background: transparent;
+    box-shadow: none; /* taste-skill-ignore: takes the global current-row edge off; the sliding tile stands in */
+  }
+  .home-rail[data-compact] .rail-item {
+    min-height: 40px;
+  }
+  /* The current row's tile: one element that slides from row to row. */
+  .home-rail-on {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    background: var(--surface-3);
+  }
+  .home-rail-row {
+    position: relative;
+  }
+  .home-rail-face {
+    position: relative;
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 30px;
+  }
+  .home-rail[data-compact] .home-rail-face {
+    width: 24px;
+  }
+  /* The row's state, cut into the avatar's corner. */
+  .home-rail-mark {
+    position: absolute;
+    inset-inline-end: -3px;
+    bottom: -3px;
+    display: grid;
+    place-items: center;
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    background: var(--surface-1);
+  }
+  .home-rail-mark:empty {
+    display: none;
+  }
+  .home-rail-x {
+    position: absolute;
+    top: 50%;
+    inset-inline-end: 8px;
+    translate: 0 -50%;
+    opacity: 0;
+    transition: opacity var(--dur-fast) var(--ease-out);
+  }
+  .home-rail-row:is(:hover, :focus-within) .home-rail-x {
+    opacity: 1;
+  }
+  .home-rail-row:is(:hover, :focus-within):has(.home-rail-x) .home-ready {
+    visibility: hidden;
+  }
+
+  @media (forced-colors: active) {
+    .home-tab-on,
+    .home-rail-on {
+      display: none;
+    }
+    .home-pill,
+    .home-act,
+    .home-card .grip {
+      border: 1px solid CanvasText;
+    }
+  }
+}

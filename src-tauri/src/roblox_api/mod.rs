@@ -28,8 +28,8 @@ use zeroize::Zeroizing;
 use crate::error::{AppError, Result};
 use crate::vault::Secret;
 use types::{
-    AuthenticatedUser, Data, FriendOnline, Game, GameDetails, Presences, PrivateServerList, Profiles, ServerList,
-    ShareLinkResolution, ShareLinkV2, SocialCounts, Thumbnails, TwoStepConfig, UserDetails, UserPresence,
+    AuthenticatedUser, Data, FriendOnline, FriendStatus, FriendStatusRow, Game, GameDetails, Presences, PrivateServerList, Profiles, ServerList,
+    ShareLinkResolution, ShareLinkV2, SocialCounts, Thumbnails, TwoStepConfig, UserDetails, UserPresence, VipServerResponse,
 };
 
 /// Called with `(account_id, new cookie)` when Roblox rotates a stored account's cookie.
@@ -271,10 +271,47 @@ impl Client {
 
     /// `GET friends.roblox.com/v1/users/{id}/friends/online` with the account's cookie:
     /// friends online right now with their presence (PascalCase `UserPresenceType` string,
-    /// `gameInstanceId`), see research account-info A14.
+    /// `gameInstanceId`).
     pub async fn friends_online(&self, account_id: i64, cookie: &Secret, user_id: i64) -> Result<Vec<FriendOnline>> {
         let url = endpoints::fill(endpoints::FRIENDS_ONLINE, user_id);
         Ok(self.get::<Data<FriendOnline>>(endpoints::FRIENDS_ONLINE, &url, account_id, Some(cookie)).await?.data)
+    }
+
+    /// `GET friends.roblox.com/v1/users/{id}/friends/statuses?userIds=<csv>` with the account's
+    /// cookie: how `user_id` stands with each of `ids` (≤50 per call; Roblox has a "too many
+    /// ids" error with no stated limit). Ids missing from the answer are absent.
+    pub async fn friend_statuses(
+        &self,
+        account_id: i64,
+        cookie: &Secret,
+        user_id: i64,
+        ids: &[i64],
+    ) -> Result<HashMap<i64, FriendStatus>> {
+        let route = endpoints::FRIEND_STATUSES;
+        let mut out = HashMap::new();
+        for chunk in valid_ids(ids).chunks(50) {
+            let url = format!("{}?userIds={}", endpoints::fill(route, user_id), csv(chunk));
+            let page: Data<FriendStatusRow> = self.get(route, &url, account_id, Some(cookie)).await?;
+            out.extend(page.data.iter().map(|r| (r.id, FriendStatus::of(&r.status))));
+        }
+        Ok(out)
+    }
+
+    /// `POST friends.roblox.com/v1/users/{target}/request-friendship` (cookie + CSRF). A captcha
+    /// comes back as `Challenge`; it is never solved here.
+    // shortcut: body `{}` (the endpoint left the public spec), send the website's body if Roblox starts refusing it.
+    pub async fn request_friendship(&self, account_id: i64, cookie: &Secret, target: i64) -> Result<()> {
+        let (route, body) = (endpoints::REQUEST_FRIENDSHIP, Value::Object(Default::default()));
+        let url = endpoints::fill(route, target);
+        self.request(Method::POST, route, &url, Some(&body), account_id, Some(cookie)).await.map(|_| ())
+    }
+
+    /// `POST friends.roblox.com/v1/users/{requester}/accept-friend-request` (cookie + CSRF).
+    pub async fn accept_friend(&self, account_id: i64, cookie: &Secret, requester: i64) -> Result<()> {
+        // `{}` rather than no body: a bodyless POST may go out without Content-Length (411).
+        let (route, body) = (endpoints::ACCEPT_FRIEND, Value::Object(Default::default()));
+        let url = endpoints::fill(route, requester);
+        self.request(Method::POST, route, &url, Some(&body), account_id, Some(cookie)).await.map(|_| ())
     }
 
     /// `GET games.roblox.com/v2/games/{placeId}/servers/Public?orderBy=..&excludeFullGames=..&limit=..&cursor=..`
@@ -321,7 +358,7 @@ impl Client {
         let total = rows.len();
         let servers: Vec<GameServer> = rows.into_iter().filter_map(|r| {
             Some(GameServer {
-                // A job id goes into a launch URI: GUIDs only (DESIGN §6).
+                // A job id goes into a launch URI: GUIDs only.
                 id: r.id.filter(|id| crate::launcher::target::is_uuid(id))?,
                 playing: r.playing?,
                 max_players: r.max_players?,
@@ -437,6 +474,89 @@ impl Client {
             next_cursor: list.next_page_cursor.filter(|c| !c.is_empty()),
             join_restricted: list.game_join_restricted.unwrap_or_default(),
         })
+    }
+
+    /// `GET games.roblox.com/v1/vip-servers/{id}` as its owner (403 for anyone else). Lenient;
+    /// the answer's join secrets are never read.
+    pub async fn vip_server(&self, account_id: i64, cookie: &Secret, vip_server_id: i64) -> Result<crate::model::PrivateServerSettings> {
+        let route = endpoints::VIP_SERVER;
+        let r: VipServerResponse = self.get(route, &endpoints::fill(route, vip_server_id), account_id, Some(cookie)).await?;
+        Ok(settings_of(vip_server_id, r))
+    }
+
+    /// `PATCH /v1/vip-servers/{id} {name, active, newJoinCode}` and
+    /// `PATCH …/permissions {friendsAllowed, usersToAdd, usersToRemove}` with only the parts
+    /// `patch` sets; neither is sent when it has none, so an empty patch makes no call. A name
+    /// that trims to nothing is refused first. Callers re-read with `vip_server`.
+    pub async fn vip_server_update(
+        &self,
+        account_id: i64,
+        cookie: &Secret,
+        vip_server_id: i64,
+        patch: &crate::model::PrivateServerPatch,
+    ) -> Result<()> {
+        let mut server = serde_json::Map::new();
+        if let Some(name) = &patch.name {
+            server.insert("name".into(), server_name(name)?.into());
+        }
+        if let Some(active) = patch.active {
+            server.insert("active".into(), active.into());
+        }
+        if patch.new_join_code == Some(true) {
+            server.insert("newJoinCode".into(), true.into());
+        }
+        let mut permissions = serde_json::Map::new();
+        if let Some(friends) = patch.friends_allowed {
+            permissions.insert("friendsAllowed".into(), friends.into());
+        }
+        for (key, ids) in [("usersToAdd", &patch.users_to_add), ("usersToRemove", &patch.users_to_remove)] {
+            let ids = valid_ids(ids.as_deref().unwrap_or_default());
+            if !ids.is_empty() {
+                permissions.insert(key.into(), ids.into());
+            }
+        }
+        for (route, body) in [(endpoints::VIP_SERVER, server), (endpoints::VIP_SERVER_PERMISSIONS, permissions)] {
+            if !body.is_empty() {
+                let url = endpoints::fill(route, vip_server_id);
+                self.request(Method::PATCH, route, &url, Some(&Value::Object(body)), account_id, Some(cookie)).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `PATCH /v1/vip-servers/{id}/subscription {active, price}`: auto-renew on (spends `price`
+    /// Robux a month) or off. `price` is what the owner was shown.
+    pub async fn vip_server_subscription(&self, account_id: i64, cookie: &Secret, vip_server_id: i64, active: bool, price: i64) -> Result<()> {
+        let route = endpoints::VIP_SERVER_SUBSCRIPTION;
+        let body = serde_json::json!({ "active": active, "price": price });
+        self.request(Method::PATCH, route, &endpoints::fill(route, vip_server_id), Some(&body), account_id, Some(cookie)).await.map(|_| ())
+    }
+
+    /// `POST /v1/games/vip-servers/{universeId} {name, expectedPrice, isPurchaseConfirmed:true,
+    /// idempotencyKey}`: buys a private server (spends Robux). Roblox refuses, charging nothing,
+    /// when `expected_price` isn't the real price. A blank name or a key that isn't a UUID is
+    /// refused first. The answer (it holds the join secrets) isn't read: a 2xx is the purchase.
+    pub async fn vip_server_buy(
+        &self,
+        account_id: i64,
+        cookie: &Secret,
+        universe_id: i64,
+        name: &str,
+        expected_price: i64,
+        idempotency_key: &str,
+    ) -> Result<()> {
+        let name = server_name(name)?;
+        if !crate::launcher::target::is_uuid(idempotency_key) {
+            return Err(AppError::Internal("bad idempotency key".into()));
+        }
+        let route = endpoints::VIP_SERVER_CREATE;
+        let body = serde_json::json!({
+            "name": name,
+            "expectedPrice": expected_price,
+            "isPurchaseConfirmed": true,
+            "idempotencyKey": idempotency_key,
+        });
+        self.request(Method::POST, route, &endpoints::fill(route, universe_id), Some(&body), account_id, Some(cookie)).await.map(|_| ())
     }
 
     /// `GET clientsettingscdn.roblox.com/v2/client-version/WindowsPlayer` (no cookie) → the live
@@ -573,7 +693,7 @@ impl Client {
                     "Pick an account to sort by Recommended or Best latency: Roblox only does that for a signed-in account."
                 )));
             }
-            let e = classify(status, &headers, &bytes);
+            let e = vip_refusal(route, status, &headers, &bytes).unwrap_or_else(|| classify(status, &headers, &bytes));
             log::warn!("{route}: HTTP {status}, code {:?}: {e}", error_code(&bytes));
             if status == StatusCode::FORBIDDEN {
                 // Whose refusal it is (the API's or a CDN's page), without the body.
@@ -716,6 +836,31 @@ fn classify(status: StatusCode, headers: &HeaderMap, body: &[u8]) -> AppError {
     }
 }
 
+/// Roblox's own text for a refused private-server call (a wrong price, alts that aren't friends).
+/// Unlike `classify` it quotes the body: these requests hold only a name, a price and user ids.
+fn vip_refusal(route: &str, status: StatusCode, headers: &HeaderMap, body: &[u8]) -> Option<AppError> {
+    let vip = [endpoints::VIP_SERVER, endpoints::VIP_SERVER_PERMISSIONS, endpoints::VIP_SERVER_SUBSCRIPTION, endpoints::VIP_SERVER_CREATE];
+    if !vip.contains(&route) || !status.is_client_error() || status == StatusCode::UNAUTHORIZED || headers.contains_key(CHALLENGE) {
+        return None;
+    }
+    // A 403 on the server itself means not the owner: left as "HTTP 403" for `owner_error` to word.
+    if status == StatusCode::FORBIDDEN && (route == endpoints::VIP_SERVER || route == endpoints::VIP_SERVER_SUBSCRIPTION) {
+        return None;
+    }
+    let message = serde_json::from_slice::<Value>(body).ok().and_then(|v| {
+        let e = v.get("errors").and_then(|e| e.get(0)).unwrap_or(&v);
+        let m: String = e.get("message")?.as_str()?.chars().filter(|c| !c.is_control()).take(200).collect();
+        Some(m.trim().to_owned()).filter(|m| !m.is_empty())
+    });
+    match message {
+        Some(why) => Some(AppError::Invalid(tr!("Roblox refused this: {why}", why = why))),
+        None if route == endpoints::VIP_SERVER_CREATE => {
+            Some(AppError::Invalid(tr!("Roblox refused the purchase and charged nothing: check the price on the game's page.")))
+        }
+        None => None,
+    }
+}
+
 /// `(code, subcode)` of `{errors:[{..}]}` or a flat `{code, ..}` body. Bare strings,
 /// `{Error: ..}` and empty bodies have none.
 fn error_code(body: &[u8]) -> Option<(i64, i64)> {
@@ -757,6 +902,39 @@ fn client_version_of(body: &[u8]) -> Result<String> {
     } else {
         log::debug!("client version: unexpected clientVersionUpload {:?}", v.chars().take(64).collect::<String>());
         Err(unreadable())
+    }
+}
+
+/// A private server's name, trimmed; empty is refused.
+fn server_name(name: &str) -> Result<&str> {
+    Some(name.trim()).filter(|n| !n.is_empty()).ok_or_else(|| AppError::Invalid(tr!("A private server needs a name.")))
+}
+
+fn settings_of(vip_server_id: i64, r: VipServerResponse) -> crate::model::PrivateServerSettings {
+    let (sub, perms) = (r.subscription, r.permissions);
+    let allowed_users = perms
+        .as_ref()
+        .and_then(|p| p.users.as_ref())
+        .into_iter()
+        .flatten()
+        .filter_map(|u| {
+            Some(crate::model::AllowedUser {
+                user_id: u.id?,
+                username: u.name.clone().unwrap_or_default(),
+                display_name: u.display_name.clone().unwrap_or_default(),
+            })
+        })
+        .collect();
+    crate::model::PrivateServerSettings {
+        vip_server_id,
+        name: r.name.unwrap_or_default(),
+        active: r.active.unwrap_or_default(),
+        friends_allowed: perms.as_ref().and_then(|p| p.friends_allowed).unwrap_or_default(),
+        allowed_users,
+        renews: sub.as_ref().and_then(|s| s.active).unwrap_or_default(),
+        expired: sub.as_ref().and_then(|s| s.expired).unwrap_or_default(),
+        expires: sub.as_ref().and_then(|s| s.expiration_date.clone()),
+        price: sub.and_then(|s| s.price),
     }
 }
 

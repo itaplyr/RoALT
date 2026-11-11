@@ -64,6 +64,38 @@ pub fn parse_webhook(raw: &str) -> Result<Webhook> {
     Ok(Webhook { url: Secret::new(format!("https://{host}/api/webhooks/{id}/{token}")), id: id.to_owned() })
 }
 
+/// Who alerts ping, as typed: a user id (`123`, `<@123>`, `<@!123>`) or a role (`<@&123>`).
+/// Stored as `<@id>` or `<@&id>`; "" for no one.
+pub fn parse_ping(raw: &str) -> Result<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(String::new());
+    }
+    let (role, id) = match raw.strip_prefix("<@").and_then(|r| r.strip_suffix('>')) {
+        Some(inner) => match inner.strip_prefix('&') {
+            Some(id) => (true, id),
+            None => (false, inner.strip_prefix('!').unwrap_or(inner)),
+        },
+        None => (false, raw),
+    };
+    if !(1..=25).contains(&id.len()) || !id.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(AppError::Invalid(tr!("Ping takes a Discord user ID (only digits), or a role as <@&id>.")));
+    }
+    Ok(if role { format!("<@&{id}>") } else { format!("<@{id}>") })
+}
+
+/// Puts a stored ping (`parse_ping`) in a webhook body: as its text, and as the one mention
+/// Discord may fire. Nothing for "".
+fn add_ping(body: &mut Value, ping: &str) {
+    let (key, rest) = match ping.strip_prefix("<@&") {
+        Some(r) => ("roles", r),
+        None => ("users", ping.strip_prefix("<@").unwrap_or_default()),
+    };
+    let Some(id) = rest.strip_suffix('>') else { return };
+    body["content"] = json!(ping);
+    body["allowed_mentions"][key] = json!([id]);
+}
+
 /// What the UI shows of a webhook id: its last 4 digits.
 fn masked(id: &str) -> String {
     format!("…{}", &id[id.len().saturating_sub(4)..])
@@ -215,22 +247,28 @@ pub fn launched(t: &Transition) -> bool {
         && !matches!(b.state, InstanceState::InGame | InstanceState::Disconnected)
 }
 
-/// The webhook body for some events (pure): one embed, one line each.
-pub fn message(events: &[Event]) -> Value {
+/// The webhook body for some events (pure): one embed, one line each. `ping` is mentioned
+/// only when something went wrong (severity 1 or 2), never for news.
+pub fn message(events: &[Event], ping: &str) -> Value {
     let mut lines: Vec<String> = events.iter().take(MAX_LINES).map(Event::line).collect();
     if events.len() > MAX_LINES {
         lines.push(trn!(events.len() - MAX_LINES, "…and {n} more.", "…and {n} more."));
     }
-    let color = match events.iter().map(Event::severity).max() {
+    let severity = events.iter().map(Event::severity).max();
+    let color = match severity {
         Some(2) => 0xE5_48_4D,
         Some(1) => 0xFF_A0_5C,
         _ => 0xB4_F0_00,
     };
-    json!({
+    let mut body = json!({
         "username": "RoALT",
         "allowed_mentions": { "parse": [] },
         "embeds": [{ "title": "RoALT", "description": lines.join("\n"), "color": color }],
-    })
+    });
+    if severity.is_some_and(|s| s > 0) {
+        add_ping(&mut body, ping);
+    }
+    body
 }
 
 /// How long Discord asks to wait after a 429: its JSON `retry_after` (seconds), else the
@@ -337,6 +375,11 @@ fn webhook(s: &App) -> Result<Option<Webhook>> {
     parse_webhook(s.vault.decrypt_secret(DISCORD_AAD, &blob)?.expose()).map(Some)
 }
 
+/// The stored ping; "" (no one) when settings are unreadable, so the alert still goes.
+fn ping(s: &App) -> String {
+    s.db.settings().map(|v| v.discord.ping).unwrap_or_default()
+}
+
 /// While the vault is locked a stored webhook still shows as configured (its id unknown).
 pub fn status(s: &App) -> Result<DiscordStatus> {
     match webhook(s) {
@@ -367,11 +410,13 @@ pub fn set(s: &App, url: Option<&str>) -> Result<DiscordStatus> {
 /// Sends a test message at once (it still counts for the 2 s gap).
 pub async fn test(s: &App) -> Result<()> {
     let hook = webhook(s)?.ok_or_else(|| AppError::Invalid(tr!("Set a webhook first.")))?;
-    let body = json!({
+    let mut body = json!({
         "username": "RoALT",
         "allowed_mentions": { "parse": [] },
         "embeds": [{ "title": "RoALT", "description": format!("✅ {}", tr!("Test message: RoALT's alerts reach this channel.")), "color": 0xB4_F0_00 }],
     });
+    // The test pings too, so it shows the mention works.
+    add_ping(&mut body, &ping(s));
     let now = Instant::now();
     let r = post(s, &hook, &body).await;
     match r {
@@ -496,7 +541,7 @@ async fn deliver(s: &App, events: Vec<Event>) {
         }
     };
     let now = Instant::now();
-    match post(s, &hook, &message(&events)).await {
+    match post(s, &hook, &message(&events, &ping(s))).await {
         Ok(None) => s.discord.outbox().sent(now),
         Ok(Some(wait)) => {
             log::info!("discord: rate limited, waiting {} s", wait.as_secs());
@@ -627,6 +672,7 @@ mod tests {
             relaunching: false,
             relaunch_problem: None,
             sign_in_problem: false,
+            micro_size: None,
             applied_limits: crate::model::Limits::default(),
         }
     }
@@ -666,7 +712,7 @@ mod tests {
     #[test]
     fn builds_one_embed_per_message() {
         let crash = Event::Crash { name: "Nova (@nova\\_builds)".into(), place_id: Some(1818) };
-        let one = message(std::slice::from_ref(&crash));
+        let one = message(std::slice::from_ref(&crash), "");
         assert_eq!(one["username"], "RoALT");
         assert_eq!(one["allowed_mentions"]["parse"], json!([]));
         let embeds = one["embeds"].as_array().unwrap();
@@ -675,7 +721,7 @@ mod tests {
         assert_eq!(embeds[0]["color"], 0xE5484D);
 
         let rejoin = Event::Restart { name: "A".into(), cause: CrashKind::Disconnect };
-        assert_eq!(message(std::slice::from_ref(&rejoin))["embeds"][0]["color"], 0xB4F000);
+        assert_eq!(message(std::slice::from_ref(&rejoin), "")["embeds"][0]["color"], 0xB4F000);
         let batch = Event::BatchDone { total: 3, in_game: 1, done: 1, failed: 1, stopped: Some("Cancelled".into()) };
         assert_eq!(batch.line(), "🚀 Batch finished: 1 of 3 in game, 1 done, 1 failed (stopped: Cancelled).");
         let status = Event::Status { clients: 2, ram_mb: 1536.4, cpu_pct: Some(12.6) };
@@ -687,10 +733,37 @@ mod tests {
 
         // Many at once: the first 15 lines, then a count.
         let many: Vec<Event> = (0..20).map(|n| Event::Disconnect { name: format!("A{n}") }).collect();
-        let text = message(&many)["embeds"][0]["description"].as_str().unwrap().to_owned();
+        let text = message(&many, "")["embeds"][0]["description"].as_str().unwrap().to_owned();
         assert_eq!(text.lines().count(), 16);
         assert!(text.ends_with("…and 5 more.") && text.starts_with("🔌 **A0**"));
-        assert_eq!(message(&many)["embeds"][0]["color"], 0xFFA05C);
+        assert_eq!(message(&many, "")["embeds"][0]["color"], 0xFFA05C);
+    }
+
+    #[test]
+    fn parses_pings() {
+        for (raw, want) in [("", ""), ("  ", ""), (" 123 ", "<@123>"), ("<@123>", "<@123>"), ("<@!123>", "<@123>"), ("<@&9>", "<@&9>")] {
+            assert_eq!(parse_ping(raw).unwrap(), want, "{raw}");
+        }
+        for bad in ["abc", "<@&>", "<@>", "@everyone", "<@12a>", "<#123>", "<@123", "12 3", &"1".repeat(26)] {
+            assert!(parse_ping(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn pings_only_when_something_went_wrong() {
+        let crash = [Event::Crash { name: "A".into(), place_id: None }];
+        let m = message(&crash, "<@123>");
+        assert_eq!(m["content"], "<@123>");
+        assert_eq!(m["allowed_mentions"], json!({ "parse": [], "users": ["123"] }));
+        let m = message(&crash, "<@&9>");
+        assert_eq!(m["allowed_mentions"], json!({ "parse": [], "roles": ["9"] }));
+        // News and no ping: no mention at all.
+        let news = [Event::Launch { name: "A".into(), place_id: None }, Event::Restart { name: "A".into(), cause: CrashKind::Crash }];
+        assert_eq!(message(&news, "<@123>").get("content"), None);
+        assert_eq!(message(&crash, ""), json!({ "username": "RoALT", "allowed_mentions": { "parse": [] }, "embeds": message(&crash, "<@1>")["embeds"] }));
+        // A disconnect among news still pings.
+        let mixed = [news[0].clone(), Event::Disconnect { name: "B".into() }];
+        assert_eq!(message(&mixed, "<@123>")["content"], "<@123>");
     }
 
     #[test]
@@ -713,6 +786,7 @@ mod tests {
             launch_args: None,
             discord_muted: false,
             full_quality: false,
+            main: false,
             fps_cap: None,
 
         };

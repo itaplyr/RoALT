@@ -103,7 +103,7 @@ fn tick(app: &AppHandle) -> Duration {
         return TICK;
     }
     // A hung client would block this one thread, and the others would get kicked for idling.
-    let clients: Vec<_> = s.tracker.afk_clients().into_iter().filter(|c| !process::hung(c.pid)).collect();
+    let clients: Vec<_> = s.tracker.afk_clients(&s.macros.busy()).into_iter().filter(|c| !process::hung(c.pid)).collect();
     let ids = match plan(&clients, now_ms(), v.anti_afk.interval_min, idle_ms()) {
         Plan::Wait => return TICK,
         Plan::Retry => return RETRY,

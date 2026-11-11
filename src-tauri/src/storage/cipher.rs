@@ -67,11 +67,10 @@ pub fn new_key(path: &Path) -> Result<Zeroizing<Vec<u8>>> {
     Ok(key)
 }
 
+/// Flushed to disk before the rename: callers delete the database's other copy right after, and a
+/// power cut must not leave the key file empty with that copy gone.
 pub fn write_key(path: &Path, key: &[u8]) -> Result<()> {
-    let tmp = beside(path, ".tmp");
-    std::fs::write(&tmp, protect_with(key, ENTROPY)?)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    crate::vault::backup::write_atomic(path, &protect_with(key, ENTROPY)?)
 }
 
 /// Exports the database open on `conn` into the new file `to`, encrypted with `key`.

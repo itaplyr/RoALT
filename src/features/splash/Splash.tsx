@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api";
+import { setSplashPhase, type SplashPhase } from "./phase";
 import "./splash.css";
 
 /** When the window grows: the animation settles at 3 s (79% of 3.8 s), then holds 2 s. */
@@ -20,6 +21,8 @@ function Tile({ className, fill }: { className: string; fill: string }) {
 }
 
 function seen() {
+  // A dev preview with ?splash=1 plays it again.
+  if (import.meta.env.DEV && new URLSearchParams(location.search).has("splash")) return false;
   // Settings.skip_splash, from `main_window`: the window is already full size.
   if ((window as { __ROALT_SKIP_SPLASH?: boolean }).__ROALT_SKIP_SPLASH) return true;
   try {
@@ -29,10 +32,16 @@ function seen() {
   }
 }
 
+// Decided before anything renders, so the island knows to wait for it.
+const FIRST: SplashPhase = seen() ? "gone" : "play";
+setSplashPhase(FIRST);
+
 /** The start-up splash over the app: the tile glitches into the RoALT mark, then the window
  * (opened small by `splash::start`) grows into the app and this fades away. */
 export function Splash() {
-  const [state, setState] = useState<"play" | "out" | "gone">(() => (seen() ? "gone" : "play"));
+  const [state, setState] = useState<SplashPhase>(FIRST);
+
+  useEffect(() => setSplashPhase(state), [state]);
 
   useEffect(() => {
     if (state !== "play") return;
@@ -64,8 +73,8 @@ export function Splash() {
           <div className="tile">
             <Tile className="red" fill="#ff2a4d" />
             <Tile className="cyan" fill="#22e8ff" />
-            <Tile className="core" fill="#eceef1" />
-            <Tile className="slice-a" fill="#eceef1" />
+            <Tile className="core" fill="#949494" />
+            <Tile className="slice-a" fill="#ededed" />
             <Tile className="slice-b" fill="#22e8ff" />
           </div>
         </div>

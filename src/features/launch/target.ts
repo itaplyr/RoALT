@@ -46,9 +46,12 @@ export function targetText(t: LaunchTarget): string {
   }
 }
 
-/** A draft holding a known target (no parse round trip needed). */
+/** A draft holding a known target (no parse round trip needed). A private server's access code never
+ * shows (the user may never have seen it: the server drawer, a favourite): the field reads its masked
+ * description and the real target waits in `parsed`, so readDraft and resolveTarget work. */
 export function draftFor(target: LaunchTarget, favId: number | null = null, note: string | null = null): Draft {
-  const text = targetText(target);
+  const look = target.kind === "privateAccess" ? describeTarget(target) : null;
+  const text = look ? `${look.kind} · ${look.detail}` : targetText(target);
   return { ...EMPTY_DRAFT, text, parsed: { text, value: { kind: "target", target } }, favId, note };
 }
 

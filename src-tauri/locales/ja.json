@@ -10,6 +10,9 @@
   "That file is too big to be an AccountData.json.": "AccountData.json にしてはファイルが大きすぎます。",
   "This file is locked with a Roblox Account Manager password. Remove the password in Roblox Account Manager, then import again.": "このファイルは Roblox Account Manager のパスワードでロックされています。Roblox Account Manager でパスワードを解除してからインポートし直してください。",
   "RoALT couldn't decrypt this file. It must come from Roblox Account Manager on this PC, signed in as the same Windows user.": "RoALT はこのファイルを復号できませんでした。この PC の Roblox Account Manager で、同じ Windows ユーザーで作成したファイルが必要です。",
+  "Confirm it's you to export Roblox cookies.": "Roblox の Cookie をエクスポートするには本人確認をしてください。",
+  "None of these accounts has a cookie to export.": "これらのアカウントにはエクスポートできる Cookie がありません。",
+  "The exported file is gone.": "エクスポートしたファイルはもうありません。",
   "Confirm it's you to reveal a Roblox cookie.": "Roblox の Cookie を表示するには本人確認をしてください。",
   "Type a Roblox username.": "Roblox のユーザー名を入力してください。",
   "No Roblox user is called \"{name}\".": "「{name}」という Roblox ユーザーはいません。",
@@ -56,6 +59,14 @@
   "The close grace must be between 1 and 60 seconds.": "終了の猶予は 1〜60 秒にしてください。",
   "Anti-AFK must press a key every 1 to 19 minutes.": "Anti-AFK のキー入力の間隔は 1〜19 分にしてください。",
   "The status summary must be off (0) or every 5 minutes to 24 hours.": "ステータスのまとめはオフ (0) か 5 分〜24 時間ごとにしてください。",
+  "Close the sign-in and Roblox browser windows first, then move the data folder.": "先にサインインと Roblox のブラウザーウィンドウを閉じてから、データフォルダーを移動してください。",
+  "Roblox's lock belongs to a program running as administrator (often Roblox started by a bootstrapper set to run as administrator). Close it, or turn that off.": "Roblox のロックは管理者として動くプログラムが持っています (管理者として実行する設定のブートストラッパーが起動した Roblox がよくあります)。それを閉じるか、その設定をオフにしてください。",
+  "Roblox's lock is held by {names}. Close it, or take it over.": "Roblox のロックは {names} が持っています。閉じるか、引き継いでください。",
+  "process {pid}": "プロセス {pid}",
+  "The server list couldn't be read ({why}), so accounts were matched by Roblox on their own.": "サーバー一覧を読めなかったため ({why})、アカウントは Roblox が振り分けました。",
+  "{name} has no private server of this game, so it joins a public one.": "{name} はこのゲームのプライベートサーバーを持っていないため、公開サーバーに参加します。",
+  "Not enough servers with room were listed, so the rest were matched by Roblox on their own.": "空きのあるサーバーが一覧に足りなかったため、残りは Roblox が振り分けました。",
+  "Ping takes a Discord user ID (only digits), or a role as <@&id>.": "メンションには Discord のユーザー ID (数字のみ) か、<@&id> 形式のロールを入力してください。",
   "The launch delay must be between 2 and 60 seconds.": "起動の間隔は 2〜60 秒にしてください。",
   "Paste a Discord webhook URL: https://discord.com/api/webhooks/<id>/<token>.": "Discord の Webhook URL を貼り付けてください: https://discord.com/api/webhooks/<id>/<token>。",
   "**{name}**: the client crashed (place {place}).": "**{name}**: クライアントがクラッシュしました (プレイス {place})。",
@@ -299,49 +310,66 @@
   "WebView2 setup failed: {why}": "WebView2 のセットアップに失敗しました: {why}",
   "The Roblox sign-in window timed out after 15 minutes. Try again.": "Roblox のサインインウィンドウが 15 分でタイムアウトしました。もう一度試してください。",
   "**{name}**: RoALT gave up after {n} relaunches in {minutes} min.": {
-    "other": "**{name}**: {minutes} 分間に {n} 回再起動したので、RoALT は中止しました。",
-    "one": "**{name}**: RoALT gave up after {n} relaunch in {minutes} min."
+    "other": "**{name}**: {minutes} 分間に {n} 回再起動したので、RoALT は中止しました。"
   },
   "{n} clients running · {ram} MB RAM{cpu}.": {
-    "other": "{n} 個のクライアントが実行中・{ram} MB RAM{cpu}。",
-    "one": "{n} client running · {ram} MB RAM{cpu}."
+    "other": "{n} 個のクライアントが実行中・{ram} MB RAM{cpu}。"
   },
   "…and {n} more.": {
-    "other": "…他 {n} 件。",
-    "one": "…and {n} more."
+    "other": "…他 {n} 件。"
   },
   "Gave up after {n} rejoins": {
-    "other": "{n} 回再参加して中止しました",
-    "one": "Gave up after {n} rejoin"
+    "other": "{n} 回再参加して中止しました"
   },
   "{name} wasn't rejoined: it needed {n} rejoins in {minutes} minutes, so RoALT gave up.": {
-    "other": "{name} は再参加しませんでした: {minutes} 分間に {n} 回の再参加が必要になったため、RoALT は中止しました。",
-    "one": "{name} wasn't rejoined: it needed {n} rejoin in {minutes} minutes, so RoALT gave up."
+    "other": "{name} は再参加しませんでした: {minutes} 分間に {n} 回の再参加が必要になったため、RoALT は中止しました。"
   },
   "Gave up after {n} restarts": {
-    "other": "{n} 回再起動して中止しました",
-    "one": "Gave up after {n} restart"
+    "other": "{n} 回再起動して中止しました"
   },
   "{name} wasn't restarted: it needed {n} restarts in {minutes} minutes, so RoALT gave up.": {
-    "other": "{name} は再起動しませんでした: {minutes} 分間に {n} 回の再起動が必要になったため、RoALT は中止しました。",
-    "one": "{name} wasn't restarted: it needed {n} restart in {minutes} minutes, so RoALT gave up."
+    "other": "{name} は再起動しませんでした: {minutes} 分間に {n} 回の再起動が必要になったため、RoALT は中止しました。"
   },
   "No server had room for all {n} accounts": {
-    "other": "{n} 件のアカウントすべてが入れるサーバーはありませんでした",
-    "one": "No server had room for all {n} accounts"
+    "other": "{n} 件のアカウントすべてが入れるサーバーはありませんでした"
   },
   "{n} alts open": {
-    "other": "サブ垢 {n} 個を起動中",
-    "one": "{n} alt open"
+    "other": "サブ垢 {n} 個を起動中"
   },
   "Running {n} alts": {
-    "other": "サブ垢 {n} 個を実行中",
-    "one": "Running {n} alt"
+    "other": "サブ垢 {n} 個を実行中"
   },
   "{n} alts · {games} games": {
-    "other": "サブ垢 {n} 個・{games} ゲーム",
-    "one": "{n} alt · {games} games"
+    "other": "サブ垢 {n} 個・{games} ゲーム"
   },
+  "Make friends takes up to {max} accounts at a time.": "フレンド登録は一度に最大 {max} アカウントまでです。",
+  "That Roblox window is still closing. Try again in a moment.": "その Roblox ウィンドウはまだ閉じています。少し待ってからもう一度お試しください。",
+  "Pick AutoHotkey64.exe, the AutoHotkey v2 program.": "AutoHotkey v2 のプログラム AutoHotkey64.exe を選んでください。",
+  "That client is already running a macro. Stop it first.": "そのクライアントはすでにマクロを実行中です。先に停止してください。",
+  "AutoHotkey didn't start: {why}": "AutoHotkey を起動できませんでした: {why}",
+  "Macro {name} stopped with an error: {why}": "マクロ {name} がエラーで停止しました: {why}",
+  "Macro {name} stopped with an error.": "マクロ {name} がエラーで停止しました。",
+  "That client isn't in a game.": "そのクライアントはゲーム中ではありません。",
+  "Review {name} on the Macros page before it runs.": "実行する前に、マクロページで {name} を確認してください。",
+  "This macro has invisible or text-direction characters. Remove them first.": "このマクロには不可視文字または文字方向の制御文字が含まれています。先に削除してください。",
+  "Install AutoHotkey v2 to use macros.": "マクロを使うには AutoHotkey v2 をインストールしてください。",
+  "RoALT can't read that file as text. Save it as UTF-8 and import it again.": "RoALT はそのファイルをテキストとして読めません。UTF-8 で保存して、もう一度インポートしてください。",
+  "A macro can be at most {max} KiB.": "マクロは最大 {max} KiB までです。",
+  "{key} is already the panic hotkey.": "{key} はすでにパニックホットキーです。",
+  "{key} is already the hotkey of {name}.": "{key} はすでに {name} のホットキーです。",
+  "No client in a game can run {name} now.": "今 {name} を実行できるゲーム中のクライアントはありません。",
+  "Macro {name} didn't start: {why}": "マクロ {name} を起動できませんでした: {why}",
+  "Macro names need 1 to {max} characters.": "マクロ名は 1〜{max} 文字にしてください。",
+  "A macro called \"{name}\" already exists.": "「{name}」という名前のマクロはすでにあります。",
+  "Pick Fit or Tiny to see where the windows go.": "ウィンドウの位置を見るには、フィットか極小を選んでください。",
+  "Pick accounts to see where their windows go.": "ウィンドウの位置を見るには、アカウントを選んでください。",
+  "A private server needs a name.": "プライベートサーバーには名前が必要です。",
+  "Only the owner's account can change this.": "これを変更できるのはオーナーのアカウントだけです。",
+  "Roblox refused this: {why}": "Roblox に拒否されました: {why}",
+  "Roblox refused the purchase and charged nothing: check the price on the game's page.": "Roblox が購入を拒否しました (請求はありません)。ゲームのページで価格を確認してください。",
+  "Roblox wants a verification for this: do it on roblox.com, then try again.": "Roblox がこの操作に確認を求めています。roblox.com で確認してから、もう一度お試しください。",
+  "A measurement is already running.": "測定はすでに実行中です。",
+  "Start a client and let it reach a game first.": "まずクライアントを起動し、ゲームに入るまで待ってください。",
   "Could not close Roblox (process {pid}).": "Could not close Roblox (process {pid}).",
   "Cordial's profile folder could not be found.": "Cordial's profile folder could not be found.",
   "Could not write the Cordial cookie store: {why}": "Could not write the Cordial cookie store: {why}",
@@ -353,5 +381,7 @@
   "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.": "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.",
   "The downloaded update failed its SHA-256 check.": "The downloaded update failed its SHA-256 check.",
   "That client's window could not be resized.": "That client's window could not be resized.",
-  "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run.": "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run."
+  "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run.": "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run.",
+  "That client's window could not be moved.": "That client's window could not be moved.",
+  "Could not clear the previous Roblox sign-in. Try again.": "Could not clear the previous Roblox sign-in. Try again."
 }

@@ -10,6 +10,9 @@
   "That file is too big to be an AccountData.json.": "该文件太大，不可能是 AccountData.json。",
   "This file is locked with a Roblox Account Manager password. Remove the password in Roblox Account Manager, then import again.": "此文件已用 Roblox Account Manager 密码锁定。请在 Roblox Account Manager 中移除密码，然后重新导入。",
   "RoALT couldn't decrypt this file. It must come from Roblox Account Manager on this PC, signed in as the same Windows user.": "RoALT 无法解密此文件。它必须来自这台电脑上的 Roblox Account Manager，且登录的是同一 Windows 用户。",
+  "Confirm it's you to export Roblox cookies.": "导出 Roblox Cookie 前，请确认是你本人。",
+  "None of these accounts has a cookie to export.": "这些账号都没有可导出的 Cookie。",
+  "The exported file is gone.": "导出的文件已不存在。",
   "Confirm it's you to reveal a Roblox cookie.": "显示 Roblox Cookie 前，请确认是你本人。",
   "Type a Roblox username.": "请输入 Roblox 用户名。",
   "No Roblox user is called \"{name}\".": "没有名为“{name}”的 Roblox 用户。",
@@ -56,6 +59,14 @@
   "The close grace must be between 1 and 60 seconds.": "关闭宽限期必须在 1 到 60 秒之间。",
   "Anti-AFK must press a key every 1 to 19 minutes.": "防 AFK 的按键间隔必须为 1 到 19 分钟。",
   "The status summary must be off (0) or every 5 minutes to 24 hours.": "状态汇总必须关闭（0）或每 5 分钟到 24 小时发送一次。",
+  "Close the sign-in and Roblox browser windows first, then move the data folder.": "请先关闭登录窗口和 Roblox 浏览器窗口，再移动数据文件夹。",
+  "Roblox's lock belongs to a program running as administrator (often Roblox started by a bootstrapper set to run as administrator). Close it, or turn that off.": "Roblox 的锁属于一个以管理员身份运行的程序（常见于设置为以管理员身份运行的启动器所启动的 Roblox）。请关闭它，或关掉该设置。",
+  "Roblox's lock is held by {names}. Close it, or take it over.": "Roblox 的锁被 {names} 占用。请关闭它，或接管。",
+  "process {pid}": "进程 {pid}",
+  "The server list couldn't be read ({why}), so accounts were matched by Roblox on their own.": "无法读取服务器列表（{why}），所以由 Roblox 自行分配账号。",
+  "{name} has no private server of this game, so it joins a public one.": "{name} 没有这个游戏的私人服务器，所以加入公共服务器。",
+  "Not enough servers with room were listed, so the rest were matched by Roblox on their own.": "列表中有空位的服务器不够，所以其余账号由 Roblox 自行分配。",
+  "Ping takes a Discord user ID (only digits), or a role as <@&id>.": "提及只接受 Discord 用户 ID（仅数字），或 <@&id> 形式的身份组。",
   "The launch delay must be between 2 and 60 seconds.": "启动间隔必须在 2 到 60 秒之间。",
   "Paste a Discord webhook URL: https://discord.com/api/webhooks/<id>/<token>.": "请粘贴 Discord Webhook URL：https://discord.com/api/webhooks/<id>/<token>。",
   "**{name}**: the client crashed (place {place}).": "**{name}**：客户端已崩溃（地点 {place}）。",
@@ -299,49 +310,66 @@
   "WebView2 setup failed: {why}": "WebView2 设置失败：{why}",
   "The Roblox sign-in window timed out after 15 minutes. Try again.": "Roblox 登录窗口在 15 分钟后超时。请重试。",
   "**{name}**: RoALT gave up after {n} relaunches in {minutes} min.": {
-    "other": "**{name}**：RoALT 在 {minutes} 分钟内重新启动 {n} 次后已放弃。",
-    "one": "**{name}**: RoALT gave up after {n} relaunch in {minutes} min."
+    "other": "**{name}**：RoALT 在 {minutes} 分钟内重新启动 {n} 次后已放弃。"
   },
   "{n} clients running · {ram} MB RAM{cpu}.": {
-    "other": "{n} 个客户端运行中 · {ram} MB RAM{cpu}。",
-    "one": "{n} client running · {ram} MB RAM{cpu}."
+    "other": "{n} 个客户端运行中 · {ram} MB RAM{cpu}。"
   },
   "…and {n} more.": {
-    "other": "…还有 {n} 条。",
-    "one": "…and {n} more."
+    "other": "…还有 {n} 条。"
   },
   "Gave up after {n} rejoins": {
-    "other": "重新加入 {n} 次后已放弃",
-    "one": "Gave up after {n} rejoin"
+    "other": "重新加入 {n} 次后已放弃"
   },
   "{name} wasn't rejoined: it needed {n} rejoins in {minutes} minutes, so RoALT gave up.": {
-    "other": "{name} 未重新加入：{minutes} 分钟内需要重新加入 {n} 次，RoALT 已放弃。",
-    "one": "{name} wasn't rejoined: it needed {n} rejoin in {minutes} minutes, so RoALT gave up."
+    "other": "{name} 未重新加入：{minutes} 分钟内需要重新加入 {n} 次，RoALT 已放弃。"
   },
   "Gave up after {n} restarts": {
-    "other": "重启 {n} 次后已放弃",
-    "one": "Gave up after {n} restart"
+    "other": "重启 {n} 次后已放弃"
   },
   "{name} wasn't restarted: it needed {n} restarts in {minutes} minutes, so RoALT gave up.": {
-    "other": "{name} 未重启：{minutes} 分钟内需要重启 {n} 次，RoALT 已放弃。",
-    "one": "{name} wasn't restarted: it needed {n} restart in {minutes} minutes, so RoALT gave up."
+    "other": "{name} 未重启：{minutes} 分钟内需要重启 {n} 次，RoALT 已放弃。"
   },
   "No server had room for all {n} accounts": {
-    "other": "没有服务器能容纳全部 {n} 个账号",
-    "one": "No server had room for all {n} accounts"
+    "other": "没有服务器能容纳全部 {n} 个账号"
   },
   "{n} alts open": {
-    "other": "已打开 {n} 个小号",
-    "one": "{n} alt open"
+    "other": "已打开 {n} 个小号"
   },
   "Running {n} alts": {
-    "other": "正在运行 {n} 个小号",
-    "one": "Running {n} alt"
+    "other": "正在运行 {n} 个小号"
   },
   "{n} alts · {games} games": {
-    "other": "{n} 个小号 · {games} 个游戏",
-    "one": "{n} alt · {games} games"
+    "other": "{n} 个小号 · {games} 个游戏"
   },
+  "Make friends takes up to {max} accounts at a time.": "互加好友一次最多 {max} 个账号。",
+  "That Roblox window is still closing. Try again in a moment.": "该 Roblox 窗口仍在关闭中，请稍后再试。",
+  "Pick AutoHotkey64.exe, the AutoHotkey v2 program.": "请选择 AutoHotkey64.exe，即 AutoHotkey v2 的程序。",
+  "That client is already running a macro. Stop it first.": "该客户端已在运行一个宏。请先停止它。",
+  "AutoHotkey didn't start: {why}": "AutoHotkey 未能启动：{why}",
+  "Macro {name} stopped with an error: {why}": "宏 {name} 因错误而停止：{why}",
+  "Macro {name} stopped with an error.": "宏 {name} 因错误而停止。",
+  "That client isn't in a game.": "该客户端不在游戏中。",
+  "Review {name} on the Macros page before it runs.": "运行前请先在“宏”页面查看 {name}。",
+  "This macro has invisible or text-direction characters. Remove them first.": "此宏包含不可见字符或文本方向字符。请先删除它们。",
+  "Install AutoHotkey v2 to use macros.": "安装 AutoHotkey v2 才能使用宏。",
+  "RoALT can't read that file as text. Save it as UTF-8 and import it again.": "RoALT 无法将该文件作为文本读取。请将其保存为 UTF-8 后重新导入。",
+  "A macro can be at most {max} KiB.": "宏最大为 {max} KiB。",
+  "{key} is already the panic hotkey.": "{key} 已是紧急热键。",
+  "{key} is already the hotkey of {name}.": "{key} 已是 {name} 的热键。",
+  "No client in a game can run {name} now.": "目前没有游戏中的客户端可以运行 {name}。",
+  "Macro {name} didn't start: {why}": "宏 {name} 未能启动：{why}",
+  "Macro names need 1 to {max} characters.": "宏名称需要 1 到 {max} 个字符。",
+  "A macro called \"{name}\" already exists.": "已有名为“{name}”的宏。",
+  "Pick Fit or Tiny to see where the windows go.": "请选择“适应”或“迷你”来查看窗口的位置。",
+  "Pick accounts to see where their windows go.": "请选择账号来查看它们的窗口位置。",
+  "A private server needs a name.": "私人服务器需要一个名称。",
+  "Only the owner's account can change this.": "只有所有者的账户可以更改此项。",
+  "Roblox refused this: {why}": "Roblox 拒绝了：{why}",
+  "Roblox refused the purchase and charged nothing: check the price on the game's page.": "Roblox 拒绝了购买，未扣任何费用：请在游戏页面核对价格。",
+  "Roblox wants a verification for this: do it on roblox.com, then try again.": "Roblox 要求对此进行验证：请在 roblox.com 上完成后重试。",
+  "A measurement is already running.": "已有一次测量正在进行。",
+  "Start a client and let it reach a game first.": "请先启动一个客户端并等它进入游戏。",
   "Could not close Roblox (process {pid}).": "Could not close Roblox (process {pid}).",
   "Cordial's profile folder could not be found.": "Cordial's profile folder could not be found.",
   "Could not write the Cordial cookie store: {why}": "Could not write the Cordial cookie store: {why}",
@@ -353,5 +381,7 @@
   "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.": "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.",
   "The downloaded update failed its SHA-256 check.": "The downloaded update failed its SHA-256 check.",
   "That client's window could not be resized.": "That client's window could not be resized.",
-  "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run.": "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run."
+  "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run.": "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run.",
+  "That client's window could not be moved.": "That client's window could not be moved.",
+  "Could not clear the previous Roblox sign-in. Try again.": "Could not clear the previous Roblox sign-in. Try again."
 }

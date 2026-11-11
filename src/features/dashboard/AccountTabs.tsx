@@ -1,22 +1,34 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { api, asError, type AccountSummary, type BulkProgress, type Instance } from "../../api";
-import { publicBlock, qk, useBulk, useInstances, useMultiStatus, useNetwork, useSettings, useUpdateAccount } from "../../data";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type KeyboardEvent, type ReactNode, type SetStateAction } from "react";
+import { AnimatePresence, motion } from "motion/react";
+import { api, type AccountSummary, type Instance } from "../../api";
+import { publicBlock, useBulk, useInstances, useMultiStatus, useNetwork, useSettings } from "../../data";
 import { isRtl, t } from "../../i18n";
-import { NumberField, Switch, TextField } from "../../ui/controls";
-import { Icon } from "../../ui/Icon";
-import { menuKeys } from "../../ui/menu";
-import { toast, toastError } from "../../ui/Toast";
+import { Disclosure } from "../../ui/Bits";
+import { Button, IconButton } from "../../ui/Button";
+import { Collapse, riseIn, SPRING, TWEEN, useFreshItems, useLiquid } from "../../ui/motion";
+import { Popover, useAnchor } from "../../ui/Popover";
+import { StatusDot, StatusPill } from "../../ui/Status";
+import { announce } from "../../ui/a11y";
+import { toastError } from "../../ui/Toast";
+import { DetailOverrides } from "../accounts/DetailOverrides";
 import { accountName, Avatar } from "../accounts/shared";
+import { AccountPicker } from "../launch/AccountPicker";
 import { FavouritesRow } from "../launch/Favourites";
-import { launchBlocked, launched, launchFailed, MARK } from "../launch/LaunchView";
-import { isLive, isRunning, MultiNotice, STATES } from "../launch/Running";
-import { draftFor, readDraft, resolveTarget, type Draft } from "../launch/target";
-import { homeSorted, storedText, type HomeTab, type HomeTabs } from "./homeLayout";
+import { LaunchButton } from "../launch/LaunchButton";
+import { launchBlocked, launchEach, launchOne, useLaunchActivity } from "../launch/launchQueue";
+import { MultiNotice } from "../launch/MultiNotice";
+import { isLive, isRunning, STATES } from "../launch/Running";
+import { TargetField } from "../launch/TargetField";
+import { draftFor, readDraft, type Draft } from "../launch/target";
+import { useNewsFeed } from "../news/news";
+import { NewsView } from "../news/NewsView";
+import { homeSorted, readyTabs, STATE_TONE, storedText, tabLaunch, type HomeActive, type HomeTab, type HomeTabs } from "./homeLayout";
+import { AccountColumn } from "./AccountColumn";
 import { Sortable } from "./Sortable";
+import { useSteadyFlip } from "./useSteadyFlip";
 
-const tabId = (id: number | null) => `home-tab-${id ?? "overview"}`;
-const inFlight = (tab: HomeTab) => tab.status === "queued" || tab.status === "launching";
+const ADD = "home-tabs-add";
+const tabId = (id: HomeActive) => `home-tab-${id ?? "overview"}`;
 
 /** Arrows, Home and End move between the tabs and open them. */
 function tabKeys(e: KeyboardEvent<HTMLElement>) {
@@ -31,183 +43,151 @@ function tabKeys(e: KeyboardEvent<HTMLElement>) {
   to.click();
 }
 
-/** One account's tab: its game, its options, and its launch or its window. */
-function TabBody({ tab, account: a, accounts, instances, block, onDraft, onLaunch }: {
+/** A tab's or rail row's state: its launch while one is under way or failed, else its client's. */
+export function LaunchMark({ inst, status }: { inst: Pick<Instance, "state"> | undefined; status: HomeTab["status"] }) {
+  if (status === "queued" || status === "launching") return <StatusDot tone="neutral" label={status === "queued" ? t("dashboard.tabs.queued") : t("launch.launching")} pulse />;
+  if (inst) return <StatusDot tone={STATE_TONE[inst.state]} label={STATES[inst.state][0]} pulse={inst.state === "starting" || inst.state === "joining"} />;
+  return status === "failed" ? <StatusDot tone="attention" label={t("dashboard.tabs.failed")} /> : null;
+}
+
+/** "Play with N" will start this tab: a ring pops in. `still`: one of a long list, which doesn't move. */
+export function ReadyRing({ on, still }: { on: boolean; still?: boolean }) {
+  const label = t("dashboard.tabs.ready");
+  if (still) return on ? <span className="home-ready" data-tip={label}><span className="sr-only">{label}</span></span> : null;
+  return (
+    <AnimatePresence initial={false}>
+      {on && (
+        <motion.span
+          key="ready"
+          className="home-ready"
+          data-tip={label}
+          initial={{ opacity: 0, scale: 0.5 }}
+          animate={{ opacity: 1, scale: 1, transition: SPRING.snappy }}
+          exit={{ opacity: 0, scale: 0.5, transition: TWEEN.exit }}
+        >
+          <span className="sr-only">{label}</span>
+        </motion.span>
+      )}
+    </AnimatePresence>
+  );
+}
+
+/** One account's tab: where it plays, and its launch or its window; its own options fold away. */
+function TabBody({ tab, account: a, accounts, instances, status, block, why, onDraft }: {
   tab: HomeTab;
   account: AccountSummary;
   accounts: AccountSummary[];
   instances: Instance[];
-  /** Why no launch can start now, or null. */
+  status: HomeTab["status"];
+  /** Why no launch can start now, or null; `why`: the same unless a notice above already says it. */
   block: string | null;
-  onDraft: (f: Draft | ((d: Draft) => Draft)) => void;
-  onLaunch: () => void;
+  why: string | null;
+  onDraft: Dispatch<SetStateAction<Draft>>;
 }) {
-  const update = useUpdateAccount();
-  const settings = useSettings().data;
   const { draft } = tab;
-  const { parsed, place, look, usable, pending } = readDraft(draft);
+  const { usable, pending } = readDraft(draft);
   const mine = instances.filter((i) => i.accountId === a.id);
   const inst = mine.find(isLive) ?? mine.find(isRunning);
   const live = !!inst && isLive(inst);
-  const busy = inFlight(tab);
+  const busy = status === "queued" || status === "launching";
   const name = accountName(a);
   const valid = a.status === "valid";
-  const [state, color] = inst ? STATES[inst.state] : [null, undefined];
+  const can = usable || pending;
   // On screen only, because it can't be read back after a restart.
   const unsaved = usable && !pending && !storedText(draft);
+  // Only as it opens: Disclosure's `open` follows its prop, and clearing the last option would fold it
+  // away under the focus.
+  const [own] = useState(() => !!a.fpsCap || !!a.launchArgs || a.fullQuality || a.allowDisconnect || a.discordMuted);
   return (
-    <>
-      <section aria-labelledby="home-tab-where" className="enter panel flex flex-col gap-4 p-5">
-        <div className="flex flex-wrap items-center gap-3">
-          <Avatar account={a} size={36} />
+    <div className="home-tab-cols">
+      <section aria-labelledby="home-tab-where" className="panel home-tab-body">
+        <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
+          <Avatar account={a} size={40} />
           <div className="flex-[1_1_160px] min-w-0 flex flex-col">
             <h2 id="home-tab-where" className="section-title truncate">{name}</h2>
-            <span className="mono text-[13px] text-dim truncate">@{a.username}</span>
+            <span className="text-[13px] text-fg-2 truncate">@{a.username}</span>
           </div>
-          {state && (
-            <span className="state flex-none text-[13px]" style={{ color }}>
-              <span aria-hidden="true" className="led" />
-              {state}
+          {inst && (
+            <span className="flex items-center gap-2 min-h-10">
+              <StatusPill tone={STATE_TONE[inst.state]} label={STATES[inst.state][0]} pulse={inst.state === "starting" || inst.state === "joining"} />
+              <Button size="md" icon="eye" onClick={() => api.instanceShow(inst.id, "focus").catch(toastError)}>
+                {t("home.show")}
+              </Button>
             </span>
           )}
-          {inst && <button className="btn" onClick={() => api.instanceShow(inst.id, "focus").catch(toastError)}>{t("home.show")}</button>}
           {!live && (
-            <button className="btn btn-primary min-w-0" disabled={!valid || !(usable || pending) || busy || block !== null} title={valid ? block ?? undefined : t("launch.onlyValid")} onClick={onLaunch}>
-              <Icon name="play" size={12} fill />
-              <span className="truncate">{busy ? t("launch.launching") : usable || pending ? t("launch.launchAs", { name }) : t("play.chooseWhere")}</span>
-            </button>
+            <LaunchButton
+              label={can ? t("launch.launchAs", { name }) : t("play.chooseWhere")}
+              disabled={!valid || !can || block !== null}
+              reason={!valid ? t("launch.onlyValid") : can ? why : null}
+              shortcut
+              onLaunch={() => void launchOne(a, { draft, setDraft: onDraft })}
+            />
           )}
         </div>
-        <p className="empty:hidden text-[13px]" role="status">
-          {tab.status === "queued" ? <span className="text-dim">{t("dashboard.tabs.queued")}</span>
-            : tab.status === "failed" && !live ? <span className="text-orange">{t("dashboard.tabs.failed")}</span>
-            : null}
+        <p role="status" className="empty:hidden text-[13px]">
+          {status === "queued" ? <span className="text-fg-2">{t("dashboard.tabs.queued")}</span> : status === "failed" ? <span className="alert">{t("dashboard.tabs.failed")}</span> : null}
         </p>
-        <div className="flex flex-col gap-2">
-          <label className="label" htmlFor="home-tab-target">{t("launch.targetLabel")}</label>
-          <input
-            id="home-tab-target"
-            className="field mono"
-            placeholder={t("launch.targetPlaceholder")}
-            spellCheck={false}
-            autoComplete="off"
-            disabled={busy}
-            value={draft.text}
-            onChange={(e) => {
-              const v = e.target.value;
-              onDraft((d) => ({ ...d, text: v, favId: null, note: null }));
-            }}
-          />
-          {draft.text.trim() && (
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 min-h-11">
-              <span aria-hidden="true" className={`w-2 h-2 flex-none rounded-full ${look ? "" : "bg-dim pulse"}`} style={look ? MARK[look.tone] : undefined} />
-              <span className="flex items-baseline gap-3 min-w-0 flex-1" aria-live="polite">
-                {look ? (
-                  <>
-                    <span className="font-semibold flex-none">{look.kind}</span>
-                    <span className={`mono text-[13px] truncate ${look.tone === "bad" ? "text-orange" : "text-dim"}`} title={look.detail}>
-                      {look.detail}
-                    </span>
-                  </>
-                ) : (
-                  <span className="text-dim">{t("launch.reading")}</span>
-                )}
-              </span>
-              {draft.note && <span className="tag flex-none max-w-[30%] truncate">{draft.note}</span>}
-            </div>
-          )}
-          {unsaved && <p className="text-[13px] text-dim">{t("dashboard.tabs.notSaved")}</p>}
-          {parsed?.kind === "jobIdOnly" && (
-            <label className="flex flex-col gap-1.5 mt-2 max-w-[320px]">
-              <span className="label">{t("launch.placeId")}</span>
-              <input
-                className="field mono"
-                inputMode="numeric"
-                spellCheck={false}
-                placeholder={t("launch.placeIdPlaceholder")}
-                value={draft.place}
-                disabled={busy}
-                aria-invalid={draft.place.trim() !== "" && place === null}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  onDraft((d) => ({ ...d, place: v, favId: null, note: null }));
-                }}
-              />
-            </label>
-          )}
-        </div>
+        <TargetField id="home-tab-target" draft={draft} setDraft={onDraft} disabled={busy} />
+        {unsaved && <p className="-mt-2 text-[13px] text-fg-3">{t("dashboard.tabs.notSaved")}</p>}
         <FavouritesRow accounts={accounts} active={draft.favId} onPick={(f) => !busy && onDraft(draftFor(f.target, f.id, f.name))} />
+        <Disclosure summary={t("dashboard.tabs.options")} defaultOpen={own} className="home-tab-opts">
+          <DetailOverrides account={a} />
+        </Disclosure>
       </section>
-
-      <section aria-labelledby="home-tab-options" className="panel flex flex-col gap-4 p-5">
-        <h2 id="home-tab-options" className="section-title">{t("dashboard.tabs.options")}</h2>
-        <div className="well px-[18px] py-4">
-          <div className="setting">
-            <div className="setting-text">
-              <p className="font-medium">{t("accounts.detail.fpsCap")}</p>
-              <p className="text-[13px] text-dim">{t("accounts.detail.fpsCapHint")}</p>
-            </div>
-            <NumberField unit={t("accounts.detail.fpsUnit")} short="FPS" min={0} max={360} value={a.fpsCap ?? 0} onCommit={(fpsCap) => update.mutate({ id: a.id, patch: { fpsCap } })} />
-          </div>
-          <div className="setting">
-            <div className="setting-text">
-              <p className="font-medium">{t("accounts.detail.launchArgs")}</p>
-            </div>
-            <TextField className="flex-[1_1_240px] w-auto" label={t("accounts.detail.launchArgs")} placeholder={t("accounts.detail.launchArgsDefault")} value={a.launchArgs ?? ""} onCommit={(launchArgs) => update.mutateAsync({ id: a.id, patch: { launchArgs } })} />
-          </div>
-          <div className="setting">
-            <div className="setting-text">
-              <p className="font-medium">{t("accounts.detail.fullQuality")}</p>
-              <p className="text-[13px] text-dim">{t("accounts.detail.fullQualityHint")}</p>
-            </div>
-            <Switch label={t("accounts.detail.fullQuality")} checked={a.fullQuality} onChange={(fullQuality) => update.mutate({ id: a.id, patch: { fullQuality } })} />
-          </div>
-          <div className="setting">
-            <div className="setting-text">
-              <p className="font-medium">{t("accounts.detail.bringBack")}</p>
-              <p className="text-[13px] text-dim">{settings && !settings.autoRejoin && !settings.autoRestartOnCrash ? t("accounts.detail.bringBackOff") : t("accounts.detail.bringBackHint")}</p>
-            </div>
-            <Switch label={t("accounts.detail.bringBack")} checked={!a.allowDisconnect} onChange={(v) => update.mutate({ id: a.id, patch: { allowDisconnect: !v } })} />
-          </div>
-        </div>
-      </section>
-    </>
+      <AccountColumn account={a} inst={inst} />
+    </div>
   );
 }
 
-/** Home's tab strip: Overview (`children`, what Home always shows), then one tab per added account,
- * each with its own game and options, and a launch of all of them. */
-export function AccountTabs({ accounts, home, onAdd, children }: { accounts: AccountSummary[]; home: HomeTabs; onAdd: () => void; children: ReactNode }) {
-  const qc = useQueryClient();
+/** Home's tabs (in the side layout the rail stands in for the strip): News, Overview, one tab per
+ * added account, each with its own game and options, "+", and a launch of every ready tab one after
+ * another. `children` is Overview (what Home shows without a tab open); beside the rail it gets
+ * "Play with N" for its header. */
+export function AccountTabs({ accounts, home, onAdd, children }: { accounts: AccountSummary[]; home: HomeTabs; onAdd: () => void; children: (extra: ReactNode) => ReactNode }) {
   const instances = useInstances().data ?? [];
   const multi = useMultiStatus().data;
   const batch = useBulk().data;
   const settings = useSettings().data;
-  // With accounts on the side (`AccountRail`), that list stands in for the strip.
-  const side = settings?.tabLayout === "side";
   const network = useNetwork().data;
+  const activity = useLaunchActivity();
+  const side = settings?.tabLayout === "side";
   const strip = useRef<HTMLDivElement>(null);
-  const [who, setWho] = useState("");
+  // The selected tab's light: one drop that flows along the strip.
+  const tabDrop = useRef<HTMLSpanElement>(null);
+  useLiquid(strip, tabDrop, ".tab:has(> [role=tab][aria-selected=true])", undefined, side);
+  // Sortable's own row holds the tabs: that is what glides.
+  const row = useMemo(() => ({ get current() { return strip.current?.querySelector<HTMLElement>(":scope > .sort-row") ?? null; } }), []);
+  const anchor = useAnchor();
+  // Each opening of "+" starts from an empty search.
+  const [opened, setOpened] = useState(0);
+  const [shown, setShown] = useState(false);
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const { active } = home;
-  // In the order they were dragged to, which a launch of all of them goes by too.
-  const tabs = homeSorted(home.tabs, home.order);
+  // In the order they were dragged to, which "Play with N" goes by too.
+  const tabs = homeSorted(home.tabs, home.order).filter((tab) => byId.has(tab.accountId));
+  const ids = tabs.map((tab) => tab.accountId);
+  const hold = useSteadyFlip(row, ids.join());
+  const fresh = useFreshItems(ids);
   const open = tabs.find((tab) => tab.accountId === active);
-  const ready = tabs.filter((tab) => {
-    const { usable, pending } = readDraft(tab.draft);
-    return byId.get(tab.accountId)?.status === "valid" && (usable || pending) && !instances.some((i) => i.accountId === tab.accountId && isLive(i));
-  });
-  const launching = tabs.some(inFlight);
+  const ready = readyTabs(tabs, byId, instances);
+  const liveOf = (id: number) => instances.find((i) => i.accountId === id && isLive(i));
+  const statusOf = (id: number) => tabLaunch(activity, id, !!liveOf(id));
   // With multi-instance off, one more client ends the one that runs.
   const replaces = (tab: HomeTab) => instances.some((i) => isRunning(i) && i.accountId !== tab.accountId);
   const allReplace = ready.some(replaces);
   const blockFor = (several: boolean, replacing: boolean) => publicBlock(network, settings) ?? launchBlocked(several || (replacing && !!multi?.enabled), multi, batch);
-  const otherBlock = publicBlock(network, settings) ?? (batch && !batch.done ? t("launch.batchRunning") : null);
-  const free = accounts.filter((a) => !tabs.some((tab) => tab.accountId === a.id));
-  const needle = who.trim().toLowerCase();
-  const picks = needle ? free.filter((a) => `${a.alias}\n${a.displayName}\n${a.username}`.toLowerCase().includes(needle)) : free;
+  const allBlock = blockFor(ready.length > 1, allReplace);
+  // The multi-instance notice under the strip says that one, with its ways out: not again.
+  const multiWhy = launchBlocked(true, multi, null);
+  const said = (why: string | null) => (why === multiWhy ? null : why);
+  const free = accounts.filter((a) => !ids.includes(a.id));
+  const news = useNewsFeed().unread;
+  // News is always there, so the strip is too.
+  const showStrip = !side;
   /** After a tab was added or closed, once that is on screen: what had the focus is gone. */
   const focusSelected = () => requestAnimationFrame(() => strip.current?.querySelector<HTMLElement>("[role=tab][aria-selected=true]")?.focus());
+  const hideAdd = () => document.getElementById(ADD)?.hidePopover();
 
   // The wheel runs along the tabs; at either end it scrolls the page as usual. Not onWheel: React's
   // is passive, and the page would scroll too.
@@ -225,181 +205,176 @@ export function AccountTabs({ accounts, home, onAdd, children }: { accounts: Acc
     };
     el.addEventListener("wheel", wheel, { passive: false });
     return () => el.removeEventListener("wheel", wheel);
-  }, [side]);
+  }, [showStrip]);
 
   // Coming back to Home, the strip starts at its left end.
   useEffect(() => {
     strip.current?.querySelector("[role=tab][aria-selected=true]")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [active]);
 
-  /** One after another: `BulkRequest` has a single target, and each tab has its own. The backend
-   * keeps the launch delay between them. */
-  const launch = async (list: HomeTab[]) => {
-    if (launching) return;
-    home.setStatus(list.map((tab) => tab.accountId), "queued");
-    for (const [n, tab] of list.entries()) {
-      const id = tab.accountId;
-      const a = byId.get(id);
-      const rest = () => home.setStatus(list.slice(n).map((x) => x.accountId), undefined);
-      // A batch can have started meanwhile; launches go one at a time.
-      const running = qc.getQueryData<BulkProgress | null>(qk.bulk);
-      if (!a || (running && !running.done)) {
-        rest();
-        if (a) toast(t("launch.batchRunning"), "error");
-        return;
-      }
-      home.setStatus([id], "launching");
-      let asked = false;
-      try {
-        const target = await resolveTarget(tab.draft, (f) => home.setDraft(id, f));
-        asked = true;
-        launched(a, await api.launch(a.id, target, tab.draft.favId ?? undefined));
-        home.setStatus([id], undefined);
-        if (tab.draft.favId !== null) qc.invalidateQueries({ queryKey: qk.favourites });
-      } catch (e) {
-        launchFailed(e);
-        const { kind } = asError(e);
-        // The backend refusing: mostly Kill all, or an auto-rejoin or another launch under way. They
-        // have no kind of their own, and the rest must not go on starting. A dead share link reads
-        // the same, so it stops the rest too; its toast says why.
-        const refused = asked && kind === "invalid";
-        home.setStatus([id], refused ? undefined : "failed");
-        if (refused || kind === "cancelled" || kind === "locked") {
-          home.setStatus(list.slice(n + 1).map((x) => x.accountId), undefined);
-          return;
-        }
-      }
-    }
-  };
+  // A new tab rises into the strip; its neighbours glide (useSteadyFlip).
+  useLayoutEffect(() => {
+    fresh.forEach((id, n) => {
+      const el = row.current?.querySelector(`:scope > [data-id="${id}"]`);
+      if (el) riseIn(el, n);
+    });
+  }, [fresh.join()]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const allBlock = blockFor(ready.length > 1, allReplace);
-  const openAccount = open && byId.get(open.accountId);
+  const plus = (
+    <IconButton
+      icon="plus"
+      data-home-add
+      label={free.length ? t("dashboard.tabs.add") : t("accounts.add.title")}
+      // Every account has its tab, or there are none: the only way on is another account.
+      popoverTarget={free.length ? ADD : undefined}
+      onClick={free.length ? undefined : onAdd}
+      style={anchor.style}
+    />
+  );
+  const playAll = ready.length > 0 && (
+    <LaunchButton
+      label={t("launch.launchMany", { count: ready.length })}
+      disabled={allBlock !== null}
+      reason={said(allBlock)}
+      shortcut={!open}
+      onLaunch={() => void launchEach(ready.map((tab) => ({ account: byId.get(tab.accountId)!, where: { draft: tab.draft, setDraft: (f) => home.setDraft(tab.accountId, f) } })))}
+    />
+  );
+
   return (
     <>
-      <div className="flex items-center gap-2.5 empty:hidden">
-        {!side && <>
-        <div ref={strip} role="tablist" aria-label={t("dashboard.tabs.label")} className="tab-strip" onKeyDown={tabKeys}>
-          <div className="tab">
-            <button type="button" role="tab" id={tabId(null)} aria-selected={active === null} aria-controls="home-tab-panel" tabIndex={active === null ? 0 : -1} onClick={() => home.setActive(null)}>
-              {t("dashboard.tabs.overview")}
-            </button>
-          </div>
-          <Sortable
-            className="contents"
-            ids={tabs.filter((tab) => byId.has(tab.accountId)).map((tab) => tab.accountId)}
-            order={home.order}
-            onOrder={home.setOrder}
-            name={(id) => accountName(byId.get(id)!)}
-            render={(id, drag) => {
-            const tab = tabs.find((x) => x.accountId === id)!;
-            const a = byId.get(id)!;
-            const inst = instances.find((i) => i.accountId === a.id && isLive(i));
-            const mark = inFlight(tab) ? "var(--dim)" : inst ? STATES[inst.state][1] : tab.status === "failed" ? "var(--orange)" : null;
-            const selected = active === a.id;
-            const name = accountName(a);
-            return (
-              <div key={a.id} className="tab">
-                <button type="button" role="tab" id={tabId(a.id)} aria-selected={selected} aria-controls="home-tab-panel" tabIndex={selected ? 0 : -1} title={name} onClick={() => home.setActive(a.id)} {...drag}>
-                  {mark && <span aria-hidden="true" className={`led ${inFlight(tab) ? "pulse" : ""}`} style={{ color: mark }} />}
-                  <span className="truncate">{name}</span>
-                </button>
-                <button
-                  type="button"
-                  className="wc w-8 h-8 me-0.5"
-                  aria-label={t("dashboard.tabs.close", { name })}
-                  title={t("dashboard.tabs.close", { name })}
-                  disabled={inFlight(tab)}
-                  onClick={() => {
-                    home.close(a.id);
-                    focusSelected();
-                  }}
-                >
-                  <Icon name="x" size={12} />
-                </button>
-              </div>
-            );
-          }}
-          />
-        </div>
-        <button
-          type="button"
-          className="btn btn-icon flex-none"
-          // Every account has its tab, or there are none: the only way on is another account.
-          popoverTarget={free.length ? "home-tabs-add" : undefined}
-          onClick={free.length ? undefined : onAdd}
-          style={{ anchorName: "--home-tabs-add" }}
-          aria-label={free.length ? t("dashboard.tabs.add") : t("accounts.add.title")}
-          title={free.length ? t("dashboard.tabs.add") : t("accounts.add.title")}
-        >
-          <Icon name="plus" size={14} />
-        </button>
-        <div
-          id="home-tabs-add"
-          popover="auto"
-          className="menu scroll"
-          onKeyDown={menuKeys}
-          onToggle={(e) => {
-            if (e.newState === "open") e.currentTarget.querySelector<HTMLElement>("input, .menu-item")?.focus();
-            else setWho("");
-          }}
-          style={{ positionAnchor: "--home-tabs-add", positionArea: "block-end span-inline-end", margin: "6px 0 0" }}
-        >
-          {free.length > 12 && (
-            <input className="field mb-1" aria-label={t("accounts.filterLabel")} placeholder={t("accounts.filterPlaceholder")} spellCheck={false} value={who} onChange={(e) => setWho(e.target.value)} />
-          )}
-          {picks.map((a) => (
-            <button
-              key={a.id}
-              className="menu-item"
-              onClick={(e) => {
-                // Now: the item is gone once the tab is added, and its own hide would never run.
-                e.currentTarget.closest<HTMLElement>("[popover]")?.hidePopover();
-                home.add(a.id);
-                focusSelected();
+      {/* Only in the top layout: a layout switch swaps the strip at once, it doesn't fold it away. */}
+      {!side && <Collapse open={showStrip}>
+        <div className="home-strip">
+          <div ref={strip} role="tablist" aria-label={t("dashboard.tabs.label")} className="tab-strip" onKeyDown={tabKeys}>
+            <span ref={tabDrop} aria-hidden="true" className="home-tab-on lq-drop" />
+            <div className="tab">
+              <button type="button" role="tab" id={tabId("news")} aria-selected={active === "news"} aria-controls="home-tab-panel" tabIndex={active === "news" ? 0 : -1} onClick={() => home.setActive("news")}>
+                {t("news.tab")}
+                {news > 0 && <span className="news-count" aria-label={t("news.unreadCount", { n: news })}>{news}</span>}
+              </button>
+            </div>
+            <div className="tab">
+              <button type="button" role="tab" id={tabId(null)} aria-selected={active === null} aria-controls="home-tab-panel" tabIndex={active === null ? 0 : -1} onClick={() => home.setActive(null)}>
+                {t("dashboard.tabs.overview")}
+              </button>
+            </div>
+            <Sortable
+              className="flex flex-none items-center gap-1"
+              ids={ids}
+              order={home.order}
+              onOrder={(next) => {
+                hold();
+                home.setOrder(next);
               }}
-            >
-              <Avatar account={a} size={24} />
-              <span className="truncate">{accountName(a)}</span>
-            </button>
-          ))}
-          <div role="separator" className="h-px my-1 bg-line" />
-          <button
-            className="menu-item"
-            onClick={(e) => {
-              e.currentTarget.closest<HTMLElement>("[popover]")?.hidePopover();
-              onAdd();
-            }}
-          >
-            <Icon name="plus" size={12} />
-            {t("accounts.add.title")}
-          </button>
+              name={(id) => accountName(byId.get(id)!)}
+              render={(id, drag) => {
+                const a = byId.get(id)!;
+                const tab = tabs.find((x) => x.accountId === id)!;
+                const status = statusOf(id);
+                const selected = active === id;
+                const name = accountName(a);
+                // Not while it launches: a press says why.
+                const busy = status === "queued" ? t("dashboard.tabs.queued") : status === "launching" ? t("launch.launching") : null;
+                const close = () => {
+                  if (busy) return announce(busy);
+                  home.close(id);
+                  focusSelected();
+                };
+                return (
+                  <div key={id} className="tab" data-flip data-id={id}>
+                    <button
+                      type="button"
+                      role="tab"
+                      id={tabId(id)}
+                      aria-selected={selected}
+                      aria-controls="home-tab-panel"
+                      tabIndex={selected ? 0 : -1}
+                      onClick={() => home.setActive(id)}
+                      {...drag}
+                      aria-keyshortcuts={`${drag["aria-keyshortcuts"]} Delete`}
+                      onKeyDown={(e) => {
+                        drag.onKeyDown(e);
+                        if (e.key !== "Delete") return;
+                        e.preventDefault();
+                        close();
+                      }}
+                    >
+                      <LaunchMark inst={liveOf(id)} status={status} />
+                      <span className="truncate">{name}</span>
+                      <ReadyRing on={ready.includes(tab)} />
+                    </button>
+                    {/* Out of the Tab order, as the tabs are one stop: Delete closes from the keyboard. */}
+                    <IconButton
+                      icon="x"
+                      size="sm"
+                      iconSize={12}
+                      className="home-tab-x"
+                      tabIndex={-1}
+                      label={t("dashboard.tabs.close", { name })}
+                      aria-disabled={!!busy || undefined}
+                      onClick={close}
+                    />
+                  </div>
+                );
+              }}
+            />
+          </div>
+          {plus}
+          {playAll && <div className="ms-auto">{playAll}</div>}
         </div>
-        </>}
-        {ready.length > 0 && (
-          <button className="btn btn-primary flex-none ms-auto" disabled={launching || allBlock !== null} title={allBlock ?? undefined} onClick={() => void launch(ready)}>
-            <Icon name="play" size={12} fill />
-            {launching ? t("launch.launching") : t("launch.launchMany", { count: ready.length })}
-          </button>
-        )}
-      </div>
+      </Collapse>}
+      {side && open && playAll && <div className="flex justify-end">{playAll}</div>}
       {(open || ready.length > 1 || allReplace) && <MultiNotice wanted={ready.length > 1} replaces={allReplace || (!!open && replaces(open))} />}
-      {open && otherBlock && <p className="alert">{otherBlock}</p>}
-      <div role={side ? undefined : "tabpanel"} id="home-tab-panel" aria-labelledby={side ? undefined : tabId(active)} className="flex flex-col gap-6 min-w-0">
-        {open && openAccount ? (
+      <div role={showStrip ? "tabpanel" : undefined} id="home-tab-panel" aria-labelledby={showStrip ? tabId(active) : undefined} className="flex flex-col gap-6 min-w-0">
+        {active === "news" ? (
+          <NewsView />
+        ) : open ? (
           <TabBody
             key={open.accountId}
             tab={open}
-            account={openAccount}
+            account={byId.get(open.accountId)!}
             accounts={accounts}
             instances={instances}
-            block={blockFor(false, replaces(open)) ?? (launching ? t("launch.launching") : null)}
+            status={statusOf(open.accountId)}
+            block={blockFor(false, replaces(open))}
+            why={said(blockFor(false, replaces(open)))}
             onDraft={(f) => home.setDraft(open.accountId, f)}
-            onLaunch={() => void launch([open])}
           />
         ) : (
-          children
+          children(side ? playAll : null)
         )}
       </div>
+      <Popover
+        id={ADD}
+        anchor={anchor.name}
+        role="dialog"
+        label={t("dashboard.tabs.add")}
+        className="home-add-pop"
+        onToggle={(on) => {
+          setShown(on);
+          if (!on) return;
+          setOpened((n) => n + 1);
+          requestAnimationFrame(() => document.getElementById(ADD)?.querySelector<HTMLElement>("input")?.focus());
+        }}
+      >
+        {/* Only while open: a closed one would still render every account on each poll. */}
+        {shown && <AccountPicker
+          key={opened}
+          variant="menu"
+          accounts={free}
+          label={t("dashboard.tabs.add")}
+          onPick={(id) => {
+            hideAdd();
+            home.add(id);
+            focusSelected();
+          }}
+          onAdd={() => {
+            hideAdd();
+            onAdd();
+          }}
+        />}
+      </Popover>
     </>
   );
 }

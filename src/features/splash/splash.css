@@ -10,9 +10,11 @@
   align-items: center;
   justify-content: center;
   gap: 22px;
-  background: #050506;
-  color: #eceef1;
-  transition: opacity 300ms var(--ease);
+  /* Always dark: the window opens dark before any theme applies. The cube takes the user's accent
+     (main.tsx sets --splash-accent from the cached one; white by default). */
+  background: #0a0a0a;
+  color: #ededed;
+  transition: opacity 300ms var(--ease-out);
 }
 .splash.out {
   opacity: 0;
@@ -30,8 +32,8 @@
   top: 6.7px;
   width: 60px;
   height: 60px;
-  border-radius: 6.7px;
-  background: #c6f432;
+  border-radius: 10px;
+  background: var(--splash-accent, #f5f5f5);
   animation-name: splash-cube;
   animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
@@ -51,7 +53,7 @@
   animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .splash .word b { font-size: 20px; font-weight: 700; letter-spacing: 0.12em; }
-.splash .word span { font-family: var(--font-mono); font-size: 11px; color: #9ba3ae; }
+.splash .word span { font-family: var(--font-code); font-size: 11px; color: #949494; }
 .splash .scan {
   position: absolute;
   inset: 0;
@@ -139,12 +141,12 @@
   53%, 100% { opacity: 0; transform: translateX(0); }
 }
 @keyframes splash-cube {
-  0%, 54% { opacity: 0; transform: scale(0.4); box-shadow: 0 0 0 rgb(198 244 50 / 0); }
-  55% { opacity: 1; transform: scale(1.18); box-shadow: 0 0 40px rgb(198 244 50 / 0.9); }
+  0%, 54% { opacity: 0; transform: scale(0.4); box-shadow: 0 0 0 transparent; }
+  55% { opacity: 1; transform: scale(1.18); box-shadow: 0 0 40px color-mix(in srgb, var(--splash-accent, #f5f5f5) 80%, transparent); }
   56% { opacity: 0.2; }
   57% { opacity: 1; transform: scale(1.1); }
-  61% { transform: scale(1); box-shadow: 0 0 28px rgb(198 244 50 / 0.55); }
-  100% { opacity: 1; transform: scale(1); box-shadow: 0 0 14px rgb(198 244 50 / 0.3); }
+  61% { transform: scale(1); box-shadow: 0 0 28px color-mix(in srgb, var(--splash-accent, #f5f5f5) 45%, transparent); }
+  100% { opacity: 1; transform: scale(1); box-shadow: 0 0 14px color-mix(in srgb, var(--splash-accent, #f5f5f5) 22%, transparent); }
 }
 @keyframes splash-word {
   0%, 68% { opacity: 0; transform: translateY(8px); letter-spacing: 0.3em; }

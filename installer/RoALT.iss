@@ -1,5 +1,5 @@
-; RoALT for Windows: a per-user install of the app, no admin rights. Contract: docs/DESIGN.md
-; ("Releases"). Build it with scripts\build-installer.ps1, which passes the version from
+; RoALT for Windows: a per-user install of the app, no admin rights.
+; Build it with scripts\build-installer.ps1, which passes the version from
 ; src-tauri\tauri.conf.json and where cargo put the release build.
 
 #if Ver < EncodeVer(6,6,0)

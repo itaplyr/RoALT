@@ -10,6 +10,9 @@
   "That file is too big to be an AccountData.json.": "AccountData.json이라기엔 파일이 너무 커요.",
   "This file is locked with a Roblox Account Manager password. Remove the password in Roblox Account Manager, then import again.": "이 파일은 Roblox Account Manager 비밀번호로 잠겨 있어요. Roblox Account Manager에서 비밀번호를 제거한 뒤 다시 가져오세요.",
   "RoALT couldn't decrypt this file. It must come from Roblox Account Manager on this PC, signed in as the same Windows user.": "RoALT가 이 파일을 복호화할 수 없어요. 이 PC의 Roblox Account Manager에서 같은 Windows 사용자로 만든 파일이어야 해요.",
+  "Confirm it's you to export Roblox cookies.": "Roblox 쿠키를 내보내려면 본인 확인을 하세요.",
+  "None of these accounts has a cookie to export.": "이 계정들에는 내보낼 쿠키가 없어요.",
+  "The exported file is gone.": "내보낸 파일이 이제 없어요.",
   "Confirm it's you to reveal a Roblox cookie.": "Roblox 쿠키를 표시하려면 본인 확인을 하세요.",
   "Type a Roblox username.": "Roblox 사용자 이름을 입력하세요.",
   "No Roblox user is called \"{name}\".": "\"{name}\" 이름의 Roblox 사용자가 없어요.",
@@ -56,6 +59,14 @@
   "The close grace must be between 1 and 60 seconds.": "종료 유예는 1~60초여야 해요.",
   "Anti-AFK must press a key every 1 to 19 minutes.": "잠수 방지 키 입력 간격은 1~19분이어야 해요.",
   "The status summary must be off (0) or every 5 minutes to 24 hours.": "상태 요약은 끔(0) 또는 5분~24시간 간격이어야 해요.",
+  "Close the sign-in and Roblox browser windows first, then move the data folder.": "먼저 로그인 창과 Roblox 브라우저 창을 닫은 다음 데이터 폴더를 옮기세요.",
+  "Roblox's lock belongs to a program running as administrator (often Roblox started by a bootstrapper set to run as administrator). Close it, or turn that off.": "Roblox 잠금을 관리자 권한으로 실행 중인 프로그램이 갖고 있어요(관리자 권한 실행으로 설정된 부트스트래퍼가 연 Roblox인 경우가 많아요). 그 프로그램을 닫거나 그 설정을 꺼 주세요.",
+  "Roblox's lock is held by {names}. Close it, or take it over.": "{names}이(가) Roblox 잠금을 갖고 있어요. 닫거나 넘겨받으세요.",
+  "process {pid}": "프로세스 {pid}",
+  "The server list couldn't be read ({why}), so accounts were matched by Roblox on their own.": "서버 목록을 읽지 못해서({why}) Roblox가 계정을 알아서 배치했어요.",
+  "{name} has no private server of this game, so it joins a public one.": "{name}은(는) 이 게임의 비공개 서버가 없어서 공개 서버에 들어가요.",
+  "Not enough servers with room were listed, so the rest were matched by Roblox on their own.": "자리가 있는 서버가 목록에 부족해서 나머지는 Roblox가 알아서 배치했어요.",
+  "Ping takes a Discord user ID (only digits), or a role as <@&id>.": "멘션에는 Discord 사용자 ID(숫자만) 또는 <@&id> 형식의 역할을 넣어 주세요.",
   "The launch delay must be between 2 and 60 seconds.": "실행 지연은 2~60초여야 해요.",
   "Paste a Discord webhook URL: https://discord.com/api/webhooks/<id>/<token>.": "Discord 웹훅 URL을 붙여넣으세요: https://discord.com/api/webhooks/<id>/<token>.",
   "**{name}**: the client crashed (place {place}).": "**{name}**: 클라이언트가 충돌했어요 (플레이스 {place}).",
@@ -299,49 +310,66 @@
   "WebView2 setup failed: {why}": "WebView2 설정 실패: {why}",
   "The Roblox sign-in window timed out after 15 minutes. Try again.": "Roblox 로그인 창이 15분이 지나 시간 초과됐어요. 다시 시도하세요.",
   "**{name}**: RoALT gave up after {n} relaunches in {minutes} min.": {
-    "other": "**{name}**: {minutes}분 동안 {n}번 재실행한 뒤 RoALT가 포기했어요.",
-    "one": "**{name}**: RoALT gave up after {n} relaunch in {minutes} min."
+    "other": "**{name}**: {minutes}분 동안 {n}번 재실행한 뒤 RoALT가 포기했어요."
   },
   "{n} clients running · {ram} MB RAM{cpu}.": {
-    "other": "클라이언트 {n}개 실행 중 · {ram} MB RAM{cpu}.",
-    "one": "{n} client running · {ram} MB RAM{cpu}."
+    "other": "클라이언트 {n}개 실행 중 · {ram} MB RAM{cpu}."
   },
   "…and {n} more.": {
-    "other": "…외 {n}개.",
-    "one": "…and {n} more."
+    "other": "…외 {n}개."
   },
   "Gave up after {n} rejoins": {
-    "other": "{n}번 재접속한 뒤 포기했어요",
-    "one": "Gave up after {n} rejoin"
+    "other": "{n}번 재접속한 뒤 포기했어요"
   },
   "{name} wasn't rejoined: it needed {n} rejoins in {minutes} minutes, so RoALT gave up.": {
-    "other": "{name}은(는) 재접속하지 않았어요. {minutes}분 동안 {n}번 재접속이 필요해서 RoALT가 포기했어요.",
-    "one": "{name} wasn't rejoined: it needed {n} rejoin in {minutes} minutes, so RoALT gave up."
+    "other": "{name}은(는) 재접속하지 않았어요. {minutes}분 동안 {n}번 재접속이 필요해서 RoALT가 포기했어요."
   },
   "Gave up after {n} restarts": {
-    "other": "{n}번 재시작한 뒤 포기했어요",
-    "one": "Gave up after {n} restart"
+    "other": "{n}번 재시작한 뒤 포기했어요"
   },
   "{name} wasn't restarted: it needed {n} restarts in {minutes} minutes, so RoALT gave up.": {
-    "other": "{name}은(는) 재시작하지 않았어요. {minutes}분 동안 {n}번 재시작이 필요해서 RoALT가 포기했어요.",
-    "one": "{name} wasn't restarted: it needed {n} restart in {minutes} minutes, so RoALT gave up."
+    "other": "{name}은(는) 재시작하지 않았어요. {minutes}분 동안 {n}번 재시작이 필요해서 RoALT가 포기했어요."
   },
   "No server had room for all {n} accounts": {
-    "other": "계정 {n}개가 모두 들어갈 자리가 있는 서버가 없어요",
-    "one": "No server had room for all {n} accounts"
+    "other": "계정 {n}개가 모두 들어갈 자리가 있는 서버가 없어요"
   },
   "{n} alts open": {
-    "other": "부계정 {n}개 실행 중",
-    "one": "{n} alt open"
+    "other": "부계정 {n}개 실행 중"
   },
   "Running {n} alts": {
-    "other": "부계정 {n}개 실행 중",
-    "one": "Running {n} alt"
+    "other": "부계정 {n}개 실행 중"
   },
   "{n} alts · {games} games": {
-    "other": "부계정 {n}개 · 게임 {games}개",
-    "one": "{n} alt · {games} games"
+    "other": "부계정 {n}개 · 게임 {games}개"
   },
+  "Make friends takes up to {max} accounts at a time.": "친구 맺기는 한 번에 최대 {max}개 계정까지예요.",
+  "That Roblox window is still closing. Try again in a moment.": "그 Roblox 창이 아직 닫히는 중이에요. 잠시 후 다시 시도하세요.",
+  "Pick AutoHotkey64.exe, the AutoHotkey v2 program.": "AutoHotkey v2 프로그램인 AutoHotkey64.exe를 선택하세요.",
+  "That client is already running a macro. Stop it first.": "그 클라이언트는 이미 매크로를 실행 중입니다. 먼저 중지하세요.",
+  "AutoHotkey didn't start: {why}": "AutoHotkey가 시작되지 않았습니다: {why}",
+  "Macro {name} stopped with an error: {why}": "매크로 {name}이(가) 오류로 중지되었습니다: {why}",
+  "Macro {name} stopped with an error.": "매크로 {name}이(가) 오류로 중지되었습니다.",
+  "That client isn't in a game.": "그 클라이언트는 게임 중이 아닙니다.",
+  "Review {name} on the Macros page before it runs.": "실행하기 전에 매크로 페이지에서 {name}을(를) 검토하세요.",
+  "This macro has invisible or text-direction characters. Remove them first.": "이 매크로에는 보이지 않는 문자나 텍스트 방향 문자가 있습니다. 먼저 제거하세요.",
+  "Install AutoHotkey v2 to use macros.": "매크로를 사용하려면 AutoHotkey v2를 설치하세요.",
+  "RoALT can't read that file as text. Save it as UTF-8 and import it again.": "RoALT가 그 파일을 텍스트로 읽을 수 없습니다. UTF-8로 저장한 다음 다시 가져오세요.",
+  "A macro can be at most {max} KiB.": "매크로는 최대 {max} KiB까지입니다.",
+  "{key} is already the panic hotkey.": "{key}은(는) 이미 비상 단축키입니다.",
+  "{key} is already the hotkey of {name}.": "{key}은(는) 이미 {name}의 단축키입니다.",
+  "No client in a game can run {name} now.": "지금 {name}을(를) 실행할 수 있는 게임 중인 클라이언트가 없습니다.",
+  "Macro {name} didn't start: {why}": "매크로 {name}이(가) 시작되지 않았습니다: {why}",
+  "Macro names need 1 to {max} characters.": "매크로 이름은 1~{max}자여야 합니다.",
+  "A macro called \"{name}\" already exists.": "\"{name}\"(이)라는 매크로가 이미 있습니다.",
+  "Pick Fit or Tiny to see where the windows go.": "창이 어디에 놓일지 보려면 맞춤이나 작게를 고르세요.",
+  "Pick accounts to see where their windows go.": "창이 어디에 놓일지 보려면 계정을 고르세요.",
+  "A private server needs a name.": "비공개 서버에는 이름이 필요합니다.",
+  "Only the owner's account can change this.": "소유자의 계정만 이것을 변경할 수 있습니다.",
+  "Roblox refused this: {why}": "Roblox가 거부했습니다: {why}",
+  "Roblox refused the purchase and charged nothing: check the price on the game's page.": "Roblox가 구매를 거부했으며 청구된 금액은 없습니다. 게임 페이지에서 가격을 확인하세요.",
+  "Roblox wants a verification for this: do it on roblox.com, then try again.": "Roblox가 이 작업에 인증을 요구합니다. roblox.com에서 인증한 뒤 다시 시도하세요.",
+  "A measurement is already running.": "이미 측정 중입니다.",
+  "Start a client and let it reach a game first.": "먼저 클라이언트를 실행하고 게임에 들어갈 때까지 기다리세요.",
   "Could not close Roblox (process {pid}).": "Could not close Roblox (process {pid}).",
   "Cordial's profile folder could not be found.": "Cordial's profile folder could not be found.",
   "Could not write the Cordial cookie store: {why}": "Could not write the Cordial cookie store: {why}",
@@ -353,5 +381,7 @@
   "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.": "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.",
   "The downloaded update failed its SHA-256 check.": "The downloaded update failed its SHA-256 check.",
   "That client's window could not be resized.": "That client's window could not be resized.",
-  "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run.": "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run."
+  "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run.": "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run.",
+  "That client's window could not be moved.": "That client's window could not be moved.",
+  "Could not clear the previous Roblox sign-in. Try again.": "Could not clear the previous Roblox sign-in. Try again."
 }

@@ -185,6 +185,46 @@ pub struct ShareLinkV2 {
     pub custom_data: Option<serde_json::Value>,
 }
 
+/// A row of `friends/v1/users/{id}/friends/statuses`. `status` is an int (0-3) in the spec but
+/// strings have been seen; both are read by `FriendStatus::of`.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+pub struct FriendStatusRow {
+    pub id: i64,
+    #[serde(default)]
+    pub status: serde_json::Value,
+}
+
+/// How a stored account stands with another user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FriendStatus {
+    NotFriends,
+    Friends,
+    /// This account asked the other one.
+    RequestSent,
+    /// The other one asked this account.
+    RequestReceived,
+}
+
+impl FriendStatus {
+    /// Unknown values count as not friends: the worst case is one request Roblox refuses.
+    pub fn of(v: &serde_json::Value) -> FriendStatus {
+        let n = match v {
+            serde_json::Value::Number(n) => n.as_i64(),
+            serde_json::Value::String(s) => ["NotFriends", "Friends", "RequestSent", "RequestReceived"]
+                .iter()
+                .position(|x| x.eq_ignore_ascii_case(s))
+                .map(|i| i as i64),
+            _ => None,
+        };
+        match n {
+            Some(1) => FriendStatus::Friends,
+            Some(2) => FriendStatus::RequestSent,
+            Some(3) => FriendStatus::RequestReceived,
+            _ => FriendStatus::NotFriends,
+        }
+    }
+}
+
 /// A row of `friends/v1/users/{id}/friends/online`.
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct FriendOnline {
@@ -244,6 +284,44 @@ pub struct PrivateServerList {
     pub data: Option<Vec<PrivateServerRow>>,
     pub next_page_cursor: Option<String>,
     pub game_join_restricted: Option<bool>,
+}
+
+/// `GET games.roblox.com/v1/vip-servers/{id}` as its owner sees it. Unrecorded signed in, so
+/// everything is optional. Its `joinCode` and `link` are join secrets and have no field here, so
+/// they are never read; no `Debug` all the same.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VipServerResponse {
+    pub name: Option<String>,
+    pub active: Option<bool>,
+    pub subscription: Option<VipSubscription>,
+    pub permissions: Option<VipPermissions>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VipSubscription {
+    /// Auto-renew is on.
+    pub active: Option<bool>,
+    pub expired: Option<bool>,
+    pub expiration_date: Option<String>,
+    pub price: Option<i64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VipPermissions {
+    pub friends_allowed: Option<bool>,
+    pub users: Option<Vec<VipUser>>,
+}
+
+/// A player the owner allowed in. Rows without `id` are dropped by the caller.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VipUser {
+    pub id: Option<i64>,
+    pub name: Option<String>,
+    pub display_name: Option<String>,
 }
 
 /// Rows without `vipServerId` are dropped by the caller. `accessCode` is a join secret.

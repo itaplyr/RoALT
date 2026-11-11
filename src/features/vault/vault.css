@@ -1,0 +1,179 @@
+/* The unlock card, and the vault's dialogs: the password field that carries the show key, the
+   recovery code, and Done filling in once the code is saved. */
+@layer views {
+  .vault-stage {
+    display: flex;
+    padding: 16px;
+    /* A scrollbar coming and going (a taller mode, an error) doesn't shift the card. */
+    scrollbar-gutter: stable both-edges;
+  }
+  .vault-card {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    width: 100%;
+    max-width: 400px;
+    /* Centred, and still scrolled from its top when the window is shorter than the card. */
+    margin: auto;
+    padding: 24px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-xl);
+    background: var(--surface-1);
+  }
+  .vault-lock {
+    align-self: center;
+    color: var(--fg-2);
+  }
+  .vault-keyhole {
+    color: var(--accent);
+    fill: currentColor;
+    stroke: currentColor;
+    transition: color var(--dur-fast) var(--ease-out);
+  }
+  .vault-lock[data-wrong] .vault-keyhole {
+    color: var(--attention);
+  }
+  .vault-head {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 4px;
+    text-align: center;
+    text-wrap: balance;
+  }
+  .vault-head h1 {
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 1.25;
+    letter-spacing: -0.01em;
+  }
+  .vault-head p {
+    color: var(--fg-2);
+  }
+  .vault-forgot {
+    padding: 10px 12px;
+    color: var(--fg-2);
+    font-size: var(--fs-small);
+  }
+  .vault-local {
+    margin-top: 8px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+    color: var(--fg-3);
+    font-size: var(--fs-meta);
+    text-align: center;
+  }
+
+  .vault-pw {
+    display: flex;
+    align-items: center;
+    padding: 0;
+    padding-inline-end: 3px;
+  }
+  .vault-pw > input {
+    flex: 1;
+    min-width: 0;
+    align-self: stretch;
+    padding: 0 12px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    outline: none;
+  }
+  .vault-pw:has(> input:focus) {
+    border-color: var(--accent-text);
+  }
+  .vault-pw:has(> input[aria-invalid="true"]) {
+    border-color: var(--attention);
+  }
+  /* The key draws its own focus ring; the field's ring is for typing. */
+  .vault-pw:focus-within:not(:has(> input:focus)) {
+    outline: none;
+  }
+
+  .vault-code {
+    display: block;
+    padding: 14px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    font-size: var(--fs-metric);
+    font-weight: 500;
+    line-height: 1.2;
+    letter-spacing: 0.08em;
+    text-align: center;
+  }
+  .vault-dash {
+    color: var(--fg-3);
+  }
+
+  .vault-note {
+    display: flex;
+    min-height: 20px;
+    font-size: var(--fs-small);
+  }
+
+  .vault-limits {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-inline-start: 18px;
+    list-style: disc;
+    color: var(--fg-2);
+    font-size: var(--fs-small);
+  }
+  .vault-limits ::marker {
+    color: var(--fg-3);
+  }
+
+  /* Done fills in from the start edge when "I saved it" enables it; the label turns as the fill
+     passes under it. */
+  .vault-done {
+    isolation: isolate;
+  }
+  .vault-done:not(:disabled) {
+    background: transparent;
+    transition:
+      color var(--dur-fast) var(--ease-out) 90ms,
+      box-shadow var(--dur-fast) var(--ease-out),
+      scale var(--dur-fast) var(--ease-out);
+  }
+  .vault-done::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    background: var(--accent);
+    scale: 0 1;
+    transform-origin: left;
+    transition: scale var(--dur-exit) var(--ease-out);
+  }
+  :root[dir="rtl"] .vault-done::before {
+    transform-origin: right;
+  }
+  .vault-done:not(:disabled)::before {
+    scale: 1;
+    transition:
+      scale var(--dur-spring-slow) var(--spring),
+      background-color var(--dur-fast) var(--ease-out);
+  }
+  .vault-done:not(:disabled):hover::before {
+    background: color-mix(in oklab, var(--accent) 88%, var(--fg-2));
+  }
+  /* Reduced motion: it fades in instead. */
+  :root[data-rm] .vault-done::before {
+    scale: 1;
+    opacity: 0;
+    transition: opacity var(--dur-fast) var(--ease-out);
+  }
+  :root[data-rm] .vault-done:not(:disabled)::before {
+    opacity: 1;
+  }
+  @media (forced-colors: active) {
+    .vault-done::before {
+      display: none;
+    }
+  }
+}

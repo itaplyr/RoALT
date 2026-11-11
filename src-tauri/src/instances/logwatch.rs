@@ -1,6 +1,6 @@
 //! Reading Roblox client logs (`%LOCALAPPDATA%\Roblox\logs\*_Player_*_last.log`) to tie a
-//! client to its launch and follow it. Line formats: research multi-instance M10/M11 and
-//! fixtures/multiinstance-log-line-samples.json. Logs can contain the launch ticket
+//! client to its launch and follow it. Line formats: the recorded samples in
+//! docs/research/fixtures/multiinstance-log-line-samples.json. Logs can contain the launch ticket
 //! (`gameinfo:`); lines are parsed and dropped, never stored or logged.
 
 use std::fs::File;
@@ -221,7 +221,7 @@ pub fn problem_of(line: &str) -> Option<&str> {
 }
 
 /// The client's channel and update decision from its tag on, worth a line in RoALT's log: a
-/// foreground update closes every client (research multi-instance M9). Never a URL (pure).
+/// foreground update closes every client. Never a URL (pure).
 fn update_line(line: &str) -> Option<&str> {
     const MARKS: [&str; 3] = ["RobloxChannel has been set to ", "Update check thread: updateRequired ", "Update mode is chosen as "];
     if !MARKS.iter().any(|m| line.contains(m)) {

@@ -1,0 +1,223 @@
+/* Performance: the preset cards and For this PC, then what its rows draw beyond the settings kit. */
+@layer views {
+  .perf-page {
+    max-width: 1000px;
+    margin-inline: auto;
+  }
+  .perf-head {
+    margin-bottom: 24px;
+  }
+  .perf-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+  }
+
+  /* The page's first job, above the rows: a preset, or this PC's own suggestions. */
+  .perf-top {
+    display: grid;
+    gap: 16px;
+    margin-bottom: 40px;
+  }
+  .perf-presets {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
+    gap: 16px;
+  }
+  .preset {
+    width: 100%;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: flex-start;
+    gap: 10px;
+    padding: 18px;
+    border-radius: var(--r-lg);
+    background: var(--surface-1);
+    text-align: start;
+    white-space: normal;
+  }
+  .preset:hover:not(:disabled) {
+    background: var(--surface-2);
+  }
+  /* The applied preset. Not aria-pressed: pressing a card opens its review, it toggles nothing. */
+  .preset[data-active] {
+    background: var(--surface-2);
+    /* An inset selection ring (as .pick), not depth; it keeps clear of the focus outline. */
+    box-shadow: inset 0 0 0 1.5px var(--accent-text); /* taste-skill-ignore */
+  }
+  .preset[data-active] .tick {
+    background: var(--accent);
+    color: var(--on-accent);
+    box-shadow: inset 0 0 0 1px var(--accent-ring); /* taste-skill-ignore: the tick's ring, as controls.css */
+  }
+  @media (forced-colors: active) {
+    .preset[data-active] {
+      border: 2px solid Highlight;
+    }
+  }
+  .perf-preset-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+  }
+  .perf-preset-facts {
+    display: grid;
+    gap: 4px;
+    font-size: var(--fs-small);
+    font-weight: 400;
+  }
+
+  /* For this PC. */
+  .perf-bench {
+    padding: 18px;
+  }
+  .perf-bench-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px 24px;
+  }
+  .perf-bench-line {
+    padding-top: 12px;
+    font-size: var(--fs-small);
+  }
+  .perf-estimate {
+    display: grid;
+    gap: 8px;
+    padding-top: 16px;
+  }
+  /* Uncovered from the start edge by a WAAPI clip (ForThisPc), so it costs no layout. */
+  .perf-estimate-bar > span {
+    width: 100%;
+    clip-path: inset(0 100% 0 0 round 999px);
+  }
+  :root[dir="rtl"] .perf-estimate-bar > span {
+    clip-path: inset(0 0 0 100% round 999px);
+  }
+  .perf-bench-result {
+    display: grid;
+    gap: 14px;
+    padding-top: 16px;
+  }
+  .perf-bench-facts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 16px;
+    color: var(--fg-2);
+    font-size: var(--fs-small);
+  }
+  .perf-suggest {
+    display: grid;
+    padding: 4px;
+    border-radius: var(--r-md);
+    background: color-mix(in srgb, var(--surface-2) 70%, var(--surface-1));
+  }
+  .perf-suggest-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px;
+    border-radius: var(--r-sm);
+    cursor: pointer;
+    transition: background-color var(--dur-fast) var(--ease-out);
+  }
+  .perf-suggest-row:hover {
+    background: var(--hover);
+  }
+  .perf-suggest-row .cb {
+    margin-top: 2px;
+  }
+
+  /* Rows. */
+  .perf-fps-range {
+    flex: none;
+    width: 200px;
+  }
+  .perf-own {
+    margin-top: 4px;
+    font-size: var(--fs-small);
+  }
+  /* A heading inside Lighter rendering's panel: nearer the rows it names than the ones above. */
+  .perf-subhead {
+    padding: 12px 12px 0;
+    color: var(--fg-3);
+    font-size: var(--fs-meta);
+    font-weight: 500;
+  }
+  /* Labels on one line, their controls centred on the next (a switch is shorter than a track). */
+  .perf-bg {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 12px 24px;
+    padding-top: 12px;
+  }
+  .perf-bg-item {
+    display: grid;
+    grid-template-rows: auto var(--h-md);
+    align-items: center;
+    justify-items: start;
+    gap: 6px;
+  }
+  .perf-bg-label {
+    color: var(--fg-2);
+    font-size: var(--fs-small);
+  }
+
+  /* The review: each change from → to, apart by hairlines. A long list scrolls between the title
+     and the buttons, so Apply (focused first) and the title both stay in view. */
+  .perf-review-body {
+    max-height: calc(100vh - 200px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+  }
+  .perf-diff {
+    display: grid;
+    padding: 2px 4px;
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+  }
+  /* A value too long to sit beside its name goes under it; its "from" and "to" then take a line each. */
+  .perf-diff > li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 16px;
+    padding: 9px 10px;
+  }
+  .perf-diff > li + li {
+    border-top: 1px solid var(--line);
+  }
+  .perf-diff-label {
+    flex: 1 0 auto;
+    max-width: 100%;
+  }
+  .perf-diff-value {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: flex-end;
+    gap: 2px 8px;
+    max-width: 100%;
+    margin-inline-start: auto;
+    font-size: var(--fs-meta);
+    text-align: end;
+  }
+  .perf-diff-to {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+  .perf-diff-arrow {
+    flex: none;
+    align-self: center;
+    rotate: 180deg;
+    color: var(--fg-3);
+  }
+}

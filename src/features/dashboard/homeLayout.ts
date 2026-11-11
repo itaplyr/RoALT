@@ -1,6 +1,10 @@
 import { useEffect, useState, type SetStateAction } from "react";
-import { api, type AccountSummary } from "../../api";
-import { EMPTY_DRAFT, targetText, type Draft } from "../launch/target";
+import { api, type AccountSummary, type Instance, type InstanceState } from "../../api";
+import type { Tone } from "../../ui/Status";
+import type { LaunchActivity } from "../launch/launchQueue";
+import { isLive } from "../launch/Running";
+import { EMPTY_DRAFT, readDraft, targetText, type Draft } from "../launch/target";
+import { useNewsFeed } from "../news/news";
 
 /** How Home lays out its clients; remembered on this PC, apart from the accounts' launch order. */
 const DETAILED = "roalt.homeDetailed";
@@ -180,11 +184,23 @@ function storedTabs(): HomeTab[] {
 
 const unparsed = (d: Draft) => !!d.text.trim() && d.parsed?.text !== d.text;
 
+/** Home's open tab: an account's id, "news", or null for Overview. */
+export type HomeActive = number | "news" | null;
+/** Home opens on News once per start, the first time it knows of something unread. */
+let landed = false;
+
 /** Home's tabs. Shell owns them, so they and a launch in flight survive leaving Home, and a link
- * code in one goes with everything else when the vault locks. `active`: an account id, null for Overview. */
+ * code in one goes with everything else when the vault locks. */
 export function useHomeTabs(accounts: AccountSummary[] | undefined) {
   const [tabs, setTabs] = useState(storedTabs);
-  const [active, setActive] = useState<number | null>(null);
+  const [active, setActive] = useState<HomeActive>(null);
+  const { unread, query } = useNewsFeed();
+  // Only while Home is still on Overview: a tab picked meanwhile stays.
+  useEffect(() => {
+    if (landed || !query.isFetched) return;
+    landed = true;
+    if (unread) setActive((a) => (a === null ? "news" : a));
+  }, [query.isFetched, unread]);
   // One order for an account's client, tab and row, so sorting one sorts them all.
   const [order, setOrder] = useHomeOrder();
   const setDraft =(id: number, f: SetStateAction<Draft>) =>
@@ -230,7 +246,7 @@ export function useHomeTabs(accounts: AccountSummary[] | undefined) {
     tabs,
     order,
     setOrder,
-    active: tabs.some((tab) => tab.accountId === active) ? active : null,
+    active: active === "news" || tabs.some((tab) => tab.accountId === active) ? active : null,
     setActive,
     setDraft,
     add: (id: number) => {
@@ -246,3 +262,24 @@ export function useHomeTabs(accounts: AccountSummary[] | undefined) {
   };
 }
 export type HomeTabs = ReturnType<typeof useHomeTabs>;
+
+/** A client's state as a status tone (shape and hue), the way cards, tabs and rail rows show it. */
+export const STATE_TONE: Record<InstanceState, Tone> = { starting: "neutral", joining: "info", inGame: "ok", disconnected: "attention", exited: "neutral" };
+
+/** The tabs "Play with N" starts: a signed-in account, a target that reads (or is still being read)
+ * and no client of its own on its way or in a game. */
+export function readyTabs(tabs: HomeTab[], byId: Map<number, AccountSummary>, instances: Instance[]) {
+  return tabs.filter((tab) => {
+    const { usable, pending } = readDraft(tab.draft);
+    return byId.get(tab.accountId)?.status === "valid" && (usable || pending) && !instances.some((i) => i.accountId === tab.accountId && isLive(i));
+  });
+}
+
+/** Where an account is in the launch on show: waiting for its turn, launching, or it didn't start
+ * (and has no client on its way or in a game). */
+export function tabLaunch(activity: LaunchActivity | null, accountId: number, live: boolean): HomeTab["status"] {
+  const kind = activity?.rows.find((r) => r.accountId === accountId && r.account)?.stage.kind;
+  if (kind === "queued") return activity!.done ? undefined : "queued";
+  if (kind === "ticket") return "launching";
+  return kind === "failed" && !live ? "failed" : undefined;
+}

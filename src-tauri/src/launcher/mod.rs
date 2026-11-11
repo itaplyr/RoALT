@@ -252,6 +252,7 @@ pub async fn launch(
         _ => put_back(undo),
     }
     let (pid, pid_start) = started?;
+    update::note_started(s, &exe, production, pid, pid_start);
 
     log::info!(
         "launched account {account_id} (pid {pid}, bootstrapper: {}, {} extra argument(s), Roblox processes running now: {}, lighter rendering: {}, full quality: {})",

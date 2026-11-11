@@ -12,6 +12,7 @@ import type { BulkRequest } from "./bindings/BulkRequest";
 import type { ClientMetrics } from "./bindings/ClientMetrics";
 import type { SystemUsage } from "./bindings/SystemUsage";
 import type { Profile } from "./bindings/Profile";
+import type { Benchmark } from "./bindings/Benchmark";
 import type { ServerVisit } from "./bindings/ServerVisit";
 import type { ConflictPolicy } from "./bindings/ConflictPolicy";
 import type { Crash } from "./bindings/Crash";
@@ -25,6 +26,8 @@ import type { Group } from "./bindings/Group";
 import type { GroupInput } from "./bindings/GroupInput";
 import type { Headshot } from "./bindings/Headshot";
 import type { ImportReport } from "./bindings/ImportReport";
+import type { FriendReport } from "./bindings/FriendReport";
+import type { CookieExport } from "./bindings/CookieExport";
 import type { InstallProgress } from "./bindings/InstallProgress";
 import type { Instance } from "./bindings/Instance";
 import type { JoinCandidate } from "./bindings/JoinCandidate";
@@ -32,11 +35,19 @@ import type { LaunchInfo } from "./bindings/LaunchInfo";
 import type { LaunchTarget } from "./bindings/LaunchTarget";
 import type { Limits } from "./bindings/Limits";
 import type { LogsCleaned } from "./bindings/LogsCleaned";
+import type { AhkStatus } from "./bindings/AhkStatus";
+import type { Macro } from "./bindings/Macro";
+import type { MacroInput } from "./bindings/MacroInput";
+import type { MacroRun } from "./bindings/MacroRun";
 import type { MultiInstanceStatus } from "./bindings/MultiInstanceStatus";
 import type { Notice } from "./bindings/Notice";
 import type { ParsedInput } from "./bindings/ParsedInput";
 import type { PrivateServerPage } from "./bindings/PrivateServerPage";
+import type { PrivateServerBuy } from "./bindings/PrivateServerBuy";
+import type { PrivateServerPatch } from "./bindings/PrivateServerPatch";
+import type { PrivateServerSettings } from "./bindings/PrivateServerSettings";
 import type { NetworkStatus } from "./bindings/NetworkStatus";
+import type { News } from "./bindings/News";
 import type { RobloxClient } from "./bindings/RobloxClient";
 import type { ServerOrder } from "./bindings/ServerOrder";
 import type { ServerPage } from "./bindings/ServerPage";
@@ -52,8 +63,12 @@ export type {
   BandwidthStatus, ClientMetrics, Crash, DiscordStatus, Instance, MultiInstanceStatus, BulkProgress, BulkRequest, ServerOrder, ServerPage, GameInfo, PrivateServerPage, DataDir, LogsCleaned, Notice, RobloxClient,
   AccountPatch, AccountSummary, AppUpdate, ConflictPolicy, ErrorPayload, Group, GroupInput,
   ImportReport, InstallProgress, Settings, SettingsPatch, VaultMode, VaultStatus,
+  AhkStatus, Macro, MacroInput, MacroRun,
 };
 export type { AccountStatus } from "./bindings/AccountStatus";
+export type { News } from "./bindings/News";
+export type { NewsItem } from "./bindings/NewsItem";
+export type { NewsSource } from "./bindings/NewsSource";
 export type { Adaptive } from "./bindings/Adaptive";
 export type { Profile } from "./bindings/Profile";
 export type { SystemUsage } from "./bindings/SystemUsage";
@@ -66,6 +81,8 @@ export type { Density } from "./bindings/Density";
 export type { DiscordEvents } from "./bindings/DiscordEvents";
 export type { GameServer } from "./bindings/GameServer";
 export type { PrivateServer } from "./bindings/PrivateServer";
+export type { AllowedUser } from "./bindings/AllowedUser";
+export type { PrivateServerBuy, PrivateServerPatch, PrivateServerSettings };
 export type { SameServer } from "./bindings/SameServer";
 export type { InstanceState } from "./bindings/InstanceState";
 export type { Limits } from "./bindings/Limits";
@@ -128,9 +145,14 @@ export const api = {
   accountsReorder: (ids: number[]) => invoke<void>("accounts_reorder", { ids }),
   accountsRemove: (ids: number[]) => invoke<void>("accounts_remove", { ids }),
   accountsValidate: (ids?: number[]) => invoke<AccountSummary[]>("accounts_validate", { ids }),
+  accountsBefriend: (ids: number[]) => invoke<FriendReport>("accounts_befriend", { ids }),
   /** Master mode needs the password; DPAPI mode shows Windows Hello. */
   accountRevealCookie: (id: number, password?: string) => invoke<string>("account_reveal_cookie", { id, password }),
   accountCopyCookie: (id: number, password?: string) => invoke<void>("account_copy_cookie", { id, password }),
+  /** `username:cookie` lines in a file in RoALT's folder, selected in Explorer; all accounts with no ids. */
+  accountsExportCookies: (accountIds?: number[], password?: string) => invoke<CookieExport>("accounts_export_cookies", { accountIds, password }),
+  cookieExportDelete: () => invoke<number>("cookie_export_delete"),
+  cookieExportReveal: () => invoke<void>("cookie_export_reveal"),
 
   /** Cached for settings.cacheMinutes unless refresh. Parts Roblox didn't answer are null and named in `unavailable`. */
   accountInfo: (id: number, refresh = false) => invoke<AccountInfo>("account_info", { id, refresh }),
@@ -178,6 +200,10 @@ export const api = {
   instanceMicro: (id: string, on: boolean, size?: [number, number]) => invoke<[number, number]>("instance_micro", { id, on, size }),
   /** Lays every running client that isn't hidden or minimized out in a grid on RoALT's monitor; how many it laid out. */
   instancesTile: (micro: boolean) => invoke<number>("instances_tile", { micro }),
+  /** Draws the window layout's spots for launching these accounts (in order) over RoALT's monitor for a few seconds. */
+  layoutPreview: (accountIds: number[], running: string) => invoke<void>("layout_preview", { accountIds, running }),
+  /** Takes the layout preview off the screen before its time. */
+  layoutPreviewStop: () => invoke<void>("layout_preview_stop"),
   /** CPU, memory and IO of each running client (sampled at most every 2 s). */
   instancesMetrics:() => invoke<ClientMetrics[]>("instances_metrics"),
   /** How busy the whole PC is (sampled at most every 2 s); null if Windows doesn't say. */
@@ -225,10 +251,40 @@ export const api = {
   targetPlace: (target: LaunchTarget, accountId?: number) => invoke<number>("target_place", { target, accountId }),
   privateServersList: (placeId: number, accountId: number, cursor?: string) =>
     invoke<PrivateServerPage>("private_servers_list", { placeId, accountId, cursor }),
+  /** As the owner's account (`accountId`); another account gets "Only the owner's account can change this". */
+  privateServerGet: (accountId: number, vipServerId: number) =>
+    invoke<PrivateServerSettings>("private_server_get", { accountId, vipServerId }),
+  privateServerUpdate: (accountId: number, vipServerId: number, patch: PrivateServerPatch) =>
+    invoke<PrivateServerSettings>("private_server_update", { accountId, vipServerId, patch }),
+  /** Auto-renew on spends `price` Robux a month: confirm first. `price` comes from privateServerGet. */
+  privateServerRenew: (accountId: number, vipServerId: number, on: boolean, price: number) =>
+    invoke<PrivateServerSettings>("private_server_renew", { accountId, vipServerId, on, price }),
+  /** Spends Robux: confirm first. One idempotencyKey per buy dialog. */
+  privateServerBuy: (buy: PrivateServerBuy) => invoke<void>("private_server_buy", { buy }),
 
   groupsList: () => invoke<Group[]>("groups_list"),
   groupSave: (input: GroupInput) => invoke<Group>("group_save", { input }),
   groupRemove: (id: number) => invoke<void>("group_remove", { id }),
+
+  /** Where AutoHotkey v2 is (Settings' ahkPath first); path null: not installed. */
+  ahkStatus: () => invoke<AhkStatus>("ahk_status"),
+  macrosList: () => invoke<Macro[]>("macros_list"),
+  /** Create or edit from the editor; saved there counts as trusted. The hotkey must be free. */
+  macroSave: (input: MacroInput) => invoke<Macro>("macro_save", { input }),
+  /** Stops it where it runs, then deletes it. */
+  macroRemove: (id: number) => invoke<void>("macro_remove", { id }),
+  /** The user reviewed its whole source: it may run from now on. */
+  macroTrust: (id: number) => invoke<Macro>("macro_trust", { id }),
+  /** .ahk/.txt files, each a new untrusted macro named after its file; nothing runs. */
+  macrosImport: (paths: string[]) => invoke<Macro[]>("macros_import", { paths }),
+  /** One macro as a .ahk file (UTF-8 with BOM). */
+  macroExport: (id: number, path: string) => invoke<void>("macro_export", { id, path }),
+  /** Starts the macro on these clients (each in a game), one AutoHotkey each; the runs now. */
+  macroRun: (id: number, instanceIds: string[]) => invoke<MacroRun[]>("macro_run", { id, instanceIds }),
+  macroStop: (instanceId: string) => invoke<void>("macro_stop", { instanceId }),
+  macrosStopAll: () => invoke<void>("macros_stop_all"),
+  /** What runs now, oldest first; macros://runs sends changes. */
+  macroRuns: () => invoke<MacroRun[]>("macro_runs"),
 
   /** Master mode needs the master password (currentPassword); DPAPI mode shows Windows Hello. */
   /** The current performance settings as a profile (JSON text). */
@@ -237,6 +293,8 @@ export const api = {
   /** A profile file or text, checked; nothing is saved until it goes through settingsSet. */
   performanceRead: (path: string) => invoke<Profile>("performance_read", { path }),
   performanceParse: (text: string) => invoke<Profile>("performance_parse", { text }),
+  /** Watches the clients in a game for about 22 s, then what to turn on for `target` clients like them (default: as many). */
+  performanceBenchmark: (target?: number) => invoke<Benchmark>("performance_benchmark", { target }),
   backupExport: (path: string, password: string, currentPassword?: string, accountIds?: number[]) =>
     invoke<number>("backup_export", { path, password, currentPassword, accountIds }),
   backupImport: (path: string, password: string, onConflict: ConflictPolicy) =>
@@ -246,6 +304,7 @@ export const api = {
   /** Downloads Roblox's installer, checks it is signed by Roblox Corporation, runs it; progress on onRobloxInstall. */
   robloxInstall: () => invoke<RobloxClient>("roblox_install"),
   /** RoALT's version and the newer release the last check found (no network). */
+  news: () => invoke<News>("news"),
   selfUpdateStatus: () => invoke<AppUpdate>("self_update_status"),
   /** Asks GitHub for a newer RoALT now. */
   selfUpdateCheck: () => invoke<AppUpdate>("self_update_check"),
@@ -264,6 +323,7 @@ export const api = {
   backgroundGet: () => invoke<ArrayBuffer>("background_get"),
   /** Deletes Roblox client logs over a day old or 50 MB, never a running client's. */
   logsClean: () => invoke<LogsCleaned>("logs_clean"),
+  browserDataReset: () => invoke<boolean>("browser_data_reset"),
   /** Windows shuts down in `inSecs` or at `atMs` (1 min to 7 days); the deadline (Unix ms). */
   shutdownSchedule: (when: { atMs?: number; inSecs?: number }, closeClients: boolean) =>
     invoke<number | null>("shutdown_schedule", { atMs: when.atMs ?? null, inSecs: when.inSecs ?? null, closeClients }),
@@ -292,4 +352,6 @@ export const events = {
   onRobloxInstall: (f: (p: InstallProgress) => void): Promise<UnlistenFn> => listen<InstallProgress>("roblox://install", (e) => f(e.payload)),
   /** Joined or left a Public network (checked every 10 s). */
   onNetwork: (f: (n: NetworkStatus) => void): Promise<UnlistenFn> => listen<NetworkStatus>("app://network", (e) => f(e.payload)),
+  /** A macro run started or ended (stopped, its client gone, or by itself): every run now. */
+  onMacroRuns: (f: (runs: MacroRun[]) => void): Promise<UnlistenFn> => listen<MacroRun[]>("macros://runs", (e) => f(e.payload)),
 };

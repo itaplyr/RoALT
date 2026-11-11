@@ -3,27 +3,27 @@
 /**
  * What one running client uses (`instances_metrics`), sampled at most every 2 s.
  */
-export type ClientMetrics = { instanceId: string, pid: number,
+export type ClientMetrics = { instanceId: string, pid: number, 
 /**
  * Percent of the whole machine since the previous sample (None on the first one).
  */
-cpuPct: number | null,
+cpuPct: number | null, 
 /**
  * Private working set (Task Manager's Memory column, what a trim lowers), MB.
  */
-memoryMb: number,
+memoryMb: number, 
 /**
  * Private bytes (Task Manager's Commit size, what a leak grows and the memory limits watch), MB.
  */
-privateMb: number,
+privateMb: number, 
 /**
  * Disk and network reads and writes, bytes per second since the previous sample.
  */
-readBps: number | null, writeBps: number | null,
+readBps: number | null, writeBps: number | null, 
 /**
  * Use of its busiest GPU engine (Task Manager's GPU column), percent (None when Windows can't say).
  */
-gpuPct: number | null,
+gpuPct: number | null, 
 /**
  * Dedicated GPU memory, MB (None when Windows can't say).
  */

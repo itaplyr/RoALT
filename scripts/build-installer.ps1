@@ -55,7 +55,10 @@ if (-not $iscc) { Stop-Build 'Inno Setup 6.6 or newer (ISCC.exe) was not found' 
 
 # The encrypted database (SQLCipher) builds OpenSSL from source, which needs a native Perl:
 # Git's MSYS Perl doesn't work for MSVC builds.
-$perl = @("C:\Strawberry\perl\bin", "$env:ProgramFiles\Strawberry\perl\bin") | Where-Object { Test-Path "$_\perl.exe" } | Select-Object -First 1
+# A portable Strawberry Perl already on PATH counts too.
+$pathPerl = Get-Command perl.exe -All -ErrorAction SilentlyContinue | Where-Object { $_.Source -match 'strawberry' } | Select-Object -First 1
+$perl = @("C:\Strawberry\perl\bin", "$env:ProgramFiles\Strawberry\perl\bin", $(if ($pathPerl) { Split-Path $pathPerl.Source })) |
+    Where-Object { $_ -and (Test-Path "$_\perl.exe") } | Select-Object -First 1
 if (-not $perl) { Stop-Build 'Strawberry Perl was not found (OpenSSL, for the encrypted database, needs it to build)' 'winget install StrawberryPerl.StrawberryPerl, then run this again' }
 $env:PATH = "$perl;$env:PATH"
 

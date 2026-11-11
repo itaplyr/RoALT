@@ -1,0 +1,559 @@
+/* Controls. Pills throughout; a fill says "press me", an edge says "type here". Class names that JS
+   reads (.seg, .swatch, .menu-item, .wc ...) keep their names. */
+@layer components {
+  /* ---- Buttons ---- */
+  .btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: var(--h-lg);
+    padding: 0 16px;
+    border: 0;
+    border-radius: var(--r-pill);
+    background: var(--surface-2);
+    box-shadow: inset 0 0 0 1px var(--line);
+    color: var(--fg);
+    font: inherit;
+    font-weight: 500;
+    line-height: 1.2;
+    white-space: nowrap;
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out),
+      box-shadow var(--dur-fast) var(--ease-out),
+      scale var(--dur-fast) var(--ease-out),
+      opacity var(--dur-fast) var(--ease-out);
+  }
+  .btn:hover:not(:disabled, [aria-disabled="true"]) {
+    background: var(--surface-3);
+  }
+  .btn:active:not(:disabled, [aria-disabled="true"]) {
+    scale: var(--press-scale);
+  }
+  .btn[aria-pressed="true"],
+  .btn[aria-expanded="true"] {
+    background: var(--surface-3);
+    box-shadow: inset 0 0 0 1px var(--pick-ring);
+  }
+  .btn:disabled,
+  .btn[aria-disabled="true"] {
+    background: transparent;
+    color: var(--fg-3);
+    box-shadow: inset 0 0 0 1px var(--line);
+    cursor: not-allowed;
+  }
+  .btn-sm {
+    min-height: var(--h-md);
+    padding: 0 12px;
+    font-size: var(--fs-small);
+  }
+  .btn-xs {
+    min-height: var(--h-sm);
+    padding: 0 10px;
+    font-size: var(--fs-meta);
+    gap: 6px;
+  }
+  .btn-icon {
+    width: var(--h-lg);
+    padding: 0;
+    flex: none;
+  }
+  .btn-sm.btn-icon {
+    width: var(--h-md);
+  }
+  .btn-xs.btn-icon {
+    width: var(--h-sm);
+  }
+  .btn-block {
+    width: 100%;
+  }
+  .btn-primary {
+    background: var(--accent);
+    color: var(--on-accent);
+    font-weight: 600;
+    box-shadow: inset 0 0 0 1px var(--accent-ring);
+  }
+  .btn-primary:hover:not(:disabled, [aria-disabled="true"]) {
+    background: color-mix(in oklab, var(--accent) 88%, var(--fg-2));
+  }
+  .btn-danger {
+    color: var(--err);
+  }
+  .btn-danger:hover:not(:disabled, [aria-disabled="true"]) {
+    background: color-mix(in srgb, var(--err) var(--tint-pct), var(--surface-2));
+  }
+  .btn-ghost {
+    background: transparent;
+    box-shadow: none;
+    color: var(--fg-2);
+  }
+  .btn-ghost:hover:not(:disabled, [aria-disabled="true"]) {
+    background: var(--hover);
+    color: var(--fg);
+  }
+  .btn-ghost:disabled,
+  .btn-ghost[aria-disabled="true"] {
+    box-shadow: none;
+  }
+  .btn-play {
+    width: 100%;
+    min-height: 60px;
+    font-size: 17px;
+    letter-spacing: -0.005em;
+  }
+  /* Busy: the label stays (for its width), a spinner shows beside it. */
+  .btn[data-busy] {
+    cursor: progress;
+  }
+
+  /* A ghost circle around an icon (the old window key; IconButton). */
+  .wc {
+    position: relative;
+    width: var(--h-md);
+    height: var(--h-md);
+    flex: none;
+    display: grid;
+    place-content: center;
+    border-radius: var(--r-pill);
+    color: var(--fg-2);
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out),
+      scale var(--dur-fast) var(--ease-out);
+  }
+  .wc:hover:not(:disabled) {
+    background: var(--hover);
+    color: var(--fg);
+  }
+  .wc:active:not(:disabled) {
+    scale: var(--press-deep);
+  }
+  .wc:disabled {
+    opacity: 0.45;
+  }
+  .wc[aria-pressed="true"],
+  .wc[aria-expanded="true"] {
+    background: var(--press);
+    color: var(--fg);
+  }
+
+  /* A big choice: an account to play, a way to add one. */
+  .pick {
+    width: 100%;
+    min-height: 60px;
+    padding: 10px 14px;
+    justify-content: flex-start;
+    gap: 12px;
+    text-align: start;
+    white-space: normal;
+    border-radius: var(--r-md);
+    background: var(--surface-1);
+  }
+  .pick[aria-pressed="true"] {
+    background: var(--surface-3);
+    box-shadow: inset 0 0 0 1.5px var(--accent-text);
+  }
+  .pick:disabled {
+    background: transparent;
+  }
+  .tick {
+    width: 22px;
+    height: 22px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    border-radius: 7px;
+    box-shadow: inset 0 0 0 1.5px var(--edge);
+    color: transparent;
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out),
+      box-shadow var(--dur-fast) var(--ease-out);
+  }
+  .tick-round {
+    border-radius: 50%;
+  }
+  [aria-pressed="true"] > .tick,
+  [aria-pressed="true"] > * > .tick {
+    background: var(--accent);
+    color: var(--on-accent);
+    box-shadow: inset 0 0 0 1px var(--accent-ring);
+  }
+  .num {
+    width: 30px;
+    height: 30px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    font-weight: 600;
+    font-size: var(--fs-small);
+    font-variant-numeric: tabular-nums;
+    box-shadow: inset 0 0 0 1.5px var(--edge);
+    transition:
+      background-color var(--dur-base) var(--ease-out),
+      color var(--dur-base) var(--ease-out),
+      box-shadow var(--dur-base) var(--ease-out);
+  }
+  .num-done {
+    background: var(--accent);
+    color: var(--on-accent);
+    box-shadow: inset 0 0 0 1px var(--accent-ring);
+  }
+
+  /* ---- Segmented: a track with one neutral thumb (it glides; see ui/controls). ---- */
+  .seg-group {
+    position: relative;
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px;
+    max-width: 100%;
+    padding: 3px;
+    border-radius: var(--r-pill);
+    background: var(--surface-2);
+    box-shadow: inset 0 0 0 1px var(--line);
+  }
+  .seg {
+    position: relative;
+    z-index: 1;
+    min-height: calc(var(--h-md) - 6px);
+    padding: 0 12px;
+    border-radius: var(--r-pill);
+    color: var(--fg-2);
+    font-weight: 500;
+    font-size: var(--fs-small);
+    white-space: nowrap;
+    transition:
+      color var(--dur-fast) var(--ease-out),
+      background-color var(--dur-fast) var(--ease-out);
+  }
+  .seg:hover:not(:disabled) {
+    color: var(--fg);
+  }
+  .seg:disabled {
+    color: var(--fg-disabled);
+  }
+  /* Without the gliding thumb (plain markup), the pressed one is its own tile. */
+  /* A selected tab (Tabs: the same track, a gliding thumb) reads as chosen. */
+  .seg[aria-selected="true"] {
+    color: var(--fg);
+  }
+  .seg[aria-pressed="true"],
+  .seg[aria-checked="true"] {
+    background: var(--thumb);
+    box-shadow: var(--shadow-thumb);
+    color: var(--fg);
+  }
+  .seg-group[data-thumb] .seg[aria-pressed="true"],
+  .seg-group[data-thumb] .seg[aria-checked="true"] {
+    background: transparent;
+    box-shadow: none;
+  }
+  .seg-thumb {
+    position: absolute;
+    z-index: 0;
+    border-radius: var(--r-pill);
+    background: var(--thumb);
+    box-shadow: var(--shadow-thumb);
+    pointer-events: none;
+  }
+
+  /* ---- Chips: filters and picks. ---- */
+  .chip {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: var(--h-md);
+    padding: 0 14px;
+    border-radius: var(--r-pill);
+    background: var(--surface-2);
+    box-shadow: inset 0 0 0 1px var(--line);
+    color: var(--fg);
+    font-weight: 500;
+    font-size: var(--fs-small);
+    white-space: nowrap;
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      box-shadow var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out),
+      scale var(--dur-fast) var(--ease-out);
+  }
+  .chip:hover {
+    background: var(--surface-3);
+  }
+  .chip:active {
+    scale: var(--press-scale);
+  }
+  .chip[aria-pressed="true"],
+  .chip[data-on] {
+    background: var(--pick);
+    box-shadow: inset 0 0 0 1px var(--pick-ring);
+  }
+  .chip-sm {
+    min-height: var(--h-sm);
+    padding: 0 10px;
+    font-size: var(--fs-meta);
+    font-weight: 500;
+  }
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: none;
+    min-height: var(--h-xs);
+    padding: 0 8px;
+    border-radius: var(--r-pill);
+    background: var(--surface-3);
+    color: var(--fg-2);
+    font-size: var(--fs-meta);
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  /* ---- Checkbox and radio ---- */
+  .cb,
+  .radio {
+    appearance: none;
+    margin: 0;
+    width: 18px;
+    height: 18px;
+    flex: none;
+    border-radius: 5px;
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px var(--edge);
+    display: grid;
+    place-content: center;
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      box-shadow var(--dur-fast) var(--ease-out);
+  }
+  .radio {
+    border-radius: 50%;
+  }
+  .cb:hover:not(:disabled, :checked),
+  .radio:hover:not(:disabled, :checked) {
+    background: var(--hover);
+  }
+  .radio:disabled,
+  .cb:disabled {
+    opacity: 0.5;
+  }
+  .radio:checked {
+    box-shadow: inset 0 0 0 1.5px var(--accent);
+  }
+  .radio:checked::after {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+  .cb:checked,
+  .cb:indeterminate {
+    background: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent-ring);
+  }
+  .cb:checked::after {
+    content: "";
+    width: 10px;
+    height: 5px;
+    border-left: 2px solid var(--on-accent);
+    border-bottom: 2px solid var(--on-accent);
+    transform: translateY(-1px) rotate(-45deg);
+  }
+  .cb:indeterminate::after {
+    content: "";
+    width: 9px;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--on-accent);
+  }
+
+  /* ---- Switch: 40x24 track, 18px thumb on a spring. ---- */
+  .switch {
+    position: relative;
+    flex: none;
+    width: 40px;
+    height: 24px;
+    padding: 0;
+    border-radius: var(--r-pill);
+    background: var(--surface-3);
+    box-shadow: inset 0 0 0 1.5px var(--edge);
+    transition:
+      background-color var(--dur-base) var(--ease-out),
+      box-shadow var(--dur-base) var(--ease-out);
+  }
+  /* A 44px tall target around the 24px track. */
+  .switch::before {
+    content: "";
+    position: absolute;
+    inset: -10px -4px;
+  }
+  .switch::after {
+    content: "";
+    position: absolute;
+    top: 3px;
+    inset-inline-start: 3px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--fg-2);
+    transition:
+      translate var(--dur-spring) var(--spring),
+      background-color var(--dur-base) var(--ease-out),
+      scale var(--dur-fast) var(--ease-out);
+  }
+  .switch:active::after {
+    scale: 1.12 0.92;
+  }
+  .switch[aria-checked="true"] {
+    background: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent-ring);
+  }
+  .switch[aria-checked="true"]::after {
+    translate: 16px 0;
+    background: var(--on-accent);
+  }
+  :root[dir="rtl"] .switch[aria-checked="true"]::after {
+    translate: -16px 0;
+  }
+  .switch:disabled {
+    opacity: 0.45;
+  }
+
+  /* ---- Range ---- */
+  .range {
+    appearance: none;
+    flex: 1 1 200px;
+    min-width: 0;
+    height: 24px;
+    background: transparent;
+  }
+  .range::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: var(--r-pill);
+    background: var(--surface-3);
+    box-shadow: inset 0 0 0 1px var(--line);
+  }
+  .range::-webkit-slider-thumb {
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    margin-top: -7px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent-ring), 0 1px 3px rgb(0 0 0 / 0.4);
+    cursor: pointer;
+    transition: scale var(--dur-fast) var(--ease-out);
+  }
+  .range:active::-webkit-slider-thumb {
+    scale: 1.15;
+  }
+  .range:disabled::-webkit-slider-thumb {
+    background: var(--fg-disabled);
+  }
+
+  /* ---- Fields ---- */
+  .field {
+    min-height: var(--h-lg);
+    width: 100%;
+    border: 1px solid var(--edge);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    color: var(--fg);
+    font: inherit;
+    padding: 0 12px;
+    transition:
+      border-color var(--dur-fast) var(--ease-out),
+      background-color var(--dur-fast) var(--ease-out);
+  }
+  .field:hover:not(:disabled, :focus) {
+    border-color: color-mix(in srgb, var(--edge) 70%, var(--fg));
+  }
+  .field:focus {
+    border-color: var(--accent-text);
+  }
+  .field:focus-within {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+  .field:disabled {
+    color: var(--fg-3);
+    border-style: dashed;
+  }
+  .field[aria-invalid="true"] {
+    border-color: var(--attention);
+  }
+  /* `font: inherit` above would undo .mono: scripts, keys, IDs and numbers keep the code face. */
+  .field.mono {
+    font-family: var(--font-code);
+    font-variant-numeric: tabular-nums;
+  }
+  textarea.field {
+    padding: 10px 12px;
+    resize: none;
+    line-height: 1.45;
+  }
+  select.field {
+    padding-inline-end: 32px;
+  }
+  .secret {
+    -webkit-text-security: disc;
+    word-break: break-all;
+  }
+  /* Search fields: room for the leading lens. */
+  .field-search {
+    padding-inline-start: 36px;
+  }
+
+  /* ---- Bits ---- */
+  .kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 5px;
+    border-radius: var(--r-xs);
+    background: var(--surface-3);
+    box-shadow: inset 0 -1px 0 var(--line), inset 0 0 0 1px var(--line);
+    color: var(--fg-2);
+    font-family: var(--font-code);
+    font-size: var(--fs-micro);
+    line-height: 1;
+    direction: ltr;
+  }
+  .linkbtn {
+    text-align: start;
+    text-decoration: underline;
+    text-decoration-color: transparent;
+    text-underline-offset: 3px;
+    transition: text-decoration-color var(--dur-fast) var(--ease-out);
+  }
+  .linkbtn:hover {
+    text-decoration-color: currentColor;
+  }
+  .swatch {
+    position: relative;
+    width: 24px;
+    height: 24px;
+    flex: none;
+    border-radius: 50%;
+    box-shadow: inset 0 0 0 1px rgb(127 127 127 / 0.45);
+    transition: scale var(--dur-fast) var(--ease-out);
+  }
+  .swatch:hover {
+    scale: 1.08;
+  }
+  .swatch[aria-pressed="true"] {
+    outline: 2px solid var(--fg);
+    outline-offset: 2px;
+  }
+  .swatch[aria-pressed="true"]:focus-visible {
+    outline-color: var(--focus);
+  }
+}

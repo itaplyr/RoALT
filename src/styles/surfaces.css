@@ -1,0 +1,456 @@
+@layer components {
+  /* The stage: everything under the title bar. No frame, no clipping: one quiet surface. */
+  .app {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+  .shell {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    /* It arrives as the unlock card leaves. Opacity only: tiles measure their places meanwhile. */
+    animation: fade-in var(--dur-slow) var(--ease-out) backwards;
+  }
+  .stage {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .stage > main {
+    flex: 1;
+    min-height: 0;
+  }
+
+  /* Docked surfaces: a fill and a hairline, no shadow. */
+  .panel {
+    border-radius: var(--r-lg);
+    background: var(--surface-1);
+    box-shadow: inset 0 0 0 1px var(--line);
+  }
+  .well {
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+  }
+  .panel .well {
+    background: color-mix(in srgb, var(--surface-2) 70%, var(--surface-1));
+  }
+
+  /* The side layout's account rail. */
+  .rail {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    margin: 0 0 8px 8px;
+    margin-inline: 8px 0;
+    border-radius: var(--r-lg);
+    background: var(--surface-1);
+    box-shadow: inset 0 0 0 1px var(--line);
+  }
+  .rail-item {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 48px;
+    padding: 0 10px;
+    border-radius: var(--r-md);
+    color: var(--fg-2);
+    font-weight: 500;
+    text-align: start;
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out),
+      transform var(--dur-move) var(--ease-out);
+  }
+  .rail-item:hover {
+    background: var(--hover);
+    color: var(--fg);
+  }
+  .rail-item[aria-current="page"] {
+    background: var(--surface-3);
+    color: var(--fg);
+    box-shadow: inset 2px 0 0 var(--accent-text);
+  }
+  :root[dir="rtl"] .rail-item[aria-current="page"] {
+    box-shadow: inset -2px 0 0 var(--accent-text);
+  }
+  .rail-count {
+    min-width: 22px;
+    height: 20px;
+    padding: 0 6px;
+    display: grid;
+    place-content: center;
+    border-radius: var(--r-pill);
+    background: var(--surface-3);
+    color: var(--fg-2);
+    font-size: var(--fs-micro);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Settings and the like: a row of words and the control for them. */
+  .setting {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 24px;
+    padding: 14px 0;
+    border-top: 1px solid var(--line);
+  }
+  .setting:first-child {
+    border-top: 0;
+    padding-top: 0;
+  }
+  .setting:last-child {
+    padding-bottom: 0;
+  }
+  .setting-text {
+    flex: 1 1 280px;
+    min-width: 0;
+  }
+
+  /* Status: a light, always with its word. */
+  .state {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .led {
+    width: 8px;
+    height: 8px;
+    flex: none;
+    border-radius: 50%;
+    background: currentColor;
+  }
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+    min-height: var(--h-xs);
+    max-width: 100%;
+    padding-inline: 8px 9px;
+    border-radius: var(--r-pill);
+    background: color-mix(in srgb, currentColor var(--tint-pct), transparent);
+    font-size: var(--fs-meta);
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .status-pill > span:last-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .status-mark {
+    width: 7px;
+    height: 7px;
+    flex: none;
+    background: currentColor;
+    border-radius: 50%;
+  }
+  .status-mark[data-shape="ring"] {
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px currentColor;
+  }
+  .status-mark[data-shape="diamond"] {
+    border-radius: 1px;
+    transform: rotate(45deg) scale(0.85);
+  }
+  .status-mark[data-shape="triangle"] {
+    border-radius: 0;
+    clip-path: polygon(50% 0, 100% 100%, 0 100%);
+  }
+  .status-mark[data-shape="square"] {
+    border-radius: 2px;
+  }
+  /* Neutral (starting, idle): a short bar, so it is no dot (ok) and no ring (info). */
+  .status-mark[data-shape="dash"] {
+    height: 3px;
+    border-radius: 1px;
+  }
+
+  /* Inline notices: shape, words, one action. */
+  .alert {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    color: var(--attention);
+  }
+  .alert::before {
+    content: "";
+    flex: none;
+    width: 7px;
+    height: 7px;
+    margin-top: 6px;
+    background: currentColor;
+    transform: rotate(45deg);
+  }
+  .notice {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 14px;
+    padding-block: 10px;
+    padding-inline: 14px 10px;
+    border-radius: var(--r-md);
+    background: var(--surface-1);
+    box-shadow: inset 0 0 0 1px var(--line);
+  }
+  .notice[data-tone="attention"] {
+    background: color-mix(in srgb, var(--attention) 8%, var(--surface-1));
+  }
+
+  /* Tables: rules and alignment. */
+  .row {
+    height: var(--row-h);
+  }
+  .row > td {
+    border-top: 1px solid var(--line);
+    transition: background-color var(--dur-fast) var(--ease-out);
+  }
+  .row:first-child > td {
+    border-top: 0;
+  }
+  .row:hover > td {
+    background: var(--hover);
+  }
+  .row[data-selected] > td {
+    background: var(--sel);
+    border-color: transparent;
+  }
+  .row:hover + .row > td,
+  .row[data-selected] + .row > td {
+    border-color: transparent;
+  }
+  .row > td:first-child {
+    border-start-start-radius: var(--r-md);
+    border-end-start-radius: var(--r-md);
+  }
+  .row > td:last-child {
+    border-start-end-radius: var(--r-md);
+    border-end-end-radius: var(--r-md);
+  }
+  thead th {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    height: 40px;
+    background: var(--ground);
+    border-bottom: 1px solid var(--line);
+    color: var(--fg-3);
+    font-size: var(--fs-meta);
+    font-weight: 500;
+    text-align: start;
+  }
+  .grip {
+    width: 18px;
+    height: 28px;
+    display: grid;
+    place-content: center;
+    border-radius: var(--r-xs);
+    color: var(--fg-3);
+    opacity: 0;
+    cursor: grab;
+    touch-action: none;
+    transition: opacity var(--dur-fast) var(--ease-out);
+  }
+  .row:hover .grip,
+  .row:focus-within .grip,
+  .grip:focus-visible {
+    opacity: 1;
+  }
+  .grip:active {
+    cursor: grabbing;
+  }
+
+  /* Rows and tabs that sort: a line where a drag lands; tiles glide to their new place. */
+  :is(.sort-row, .sort-col) > * {
+    transition: transform var(--dur-move) var(--ease-out);
+  }
+  :is(.sort-row, .sort-col) > [data-drop] {
+    position: relative;
+  }
+  :is(.sort-row, .sort-col) > [data-drop]::before {
+    content: "";
+    position: absolute;
+    border-radius: var(--r-pill);
+    background: var(--accent-text);
+    pointer-events: none;
+  }
+  .sort-row > [data-drop]::before {
+    inset-block: 6px;
+    width: 2px;
+  }
+  .sort-row > [data-drop="before"]::before {
+    inset-inline-start: -2px;
+  }
+  .sort-row > [data-drop="after"]::before {
+    inset-inline-end: -2px;
+  }
+  .sort-col > [data-drop]::before {
+    inset-inline: 6px;
+    height: 2px;
+  }
+  .sort-col > [data-drop="before"]::before {
+    top: -2px;
+  }
+  .sort-col > [data-drop="after"]::before {
+    bottom: -2px;
+  }
+  .tile-drag {
+    position: relative;
+    z-index: 2;
+    opacity: 0.94;
+  }
+
+  /* Meters, dials, steps. */
+  .meter {
+    display: block;
+    width: 100%;
+    min-width: 40px;
+    height: 6px;
+    border-radius: var(--r-pill);
+    overflow: hidden;
+    background: var(--surface-3);
+  }
+  .meter > span {
+    display: block;
+    height: 100%;
+    border-radius: var(--r-pill);
+    background: var(--accent-text);
+  }
+  /* ui/Meter's fill: a clip, not a width, so a sample lays nothing out per frame. */
+  .meter > .meter-fill {
+    clip-path: inset(0 calc(100% - var(--pct, 0%)) 0 0 round var(--r-pill));
+    transition: clip-path var(--dur-slow) var(--ease-out);
+  }
+  :root[dir="rtl"] .meter > .meter-fill {
+    clip-path: inset(0 0 0 calc(100% - var(--pct, 0%)) round var(--r-pill));
+  }
+  .meter[data-tone="ok"] > span {
+    background: var(--ok);
+  }
+  .meter[data-tone="attention"] > span {
+    background: var(--attention);
+  }
+  .dial {
+    position: relative;
+    width: 64px;
+    height: 64px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    font-variant-numeric: tabular-nums;
+  }
+  .dial svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    transform: rotate(-90deg);
+    fill: none;
+    stroke-linecap: round;
+  }
+  /* Older markup: a bare circle in the dial's colour. */
+  .dial:not(:has(.dial-track)) svg {
+    stroke: currentColor;
+    stroke-width: 4;
+  }
+  .dial .dial-track {
+    stroke: var(--surface-3);
+  }
+  .dial .dial-value {
+    stroke: currentColor;
+  }
+  /* One of a batch row's four steps (ticket, run, join, in game); .step-live is the one under way
+     (half filled, so it stays distinct without motion). */
+  .step {
+    height: 6px;
+    border-radius: var(--r-pill);
+    background: var(--surface-3);
+    overflow: hidden;
+  }
+  .step-done {
+    background: var(--ok);
+  }
+  .step-live {
+    background: linear-gradient(90deg, var(--info) 50%, var(--surface-3) 50%);
+  }
+  :root[dir="rtl"] .step-live {
+    background: linear-gradient(-90deg, var(--info) 50%, var(--surface-3) 50%);
+  }
+  .step-fail {
+    background: var(--attention);
+  }
+
+  /* Disclosures open to their height (interpolate-size, :root in base). Every <details> gets it. */
+  details::details-content {
+    block-size: 0;
+    overflow-y: clip;
+    transition:
+      block-size var(--dur-slow) var(--ease-out),
+      content-visibility var(--dur-slow) allow-discrete;
+  }
+  details[open]::details-content {
+    block-size: auto;
+  }
+  :root[data-rm] details::details-content,
+  details[data-instant]::details-content {
+    transition: none;
+  }
+  summary {
+    list-style: none;
+  }
+  summary::-webkit-details-marker {
+    display: none;
+  }
+  .disclosure-summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: fit-content;
+    min-height: 28px;
+    border-radius: var(--r-xs);
+    color: var(--fg-2);
+    font-size: var(--fs-small);
+    font-weight: 500;
+    cursor: pointer;
+    transition: color var(--dur-fast) var(--ease-out);
+  }
+  .disclosure-summary:hover {
+    color: var(--fg);
+  }
+  .disclosure-chevron {
+    color: var(--fg-3);
+    transition: rotate var(--dur-base) var(--ease-out);
+  }
+  details[open] > summary .disclosure-chevron {
+    rotate: 180deg;
+  }
+  .disclosure-body {
+    padding-top: 6px;
+    color: var(--fg-2);
+    font-size: var(--fs-small);
+    line-height: 1.55;
+    max-width: 68ch;
+  }
+
+  /* An empty block keeps its frame; one sentence and the way forward. */
+  .empty {
+    display: grid;
+    place-items: center;
+    gap: 12px;
+    padding: 40px 24px;
+    border-radius: var(--r-lg);
+    box-shadow: inset 0 0 0 1px var(--line);
+    color: var(--fg-2);
+    text-align: center;
+  }
+}

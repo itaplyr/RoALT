@@ -238,10 +238,10 @@ fn back_to_tiny(pid: u32, hwnd: HWND) {
 /// A tiny client not at its size (a launch's resize that failed, a restore that grew it) goes
 /// back to it, unless the user may be sizing it, it doesn't respond or its size was only just set.
 /// On a thread of its own. If it won't go that small, what it stays at is its tiny size from then on.
-fn keep_tiny(pid: u32, hwnd: HWND) {
+/// `recent`: its size was set on purpose within `TINY_RETRY`.
+fn keep_tiny(pid: u32, hwnd: HWND, recent: bool) {
     let Some(size) = tiny().iter().find(|e| e.0 == pid).map(|e| e.1) else { return };
     let h = hwnd.0 as isize;
-    let recent = TINY_TRIED.lock().unwrap_or_else(|e| e.into_inner()).get(&pid).is_some_and(|t| t.elapsed() < TINY_RETRY);
     // SAFETY: reads which window is in front and one window's state.
     if recent || client_size(hwnd) == Some(size) || unsafe { GetForegroundWindow() == hwnd || IsZoomed(hwnd).as_bool() } || process::hung(pid) {
         return;
@@ -271,21 +271,29 @@ fn keep_tiny(pid: u32, hwnd: HWND) {
 /// stay at their size. Not on the poll's thread.
 pub fn sweep(clients: &[(u32, Option<(u32, u32)>)]) {
     {
+        // A size set on purpose just now stays, though the list may not say tiny yet: the tracker
+        // marks a placed window `micro` only once its placement is done.
+        // Either way: one just made normal isn't put back from a list that still says tiny.
+        let recent: Vec<u32> = TINY_TRIED.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(_, at)| at.elapsed() < TINY_RETRY).map(|(p, _)| *p).collect();
         let mut t = tiny();
-        t.retain(|e| clients.iter().any(|c| c.0 == e.0 && c.1.is_some()));
+        t.retain(|e| clients.iter().any(|c| c.0 == e.0 && (c.1.is_some() || recent.contains(&e.0))));
         for &(pid, size) in clients {
-            // A size of its own (`micro`) stays; else it is a client from before RoALT restarted.
+            // A size of its own (`micro`) stays; else it is a client from before RoALT restarted
+            // (nothing was set since then, so never `recent`).
             if let Some(size) = size
+                && !recent.contains(&pid)
                 && !t.iter().any(|e| e.0 == pid)
             {
                 t.push((pid, size));
             }
         }
-    }
-    TINY_TRIED.lock().unwrap_or_else(|e| e.into_inner()).retain(|pid, _| clients.iter().any(|c| c.0 == *pid));
-    for &(pid, _) in clients {
-        if let Some((hwnd, false)) = process::main_window(pid) {
-            keep_tiny(pid, hwnd);
+        drop(t);
+        TINY_TRIED.lock().unwrap_or_else(|e| e.into_inner()).retain(|pid, _| clients.iter().any(|c| c.0 == *pid));
+        for &(pid, _) in clients {
+            if let Some((hwnd, false)) = process::main_window(pid) {
+                // The same reading as above, so the two can't disagree at the 60 s mark.
+                keep_tiny(pid, hwnd, recent.contains(&pid));
+            }
         }
     }
 }
@@ -453,15 +461,22 @@ pub fn free_resize(hwnd: HWND, (x, y, w, h): (i32, i32, i32, i32), keep_place: b
     super::resize::mark_small(hwnd);
     // One at a time per window: the second would save the first's borderless style, and put it back for good.
     let id = hwnd.0 as isize;
+    let mut ours = false;
     for _ in 0..RESIZE_WAITS {
         {
             let mut busy = RESIZING.lock().unwrap_or_else(|e| e.into_inner());
             if !busy.contains(&id) {
                 busy.push(id);
+                ours = true;
                 break;
             }
         }
         std::thread::sleep(RESIZE_GAP);
+    }
+    // Still the other's: its borderless style would be the one saved, and put back for good.
+    if !ours {
+        log::debug!("resize skipped: another resize of that window is still going");
+        return;
     }
     let style = style_of(hwnd);
     set_style(hwnd, borderless(style as u32) as isize);
@@ -521,17 +536,11 @@ pub fn micro(id: &str, pid: u32, on: bool, size: (u32, u32)) -> Result<(u32, u32
 /// bottom (more than fit start over at the top, overlapping), each remembered as `micro` does;
 /// else cells sized so all fit, each as big as a 4:3 picture can be, and that is its normal size
 /// from then on (what `micro` remembered is dropped). Minimized clients stay so (Restore
-/// all first to include them), as do ones without a window or not responding. Returns the ids laid
-/// out.
-pub fn tile(clients: &[(String, u32)], near: HWND, micro: Option<(u32, u32)>) -> Vec<String> {
-    let mut mi = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
-    // SAFETY: reads the monitor nearest to a window into a local with cbSize set; with
-    // MONITOR_DEFAULTTONEAREST there always is one.
-    if !unsafe { GetMonitorInfoW(MonitorFromWindow(near, MONITOR_DEFAULTTONEAREST), &mut mi) }.as_bool() {
-        log::warn!("tile: monitor info unreadable, nothing laid out: {}", std::io::Error::last_os_error());
-        return Vec::new();
-    }
-    let w = mi.rcWork;
+/// all first to include them), as do ones without a window or not responding. A cell under
+/// Roblox's minimum is kept small (`small_size`). Returns the ids given a cell, in cell order, each
+/// with the client size it is kept small at now (the tracker's `micro`), or None when placing it failed.
+pub fn tile(clients: &[(String, u32)], near: HWND, micro: Option<(u32, u32)>) -> Vec<(String, Option<Small>)> {
+    let Some(area) = work_area(near) else { return Vec::new() };
     let wins: Vec<(&str, u32, HWND)> = clients
         .iter()
         .filter_map(|(id, pid)| match process::main_window(*pid) {
@@ -540,19 +549,105 @@ pub fn tile(clients: &[(String, u32)], near: HWND, micro: Option<(u32, u32)>) ->
         })
         .collect();
     // One frame size for all: Roblox windows share a style.
-    let cell = micro.and_then(|(w, h)| wins.first().and_then(|c| frame(c.2)).map(|(fw, fh)| (w as i32 + fw, h as i32 + fh)));
-    let cells = grid(wins.len(), (w.left, w.top, w.right - w.left, w.bottom - w.top), cell);
-    for (&(id, pid, hwnd), &(x, y, cw, ch)) in wins.iter().zip(&cells) {
-        set_tiny(pid, micro);
-        if micro.is_some() {
-            remember(id, pid, hwnd);
-        } else {
-            saved().retain(|(i, p, _)| !(i == id && *p == pid));
+    let fr = wins.first().and_then(|c| frame(c.2)).unwrap_or((0, 0));
+    let cell = micro.map(|(w, h)| (w as i32 + fr.0, h as i32 + fr.1));
+    let cells = grid(wins.len(), area, cell);
+    let mut out = Vec::new();
+    for (&(id, pid, _), &rect) in wins.iter().zip(&cells) {
+        let small = micro.or_else(|| small_size((rect.2, rect.3), fr));
+        match place(id, pid, rect, small) {
+            Ok(()) => out.push((id.to_owned(), Some(small))),
+            Err(e) => {
+                log::debug!("tile: instance {id} skipped: {e}");
+                out.push((id.to_owned(), None));
+            }
         }
-        normal(hwnd, false);
-        free_resize(hwnd, (x, y, cw, ch), false);
     }
-    wins.into_iter().map(|w| w.0.to_owned()).collect()
+    out
+}
+
+/// Roblox holds its window's client area to at least this (measured). A cell under it is kept
+/// small by the tiny sweep, or coming back from a minimize would grow the window over its neighbours.
+pub const ROBLOX_MIN: (u32, u32) = (816, 638);
+
+/// The client size a cell (window size, frame included) is kept at when it is under Roblox's
+/// minimum, else None (pure).
+pub fn small_size(cell: (i32, i32), frame: (i32, i32)) -> Option<(u32, u32)> {
+    let (w, h) = ((cell.0 - frame.0).max(1) as u32, (cell.1 - frame.1).max(1) as u32);
+    (w < ROBLOX_MIN.0 || h < ROBLOX_MIN.1).then_some((w, h))
+}
+
+/// The work area (taskbar left free) of the monitor `near` is on, as (x, y, w, h).
+pub fn work_area(near: HWND) -> Option<(i32, i32, i32, i32)> {
+    let mut mi = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
+    // SAFETY: reads the monitor nearest to a window into a local with cbSize set; with
+    // MONITOR_DEFAULTTONEAREST there always is one.
+    if !unsafe { GetMonitorInfoW(MonitorFromWindow(near, MONITOR_DEFAULTTONEAREST), &mut mi) }.as_bool() {
+        log::warn!("monitor info unreadable, nothing laid out: {}", std::io::Error::last_os_error());
+        return None;
+    }
+    let w = mi.rcWork;
+    Some((w.left, w.top, w.right - w.left, w.bottom - w.top))
+}
+
+/// A window rect (x, y, width, height).
+pub type Rect = (i32, i32, i32, i32);
+/// The client size a window is kept small at by the tiny sweep; None: its normal size.
+pub type Small = Option<(u32, u32)>;
+
+/// Where slot `slot` of `n` goes in `layout` on `area`, for windows with `frame`: the window rect,
+/// and the client size the tiny sweep keeps it at (None: the rect is its normal size from now on).
+/// Tiny cells don't depend on `n`, so they never move; Fit is `grid`'s (pure).
+pub fn slot_rect(layout: crate::model::WindowLayout, slot: usize, n: usize, area: Rect, frame: (i32, i32), micro: (u32, u32)) -> Option<(Rect, Option<(u32, u32)>)> {
+    use crate::model::WindowLayout;
+    match layout {
+        WindowLayout::Off => None,
+        WindowLayout::Fit => {
+            let rect = *grid(n.max(slot + 1), area, None).get(slot)?;
+            Some((rect, small_size((rect.2, rect.3), frame)))
+        }
+        WindowLayout::Tiny => {
+            let cell = (micro.0 as i32 + frame.0, micro.1 as i32 + frame.1);
+            Some((*grid(slot + 1, area, Some(cell)).get(slot)?, Some(micro)))
+        }
+    }
+}
+
+/// The frame size (window minus client area) of `pid`'s window, for `slot_rect`; None while it is
+/// minimized (its rects are then the icon's).
+pub fn frame_of(pid: u32) -> Option<(i32, i32)> {
+    process::main_window(pid).filter(|w| !w.1).and_then(|(hwnd, _)| frame(hwnd))
+}
+
+/// The frame size of a normal titled window at the system DPI, for before any client was measured
+/// (16 x 39 at 100 %, Windows 10's).
+pub fn default_frame() -> (i32, i32) {
+    use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForSystem};
+    use windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE;
+    let mut r = RECT::default();
+    // SAFETY: reads the system DPI and fills a local rect.
+    match unsafe { AdjustWindowRectExForDpi(&mut r, WS_OVERLAPPEDWINDOW, false, WINDOW_EX_STYLE(0), GetDpiForSystem()) } {
+        Ok(()) => (r.right - r.left, r.bottom - r.top),
+        Err(_) => (16, 39),
+    }
+}
+
+/// Puts one client's window at `rect` (window size, frame included) without taking the focus.
+/// `small`: the tiny sweep keeps its client area at that size, and where it was is remembered as
+/// `micro` does; None: `rect` is its normal size from now on. Waits for the client.
+pub fn place(id: &str, pid: u32, rect: (i32, i32, i32, i32), small: Option<(u32, u32)>) -> Result<()> {
+    let hwnd = window_to_change(pid)?;
+    size_set_now(pid);
+    if small.is_some() {
+        remember(id, pid, hwnd);
+    } else {
+        saved().retain(|(i, p, _)| !(i == id && *p == pid));
+    }
+    normal(hwnd, false);
+    free_resize(hwnd, rect, false);
+    // Only now: until the tracker has it as tiny too, `sweep` would drop it.
+    set_tiny(pid, small);
+    Ok(())
 }
 
 /// Cells (x, y, w, h) for `n` windows in `area` (x, y, w, h): `cell`-sized ones left to right,
@@ -784,6 +879,10 @@ mod tests {
         sweep(&[(4_000_001, Some((320, 240))), (4_000_002, Some((320, 240)))]);
         assert_eq!(of(4_000_001), Some((500, 400)), "a size the user dragged it to stays too");
         assert_eq!(of(4_000_003), None);
+        // Set on purpose a moment ago (a layout placing it): a list that doesn't say tiny yet keeps it.
+        sweep(&[(4_000_001, None)]);
+        assert_eq!(of(4_000_001), Some((500, 400)), "just set: kept for the tracker to catch up");
+        TINY_TRIED.lock().unwrap().remove(&4_000_001);
         sweep(&[(4_000_001, None)]);
         assert_eq!(of(4_000_001), None, "back to normal");
         assert_eq!(of(4_000_002), None, "gone");
@@ -821,6 +920,31 @@ mod tests {
     #[test]
     fn pictures_turn_rgba() {
         assert_eq!(to_rgba(&[1, 2, 3, 0, 4, 5, 6, 9]), [3, 2, 1, 255, 6, 5, 4, 255]);
+    }
+
+    #[test]
+    fn layout_slots() {
+        use crate::model::WindowLayout::*;
+        let (area, frame, micro) = ((0, 0, 1920, 1040), (16, 39), (320, 240));
+        assert_eq!(slot_rect(Off, 0, 4, area, frame, micro), None);
+        // Tiny: a slot's cell doesn't depend on how many there are; 5 x 3 = 15 fit, then it wraps.
+        let tiny = |slot, n| slot_rect(Tiny, slot, n, area, frame, micro).unwrap();
+        assert_eq!(tiny(3, 4), tiny(3, 50));
+        assert_eq!(tiny(3, 4), ((3 * 336, 0, 336, 279), Some(micro)));
+        assert_eq!(tiny(15, 20).0, tiny(0, 20).0);
+        // Fit: grid's cells; under Roblox's minimum the client area is kept small.
+        for n in [1, 2, 6, 13] {
+            for slot in 0..n {
+                assert_eq!(slot_rect(Fit, slot, n, area, frame, micro).unwrap().0, grid(n, area, None)[slot]);
+            }
+        }
+        assert_eq!(slot_rect(Fit, 0, 1, area, frame, micro).unwrap().1, None);
+        assert_eq!(slot_rect(Fit, 0, 4, area, frame, micro).unwrap().1, Some((960 - 16, 520 - 39)));
+        // A slot past n still gets a cell (a single launch before the count caught up).
+        assert!(slot_rect(Fit, 5, 2, area, frame, micro).is_some());
+        assert_eq!(small_size((816 + 16, 638 + 39), frame), None);
+        assert_eq!(small_size((815 + 16, 638 + 39), frame), Some((815, 638)));
+        assert_eq!(small_size((816 + 16, 637 + 39), frame), Some((816, 637)));
     }
 
     #[test]

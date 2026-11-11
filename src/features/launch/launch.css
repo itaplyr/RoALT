@@ -1,0 +1,559 @@
+@layer views {
+  /* Play: Who | Where + Ready. Two columns while the composer has room (data-wide, from its own width);
+     each column hugs its content up to the height there is and scrolls inside, the Play button staying
+     at the foot of its column. Stacked, the page scrolls and the button sticks to the bottom. */
+  .play {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    max-width: 1440px;
+    /* The page's bottom room, here and not on <main>: a sticky bar stops short of its padding. */
+    padding-bottom: 24px;
+  }
+  .play[data-wide] {
+    height: 100%;
+  }
+  .play-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .play[data-wide] .play-grid {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    /* A big window's extra width goes to more tile columns. */
+    grid-template-columns: minmax(0, 1fr) minmax(0, min(56%, 640px));
+    align-items: start;
+    gap: 20px;
+  }
+  .play-col {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: clip;
+  }
+  .play[data-wide] .play-col {
+    max-height: 100%;
+  }
+  .play-who {
+    gap: 14px;
+    padding: 18px 20px 20px;
+  }
+  .play-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    min-height: var(--h-md);
+  }
+  .play-scroll {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    padding: 18px 20px 14px;
+  }
+  .play[data-wide] .play-scroll {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    /* While more is below, the bottom edge fades (a scroll timeline: nothing when it all fits). */
+    mask: linear-gradient(#000 calc(100% - 32px), transparent) 0 0 / 100% calc(100% + 32px) no-repeat; /* taste-skill-ignore: an alpha mask, not a fill */
+    animation: play-more-below linear both;
+    animation-timeline: scroll(self);
+  }
+  /* A short window: Where and its Play button would leave the fields a sliver, so the whole column
+     scrolls instead. */
+  @media (height < 680px) {
+    .play[data-wide] .play-col:has(> .play-scroll) {
+      overflow-y: auto;
+      scrollbar-width: thin;
+    }
+    .play[data-wide] .play-scroll {
+      flex: none;
+      overflow: visible;
+      mask: none;
+      animation: none;
+    }
+  }
+  @keyframes play-more-below {
+    from {
+      mask-position: 0 -32px;
+    }
+    to {
+      mask-position: 0 0;
+    }
+  }
+  .play-ready {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+  }
+  .play-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .play-go {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 4px 20px 20px;
+  }
+  .play:not([data-wide]) .play-go {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    /* Off the panel's own hairline, which it would cover; the panel rounds its corners. */
+    margin: 0 1px 1px;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+    background: var(--surface-1);
+  }
+  /* Stacked, the tiles scroll inside a box that leaves the page some of the window. */
+  .play:not([data-wide]) .play-picker {
+    max-height: min(560px, 70vh);
+  }
+  /* Stacked, a picked Who reads as one line until it is opened again. */
+  .play-who-sum {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: var(--h-lg);
+    padding-block: 0;
+    padding-inline: 6px 14px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-pill);
+    background: var(--surface-2);
+    font-weight: 500;
+    text-align: start;
+    transition: background-color var(--dur-fast) var(--ease-out);
+  }
+  .play-who-sum:hover {
+    background: var(--surface-3);
+  }
+  .play-faces {
+    display: flex;
+    flex: none;
+  }
+  .play-faces > * + * {
+    margin-inline-start: -8px;
+    outline: 2px solid var(--surface-2);
+    transition: outline-color var(--dur-fast) var(--ease-out);
+  }
+  .play-who-sum:hover .play-faces > * + * {
+    outline-color: var(--surface-3);
+  }
+
+  /* The options: one line each, this launch's apart from every launch's. */
+  .play-options .disclosure-body {
+    max-width: none;
+    padding-top: 6px;
+    color: var(--fg);
+    font-size: var(--fs-body);
+    line-height: var(--lh-body);
+  }
+  .play-opt-group + .play-opt-group {
+    margin-top: 14px;
+  }
+  .play-opt-head {
+    padding-top: 6px;
+    color: var(--fg-2);
+    font-size: var(--fs-small);
+    font-weight: 600;
+  }
+  .play-opt {
+    padding: 12px 0;
+    border-top: 1px solid var(--line);
+  }
+  .play-opt-head + .play-opt {
+    border-top: 0;
+    padding-top: 8px;
+  }
+  .play-opt:last-child {
+    padding-bottom: 4px;
+  }
+  .play-opt-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 20px;
+  }
+  .play-opt-text {
+    flex: 1 1 200px;
+    min-width: 0;
+  }
+  .play-opt-more {
+    max-width: 62ch;
+    padding-top: 8px;
+    color: var(--fg-2);
+    font-size: var(--fs-small);
+    text-wrap: pretty;
+  }
+
+  /* LaunchButton: the primary launch control, and the pill it becomes on its way into the island (the
+     island's own material, so it reads as part of it before it gets there). */
+  .launch-slot {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+  }
+  .launch-slot-big {
+    display: flex;
+    width: 100%;
+  }
+  .launch-btn {
+    overflow: clip;
+    overflow-clip-margin: 2px;
+  }
+  .launch-face {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    max-width: 100%;
+  }
+  .launch-pill {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    max-width: 100%;
+    height: var(--h-lg);
+    padding-block: 0;
+    padding-inline: 14px 18px;
+    border-radius: var(--r-pill);
+    background: var(--island);
+    box-shadow: var(--shadow-island);
+    color: var(--fg);
+    font-size: var(--fs-small);
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: progress;
+    transition:
+      background-color var(--dur-base) var(--ease-out),
+      color var(--dur-base) var(--ease-out),
+      box-shadow var(--dur-base) var(--ease-out);
+  }
+  .launch-flight {
+    position: fixed;
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+  .launch-flight > .launch-pill {
+    width: 100%;
+    height: 100%;
+  }
+  .launch-kbd {
+    display: inline-flex;
+    margin-inline-start: 4px;
+  }
+  .launch-kbd .kbd {
+    background: color-mix(in srgb, var(--on-accent) 12%, transparent);
+    box-shadow: none;
+    color: inherit;
+    opacity: 0.7;
+  }
+  .launch-reason-wrap {
+    width: 0;
+    min-width: 100%;
+  }
+  .launch-reason {
+    color: var(--fg-2);
+    font-size: var(--fs-small);
+    text-align: center;
+    text-wrap: pretty;
+  }
+
+  /* LaunchProgress: four pips per account; each fills as its step finishes, the live one half. */
+  .launch-row-grid {
+    display: grid;
+    /* Room for each step's name over its pip, in the longer languages too. */
+    grid-template-columns: minmax(0, 1fr) 184px;
+    column-gap: 16px;
+  }
+  .launch-pips {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 3px;
+  }
+  .launch-pip {
+    height: 6px;
+    border-radius: var(--r-pill);
+    background: var(--surface-3);
+    overflow: hidden;
+  }
+  .launch-pip > i {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--ok);
+    transform-origin: left;
+    transform: scaleX(var(--f, 0));
+    transition:
+      transform var(--dur-spring) var(--spring),
+      background-color var(--dur-fast) var(--ease-out);
+  }
+  :root[dir="rtl"] .launch-pip > i {
+    transform-origin: right;
+  }
+  .launch-pip[data-s="done"] > i {
+    --f: 1;
+  }
+  .launch-pip:is([data-s="live"], [data-s="still"]) > i {
+    --f: 0.5;
+    background: var(--info);
+  }
+  .launch-pip[data-s="live"] > i {
+    animation: pulse 1.1s ease-in-out infinite;
+  }
+  .launch-pip[data-s="fail"] > i {
+    --f: 1;
+    background: var(--attention);
+  }
+  .launch-fold {
+    min-height: var(--h-sm);
+    border-radius: var(--r-xs);
+  }
+  .launch-chevron {
+    color: var(--fg-3);
+    transition:
+      rotate var(--dur-base) var(--ease-out),
+      color var(--dur-fast) var(--ease-out);
+  }
+  .launch-fold:hover .launch-chevron {
+    color: var(--fg);
+  }
+  .launch-fold[aria-expanded="true"] .launch-chevron {
+    rotate: 180deg;
+  }
+
+  /* AccountPicker. Ticks pop in; Select all sends them in as a short cascade (--i, capped). */
+  .launch-tile .tick svg {
+    opacity: 0;
+    scale: 0.5;
+    transition:
+      scale var(--dur-spring) var(--spring),
+      opacity var(--dur-fast) var(--ease-out);
+  }
+  .launch-tile[aria-pressed="true"] .tick svg {
+    opacity: 1;
+    scale: 1;
+  }
+  .launch-cascade .launch-tile :is(.tick, .tick svg) {
+    transition-delay: calc(var(--i, 0) * 16ms);
+  }
+  :root[data-rm] .launch-tile .tick svg {
+    scale: 1;
+  }
+  .launch-chip[aria-disabled="true"] {
+    background: transparent;
+    color: var(--fg-3);
+    cursor: not-allowed;
+  }
+  .launch-chip[aria-disabled="true"]:hover {
+    background: transparent;
+  }
+  .launch-chip[aria-disabled="true"]:active {
+    scale: 1;
+  }
+  .launch-option {
+    cursor: pointer;
+  }
+  .launch-option[data-active] {
+    background: var(--press);
+  }
+
+  /* TargetField: the parse's mark (a circle, a square or a diamond; a pulsing dot while it reads). */
+  .launch-mark {
+    position: relative;
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    width: 10px;
+    height: 10px;
+  }
+  .launch-mark-shape {
+    display: block;
+    width: 8px;
+    height: 8px;
+  }
+  .launch-mark-shape[data-tone="reading"] {
+    border-radius: 50%;
+    background: var(--fg-3);
+    animation: pulse 1.1s ease-in-out infinite;
+  }
+
+  /* Favourites: pills that fill the target. One is dragged (or moved with Alt and the arrows) by all
+     of it; its ⋯ opens its menu. */
+  .launch-favs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .launch-fav {
+    position: relative;
+    display: inline-flex;
+    max-width: 100%;
+  }
+  .launch-fav-pick {
+    max-width: 100%;
+    padding-inline: 12px 38px;
+  }
+  .launch-fav-pick > svg {
+    color: var(--fg-3);
+    transition: color var(--dur-fast) var(--ease-out);
+  }
+  .launch-fav-pick[aria-pressed="true"] > svg {
+    color: var(--accent-text);
+  }
+  .launch-fav-more {
+    position: absolute;
+    inset-block: 3px;
+    inset-inline-end: 3px;
+    width: 28px;
+    height: 28px;
+    color: var(--fg-3);
+  }
+
+  /* Join someone's people. */
+  .launch-person {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 52px;
+    padding: 0 10px;
+    border-radius: var(--r-md);
+    text-align: start;
+    transition: background-color var(--dur-fast) var(--ease-out);
+  }
+  .launch-person:hover {
+    background: var(--hover);
+  }
+  .launch-initials {
+    width: 28px;
+    height: 28px;
+    flex: none;
+    display: grid;
+    place-content: center;
+    border-radius: 50%;
+    background: var(--surface-3);
+    color: var(--fg-2);
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  /* The server drawer: a modal <dialog> docked to the end side. It slides in on the slow spring and
+     out on the short exit; reduced motion, it only fades. */
+  .launch-drawer {
+    --from: calc(100% + 16px);
+    position: fixed;
+    inset: 8px;
+    inset-inline-start: auto;
+    width: min(760px, calc(100vw - 48px));
+    height: auto;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: var(--r-xl);
+    background: var(--float);
+    color: var(--fg);
+    box-shadow: var(--shadow-dialog);
+    overflow: hidden;
+    opacity: 0;
+    translate: var(--from) 0;
+    transition:
+      opacity var(--dur-exit) var(--ease-in),
+      translate var(--dur-exit) var(--ease-in),
+      overlay var(--dur-exit) allow-discrete,
+      display var(--dur-exit) allow-discrete;
+  }
+  :root[dir="rtl"] .launch-drawer {
+    --from: calc(-100% - 16px);
+  }
+  :root[data-rm] .launch-drawer {
+    --from: 0px;
+  }
+  .launch-drawer[open] {
+    opacity: 1;
+    translate: 0 0;
+    transition:
+      opacity var(--dur-fast) var(--ease-out),
+      translate var(--dur-spring-slow) var(--spring),
+      overlay var(--dur-fast) allow-discrete,
+      display var(--dur-fast) allow-discrete;
+  }
+  .launch-drawer::backdrop {
+    background: transparent;
+    transition:
+      background-color var(--dur-exit) var(--ease-out),
+      overlay var(--dur-exit) allow-discrete,
+      display var(--dur-exit) allow-discrete;
+  }
+  .launch-drawer[open]::backdrop {
+    background: var(--backdrop);
+  }
+  @starting-style {
+    .launch-drawer[open] {
+      opacity: 0;
+      translate: var(--from) 0;
+    }
+    .launch-drawer[open]::backdrop {
+      background: transparent;
+    }
+  }
+  .launch-drawer-body {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+  .launch-drawer-main {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 0 22px;
+  }
+  .launch-drawer-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 10px;
+    padding: 16px 22px 20px;
+  }
+
+  @media (forced-colors: active) {
+    .launch-pill {
+      border: 1px solid CanvasText;
+    }
+    .launch-pip {
+      border: 1px solid CanvasText;
+    }
+    .launch-pip > i {
+      background: Highlight;
+    }
+    .launch-pip[data-s="fail"] > i {
+      background: CanvasText;
+    }
+    .launch-option[data-active] {
+      outline: 2px solid Highlight;
+      outline-offset: -2px;
+    }
+    .play-scroll {
+      mask: none;
+    }
+  }
+}

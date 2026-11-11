@@ -1,0 +1,159 @@
+/* Servers: the browser's header, toolbar and tables. They follow the room the browser gets (the
+   Servers view, or Play's narrower drawer), not the window: a container query. */
+@layer views {
+  .srv {
+    container: srv / inline-size;
+  }
+  .srv-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px 24px;
+  }
+  .srv-icon {
+    width: 56px;
+    height: 56px;
+    flex: none;
+    border-radius: var(--r-md);
+  }
+  .srv-icon-none {
+    display: grid;
+    place-content: center;
+    background: var(--surface-2);
+    color: var(--fg-3);
+  }
+  /* A sort that needs a signed-in account: locked, but still focusable, so it can say why. */
+  .srv-sorts .seg[aria-disabled="true"] {
+    color: var(--fg-disabled);
+    cursor: not-allowed;
+  }
+  .srv-sort-menu {
+    display: none;
+  }
+  /* Sized by the room it gets, never by its rows (it scrolls them): the browser's own minimum stays
+     its header, its toolbar and this panel's min-height. */
+  .srv-panel {
+    contain: size;
+  }
+  .srv-panel thead th {
+    background: var(--surface-1);
+  }
+  /* The players bar: a new count springs to its share (the clip-path is set inline). */
+  .srv-seats > span {
+    background: var(--fg-2);
+    transition: clip-path var(--dur-spring) var(--spring);
+  }
+  .srv-seats > [data-full] {
+    background: var(--attention);
+  }
+  :root[data-rm] .srv-seats > span {
+    transition: none;
+  }
+
+  /* The send bar: where (and as whom) over who, the join beside them. Where the bar is narrow (the
+     side layout), who takes the whole width under both. */
+  .srv-send {
+    container: srv-send / inline-size;
+  }
+  .srv-send-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "where go" "who go";
+    align-items: center;
+    gap: 6px 20px;
+  }
+  .srv-send-where {
+    grid-area: where;
+    min-height: var(--h-sm);
+  }
+  .srv-send-who {
+    grid-area: who;
+  }
+  .srv-send-go {
+    grid-area: go;
+  }
+  @container srv-send (width < 680px) {
+    .srv-send-grid {
+      grid-template-areas: "where go" "who who";
+      align-items: start;
+      row-gap: 8px;
+    }
+    /* On the button's line. */
+    .srv-send-where {
+      min-height: var(--h-lg);
+    }
+  }
+  /* Its pick mark is the picked row's radio in small: ringed, then filled. */
+  .srv-send-mark {
+    position: relative;
+    width: 12px;
+    height: 12px;
+    flex: none;
+    border: 1.5px solid var(--edge);
+    border-radius: 50%;
+    transition: border-color var(--dur-fast) var(--ease-out);
+  }
+  .srv-send-mark::after {
+    content: "";
+    position: absolute;
+    inset: 1.5px;
+    border-radius: 50%;
+    background: var(--accent);
+    opacity: 0;
+    scale: 0.4;
+    transition:
+      scale var(--dur-spring) var(--spring),
+      opacity var(--dur-fast) var(--ease-out);
+  }
+  .srv-send-mark[data-on] {
+    border-color: var(--accent);
+  }
+  .srv-send-mark[data-on]::after {
+    opacity: 1;
+    scale: 1;
+  }
+  :root[data-rm] .srv-send-mark::after {
+    scale: 1;
+  }
+  /* Two rows of chips; more scroll, a whole row at a time (the picker's search, past 12 accounts,
+     stays above them). */
+  .srv-send-who [role="group"] {
+    max-height: calc(var(--h-sm) * 2 + 14px);
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scroll-snap-type: y mandatory;
+    scroll-padding-block: 4px;
+    padding: 4px;
+    margin: -4px;
+  }
+  .srv-send-who [role="group"] > * {
+    scroll-snap-align: start;
+  }
+
+  @container srv (width < 1000px) {
+    .srv-icon {
+      width: 40px;
+      height: 40px;
+    }
+    /* The sort menu carries its own reason. */
+    .srv-ids,
+    .srv-sorts,
+    .srv-sorts-why {
+      display: none;
+    }
+    .srv-sort-menu {
+      display: inline-flex;
+    }
+  }
+  @container srv (width < 760px) {
+    .srv-updated {
+      display: none;
+    }
+  }
+  /* Narrow (the drawer): Friends and FPS go first. */
+  @container srv (width < 640px) {
+    .srv-opt {
+      display: none;
+    }
+  }
+}

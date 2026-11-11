@@ -1,0 +1,252 @@
+/* The Accounts view's own styles: the list's columns, density and dragging, the selection's tools,
+   the details (docked, or a sheet over the list). */
+@layer views {
+  /* ---- The list. Its columns follow the table's own width, not <main>'s (which holds the details too). ---- */
+  .acc-table {
+    container: acc-table / inline-size;
+  }
+  .acc-table thead th {
+    background: var(--surface-1);
+  }
+  .acc-table th:first-child {
+    width: 64px;
+  }
+  th.acc-c-status {
+    width: 30%;
+  }
+  th.acc-c-groups {
+    width: 22%;
+  }
+  th.acc-c-act {
+    width: 112px;
+  }
+  .acc-c-status,
+  .acc-c-groups,
+  .acc-handle {
+    display: none;
+  }
+  @container acc-table (width >= 600px) {
+    .acc-c-status {
+      display: table-cell;
+    }
+    .acc-handle {
+      display: block;
+    }
+    .acc-inline-status {
+      display: none;
+    }
+  }
+  @container acc-table (width >= 900px) {
+    .acc-c-groups {
+      display: table-cell;
+    }
+  }
+  .acc-pick {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-inline-start: 10px;
+  }
+  /* The MAIN's slot: pinned first, so a lock where the grip would be. */
+  .acc-pin {
+    opacity: 1;
+    cursor: default;
+  }
+  .compact .acc-table .row {
+    height: 44px;
+  }
+  .acc-table .row {
+    transition: transform var(--dur-move) var(--ease-out);
+  }
+  .acc-row-drag {
+    position: relative;
+    z-index: 2;
+    opacity: 0.94;
+  }
+  .acc-row-drag > td {
+    background: var(--surface-3);
+  }
+  .acc-drop-top > td {
+    box-shadow: inset 0 2px 0 var(--accent-text); /* taste-skill-ignore: where a drag lands, not depth */
+  }
+  .acc-drop-bottom > td {
+    box-shadow: inset 0 -2px 0 var(--accent-text); /* taste-skill-ignore: where a drag lands, not depth */
+  }
+  /* A filled star always shows; an empty one only on its row's hover or focus. */
+  .acc-star {
+    color: var(--fg-3);
+    transition:
+      opacity var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out),
+      background-color var(--dur-fast) var(--ease-out);
+  }
+  .acc-star[aria-pressed="true"] {
+    background: transparent;
+    color: var(--fg);
+  }
+  .acc-star:not([aria-pressed="true"]) {
+    opacity: 0;
+  }
+  .acc-table .row:hover .acc-star,
+  .acc-table .row:focus-within .acc-star {
+    opacity: 1;
+  }
+  .acc-star:hover {
+    background: var(--hover);
+    color: var(--fg);
+  }
+
+  /* A check's result swaps in: the shape pops, the words fade. */
+  .acc-swap {
+    animation: fade-in var(--dur-base) var(--ease-out) backwards;
+  }
+  .acc-swap .acc-mark {
+    animation: acc-pop var(--dur-slow) var(--ease-out) backwards;
+  }
+  @keyframes acc-pop {
+    from {
+      opacity: 0;
+      scale: 0.3;
+    }
+  }
+
+  /* ---- Header and filters ---- */
+  .acc-need {
+    min-height: 26px;
+    color: var(--attention);
+    cursor: pointer;
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      box-shadow var(--dur-fast) var(--ease-out),
+      scale var(--dur-fast) var(--ease-out);
+  }
+  .acc-need:hover {
+    background: color-mix(in srgb, currentColor calc(var(--tint-pct) * 1.8), transparent);
+  }
+  .acc-need:active {
+    scale: var(--press-scale);
+  }
+  .acc-need[aria-pressed="true"] {
+    box-shadow: inset 0 0 0 1px currentColor; /* taste-skill-ignore: the pressed filter's ring, not depth */
+  }
+  .acc-danger {
+    color: var(--err);
+  }
+  .acc-danger:hover:not(:disabled, [aria-disabled="true"]) {
+    background: color-mix(in srgb, var(--err) var(--tint-pct), transparent);
+    color: var(--err);
+  }
+  /* The filter's Ctrl+F hint: gone while typing there, and where the field is too narrow for it. */
+  .acc-search {
+    container-type: inline-size;
+  }
+  .acc-search .field {
+    padding-inline-end: 64px;
+  }
+  .acc-keys {
+    transition: opacity var(--dur-fast) var(--ease-out);
+  }
+  .acc-search:focus-within .acc-keys {
+    opacity: 0;
+  }
+  @container (width < 270px) {
+    .acc-search .field {
+      padding-inline-end: 40px;
+    }
+    .acc-keys {
+      display: none;
+    }
+  }
+  /* A group chip's count gives way to its pencil on hover, or when the pencil has the focus. */
+  .acc-chip-count,
+  .acc-chip-edit {
+    transition: opacity var(--dur-fast) var(--ease-out);
+  }
+  .acc-chip-edit {
+    opacity: 0;
+  }
+  .acc-chip:hover .acc-chip-edit,
+  .acc-chip-edit:focus-visible {
+    opacity: 1;
+  }
+  .acc-chip:hover .acc-chip-count,
+  .acc-chip:has(.acc-chip-edit:focus-visible) .acc-chip-count {
+    opacity: 0;
+  }
+  /* The group editor grows out of the chip it edits. */
+  .acc-editor {
+    width: 300px;
+    padding: 14px;
+    transform-origin: top left;
+  }
+  :root[dir="rtl"] .acc-editor {
+    transform-origin: top right;
+  }
+
+  /* ---- Details ---- */
+  .acc-sheet {
+    position: absolute;
+    inset-block: 0;
+    inset-inline-end: 0;
+    z-index: 10;
+    width: min(380px, calc(100% - 24px));
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-radius: var(--r-xl);
+    background: var(--float);
+    box-shadow: var(--shadow-dialog); /* taste-skill-ignore: it floats over the list */
+  }
+  .acc-detail-name {
+    font-size: 16px;
+    line-height: 1.3;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .acc-tabs {
+    display: flex;
+  }
+  .acc-tabs .seg {
+    flex: 1 1 0;
+    justify-content: center;
+  }
+  .acc-sec {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px 20px;
+  }
+  .acc-sec + .acc-sec {
+    border-top: 1px solid var(--line);
+  }
+
+  /* Windows contrast themes drop shadows and author colours. */
+  @media (forced-colors: active) {
+    .acc-sheet {
+      border: 1px solid CanvasText;
+    }
+    /* The open row's fill is dropped: a frame instead. */
+    .acc-table .row[aria-current] > td {
+      border-block: 2px solid Highlight;
+    }
+    .acc-need[aria-pressed="true"] {
+      forced-color-adjust: none;
+      background: Highlight;
+      color: HighlightText;
+    }
+    .acc-need[aria-pressed="true"] * {
+      forced-color-adjust: none;
+      color: HighlightText;
+    }
+    /* Where a dragged row lands, and the row itself (shadows and fills are dropped). */
+    .acc-drop-top > td {
+      border-top: 2px solid Highlight;
+    }
+    .acc-drop-bottom > td {
+      border-bottom: 2px solid Highlight;
+    }
+    .acc-row-drag > td {
+      outline: 2px solid Highlight;
+    }
+  }
+}

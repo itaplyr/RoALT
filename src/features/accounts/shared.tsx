@@ -1,7 +1,17 @@
-import { useState, type CSSProperties } from "react";
+import { useState, type ReactNode } from "react";
 import type { AccountStatus, AccountSummary, Presence, PresenceKind } from "../../api";
 import { useHeadshot } from "../../data";
 import { fmtDate, t, type Key } from "../../i18n";
+import { TONE_COLOR, type Shape, type Tone } from "../../ui/Status";
+
+/** The "MAIN" tag beside the user's own account: identity, not status, so no hue. */
+export function MainBadge() {
+  return (
+    <span className="tag flex-none text-[12px] font-semibold text-fg bg-transparent" style={{ boxShadow: "inset 0 0 0 1px var(--edge)" }}>
+      {t("accounts.mainBadge")}
+    </span>
+  );
+}
 
 /** Colours offered for accounts and groups (from the design canvas). */
 export const SWATCHES = ["#C6F432", "#7AB0FF", "#5FE0C8", "#FFA05C", "#B49CFF", "#FF8FC7", "#ECEEF1", "#5E6672"];
@@ -54,35 +64,43 @@ export function Avatar({ account, size, url }: { account: AccountSummary; size: 
   );
 }
 
-/** Status is told apart by shape and label, never by colour alone. */
-type Look = { label: Key; color: string; mark: CSSProperties };
-const hollow: CSSProperties = { border: "1px solid var(--grey)", borderRadius: "50%" };
+/** Status is told apart by shape and word, never by colour alone. Status hues only: a user's
+ * accent must not repaint "valid" or "in game". */
+type Look = { label: Key; tone: Tone; shape: Shape; text: string };
 
 const LOOK: Record<AccountStatus, Look> = {
-  valid: { label: "accounts.status.valid", color: "var(--text)", mark: { background: "var(--accent-text)", borderRadius: "50%" } },
-  invalid: { label: "accounts.status.invalid", color: "var(--orange)", mark: { background: "var(--orange)", transform: "rotate(45deg) scale(.85)" } },
-  challenged: {
-    label: "accounts.status.challenged",
-    color: "var(--blue)",
-    mark: { background: "var(--blue)", clipPath: "polygon(50% 0, 100% 100%, 0 100%)" },
-  },
-  unknown: { label: "accounts.status.unknown", color: "var(--dim)", mark: hollow },
+  valid: { label: "accounts.status.valid", tone: "ok", shape: "dot", text: "var(--fg)" },
+  invalid: { label: "accounts.status.invalid", tone: "attention", shape: "diamond", text: "var(--attention)" },
+  challenged: { label: "accounts.status.challenged", tone: "attention", shape: "triangle", text: "var(--attention)" },
+  unknown: { label: "accounts.status.unknown", tone: "neutral", shape: "ring", text: "var(--fg-2)" },
 };
 
 const PRESENCE: Record<PresenceKind, Look> = {
-  inGame: { label: "accounts.presence.inGame", color: "var(--text)", mark: { background: "var(--accent-text)", borderRadius: "50%" } },
-  online: { label: "accounts.presence.online", color: "var(--text)", mark: { background: "var(--blue)", borderRadius: "50%" } },
-  studio: { label: "accounts.presence.studio", color: "var(--text)", mark: { border: "2px solid var(--blue)", borderRadius: "50%" } },
-  offline: { label: "accounts.presence.offline", color: "var(--dim)", mark: hollow },
-  unknown: { label: "accounts.presence.unknown", color: "var(--dim)", mark: hollow },
+  inGame: { label: "accounts.presence.inGame", tone: "ok", shape: "dot", text: "var(--fg)" },
+  online: { label: "accounts.presence.online", tone: "info", shape: "dot", text: "var(--fg)" },
+  studio: { label: "accounts.presence.studio", tone: "info", shape: "ring", text: "var(--fg)" },
+  offline: { label: "accounts.presence.offline", tone: "neutral", shape: "ring", text: "var(--fg-2)" },
+  unknown: { label: "accounts.presence.unknown", tone: "neutral", shape: "ring", text: "var(--fg-2)" },
 };
 
-function Mark({ look, label, detail }: { look: Look; label: string; detail?: string }) {
+function Mark({ look, label, detail, pulse }: { look: Look; label: string; detail?: string; pulse?: boolean }) {
   return (
-    <span className="inline-flex items-center gap-2 min-w-0 max-w-full" style={{ color: look.color }}>
-      <span aria-hidden="true" className="w-2 h-2 flex-none" style={look.mark} />
-      <span className="truncate flex-none max-w-[calc(100%-16px)]" title={label}>{label}</span>
-      {detail && <span className="mono text-xs text-dim truncate">{detail}</span>}
+    <span className="inline-flex items-center gap-2 min-w-0 max-w-full" style={{ color: look.text }}>
+      <span aria-hidden="true" className={`status-mark acc-mark ${pulse ? "pulse" : ""}`} data-shape={look.shape} style={{ color: TONE_COLOR[look.tone] }} />
+      <span className="truncate flex-none max-w-[calc(100%-15px)]" title={label}>{label}</span>
+      {detail && <span className="mono text-xs text-fg-3 truncate">{detail}</span>}
+    </span>
+  );
+}
+
+/** Swaps in what it shows when `k` changes after the first render (a check's result arriving),
+ * not on mount: a long list doesn't play it for every row. */
+function Swapped({ k, children }: { k: string; children: ReactNode }) {
+  const [seen, setSeen] = useState({ k, moved: false });
+  if (seen.k !== k) setSeen({ k, moved: true });
+  return (
+    <span key={k} className={`inline-flex min-w-0 max-w-full ${seen.moved ? "acc-swap" : ""}`}>
+      {children}
     </span>
   );
 }
@@ -93,23 +111,27 @@ export function PresenceStatus({ presence: p }: { presence: Presence }) {
   return <Mark look={PRESENCE[p.kind]} label={label} />;
 }
 
-/** Cookie status; a valid account shows its presence instead once that is known. */
-export function Status({ status, presence, checking, detail }: {
+const CHECKING: Look = { label: "accounts.status.checking", tone: "neutral", shape: "ring", text: "var(--fg-3)" };
+
+/** Cookie status; a valid account shows its presence instead once that is known. `swap`: a change
+ * pops in; only where few show at once (a check of 300 rows would pop 300). */
+export function Status({ status, presence, checking, detail, swap }: {
   status: AccountStatus;
   presence?: Presence;
   checking?: boolean;
   detail?: string;
+  swap?: boolean;
 }) {
-  if (checking) {
-    return (
-      <span className="inline-flex items-center gap-2 min-w-0 max-w-full text-dim">
-        <span aria-hidden="true" className="w-2 h-2 flex-none rounded-full bg-dim pulse" />
-        <span className="truncate">{t("accounts.status.checking")}</span>
-      </span>
-    );
-  }
-  if (status === "valid" && presence && presence.kind !== "unknown") return <PresenceStatus presence={presence} />;
-  return <Mark look={LOOK[status]} label={t(LOOK[status].label)} detail={detail} />;
+  const p = status === "valid" && presence && presence.kind !== "unknown" ? presence : null;
+  const mark = checking ? (
+    // Long lists (swap false) get a still ring: hundreds of endless pulses cost every frame.
+    <Mark look={CHECKING} label={t(CHECKING.label)} pulse={swap !== false} />
+  ) : p ? (
+    <PresenceStatus presence={p} />
+  ) : (
+    <Mark look={LOOK[status]} label={t(LOOK[status].label)} detail={detail} />
+  );
+  return swap ? <Swapped k={checking ? "checking" : p ? `${p.kind}:${p.lastLocation}` : status}>{mark}</Swapped> : mark;
 }
 
 export function ago(ms: number | null, now = Date.now()) {
@@ -133,4 +155,3 @@ export function accountAge(created: string, now = new Date()) {
   );
   return t("accounts.age", { y: Math.floor(m / 12), m: m % 12 });
 }
-

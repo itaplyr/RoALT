@@ -63,7 +63,7 @@ fn tick(app: &AppHandle) -> Duration {
     if !v.anti_afk.enabled {
         return TICK;
     }
-    let clients: Vec<_> = s.tracker.afk_clients().into_iter().filter(|c| !process::hung(c.pid)).collect();
+    let clients: Vec<_> = s.tracker.afk_clients(&s.macros.busy()).into_iter().filter(|c| !process::hung(c.pid)).collect();
     let ids = match plan(&clients, crate::commands::now_ms(), v.anti_afk.interval_min, u32::MAX) {
         Plan::Wait | Plan::Retry => return TICK,
         Plan::Press(ids) => ids,

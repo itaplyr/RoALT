@@ -3,6 +3,9 @@
 //! - Check: `clientsettingscdn.roblox.com/v2/client-version/WindowsPlayer` → `clientVersionUpload`,
 //!   compared with the `Versions\version-…` folder the client is in. At start and every 30 min;
 //!   `roblox://client` carries the new `RobloxClient` when anything changed.
+//! - Staged rollouts: Roblox lists a version before every PC gets it. A client RoALT started asking
+//!   for that version, which got into a game still on the old build, shows it isn't this PC's
+//!   update yet (`not_rolled_out`): no hold, no "out of date", for 30 min, then tested again.
 //! - Install (`roblox_install`, or auto-update): refused while any Roblox client runs (an update
 //!   ends them all), while a launch, batch or auto-rejoin runs, and over a bootstrapper install.
 //!   Downloads `setup.rbxcdn.com/<version>-RobloxPlayerInstaller.exe` (≤ 50 MB) into a fresh
@@ -47,11 +50,31 @@ pub struct Updater {
     installing: AtomicBool,
     /// The version auto-update last tried: a failed install isn't retried every 30 minutes.
     auto_tried: Mutex<Option<String>>,
+    /// Clients RoALT started asking for production while its live build wasn't installed:
+    /// (pid, start time, that live version, when noted in Unix seconds). Each one is a test of
+    /// whether Roblox updates here; one older than `NOT_HERE_FOR` no longer counts (a running
+    /// client doesn't check again, so it can't see a rollout that came later).
+    probes: Mutex<Vec<(u32, u64, String, u64)>>,
+    /// A live version Roblox hasn't rolled out to this PC (`not_rolled_out`), and when that was
+    /// seen (Unix seconds); trusted for `NOT_HERE_FOR`, then tested again.
+    not_here: Mutex<Option<(String, u64)>>,
 }
+
+/// How long a "not rolled out here" stays trusted: a staged rollout can reach this PC later.
+const NOT_HERE_FOR: u64 = 30 * 60;
 
 impl Updater {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn set_latest(&self, v: String) {
+        *lock(&self.latest) = Some(v);
+    }
+
+    /// `live` is known not to be rolled out to this PC (within `NOT_HERE_FOR`).
+    fn not_here(&self, live: &str) -> bool {
+        lock(&self.not_here).as_ref().is_some_and(|(v, at)| v == live && unix_now().saturating_sub(*at) < NOT_HERE_FOR)
     }
 
     /// The installer runs (or is being downloaded): launches are refused.
@@ -107,29 +130,26 @@ pub fn installer_url(version: &str) -> Option<String> {
 }
 
 /// A bootstrapper with an older Roblox than the live one closes every client as it updates, so
-/// with clients running a launch through it waits (pure). Anything unknown doesn't hold it up.
-// ponytail: Bloxstrap's optional background updates don't close clients, but only under conditions
+/// with clients running a launch through it waits (pure). `live`: the live versions it may follow
+/// (production's, and the channel's in the registry). Matching any of them is up to date: Roblox
+/// moves the registry's channel per account (test channels like `zmems-ctrl`) while bootstrappers
+/// mostly keep to production, so one alone held every launch on an update that never came.
+/// Nothing known doesn't hold it up.
+// shortcut: Bloxstrap's optional background updates don't close clients, but only under conditions
 // it decides at launch; such a user is asked to close clients too. Read its settings if they mind.
-fn bootstrapper_would_close(installed: Option<&str>, latest: Option<&str>, running: usize) -> bool {
-    running > 0 && outdated(installed, latest)
+fn bootstrapper_would_close(installed: Option<&str>, live: &[Option<&str>], running: usize) -> bool {
+    let mut known = live.iter().flatten().peekable();
+    running > 0 && known.peek().is_some() && known.all(|l| outdated(installed, Some(l)))
 }
 
-/// The live version on this PC's release channel, asked now (a bootstrapper follows the channel);
-/// None when Roblox can't be asked, so nothing is held up on a guess.
-async fn live_version(s: &App) -> Option<String> {
-    let on_channel = match client::channel() {
-        Some(channel) => s.api.client_version_on(&channel).await,
-        None => s.api.client_version().await,
-    };
-    match on_channel {
-        Ok(v) => Some(v),
-        // Unknown to Roblox or closed to this PC: bootstrappers go back to production then.
-        Err(AppError::NotFound | AppError::CookieInvalid | AppError::Roblox(_)) if client::channel().is_some() => s.api.client_version().await.ok(),
-        Err(e) => {
-            log::info!("bootstrapper check: Roblox version unknown: {e}");
-            None
-        }
-    }
+/// The registry channel's live version (None on production, or when Roblox can't be asked).
+async fn channel_version(s: &App) -> Option<String> {
+    let channel = client::channel()?;
+    s.api
+        .client_version_on(&channel)
+        .await
+        .inspect_err(|e| log::info!("bootstrapper check: version of channel {channel} unknown: {e}"))
+        .ok()
 }
 
 /// Why this launch must wait for an update that would close running clients, or None: a
@@ -143,24 +163,86 @@ pub async fn update_hold(s: &App, closing: usize) -> Option<String> {
         return None;
     }
     if let Some(installed) = client::bootstrapper_version(&exe) {
-        let live = live_version(s).await?;
-        return bootstrapper_would_close(Some(&installed), Some(&live), running)
-            .then(|| tr!("Roblox has an update, and your bootstrapper (e.g. Bloxstrap) would close every running client to install it. Close your clients first, then launch."));
+        let (production, channel) = (production_version(s).await, channel_version(s).await);
+        if !bootstrapper_would_close(Some(&installed), &[production.as_deref(), channel.as_deref()], running) {
+            return None;
+        }
+        log::info!(
+            "launch held: the bootstrapper has {installed}, Roblox's live is {production:?} (production) and {channel:?} (channel {:?}), {running} client(s) running",
+            client::channel()
+        );
+        return Some(tr!("Roblox has an update, and your bootstrapper (e.g. Bloxstrap) would close every running client to install it. Close your clients first, then launch."));
     }
     if client::managed_by_bootstrapper(&exe) {
         return None;
     }
     let live = production_version(s).await?;
-    client::installed_build(&live)
-        .is_none()
-        .then(|| tr!("Roblox has an update, and installing it would close every running client. Close your clients first, then launch."))
+    if client::installed_build(&live).is_some() || not_here(s, &live) {
+        return None;
+    }
+    Some(tr!("Roblox has an update, and installing it would close every running client. Close your clients first, then launch."))
+}
+
+/// A client `launcher::launch` just started (`production`: asked for Roblox's live version). When
+/// that version isn't installed, the client is a test of whether Roblox updates this PC
+/// (`not_rolled_out`).
+pub fn note_started(s: &App, exe: &client::ClientExe, production: bool, pid: u32, started: u64) {
+    let Some(live) = lock(&s.update.latest).clone() else { return };
+    if !production || exe.bootstrapper || pid == 0 || client::installed_build(&live).is_some() {
+        return;
+    }
+    let mut probes = lock(&s.update.probes);
+    probes.retain(|(p, t, _, _)| crate::instances::process::start_time(*p) == Some(*t));
+    probes.push((pid, started, live, unix_now()));
+}
+
+/// `live` isn't rolled out to this PC: known so (`Updater::not_here`), or a recent probe shows it
+/// now (`not_rolled_out`), which is then remembered.
+fn not_here(s: &App, live: &str) -> bool {
+    if s.update.not_here(live) {
+        return true;
+    }
+    if crate::instances::process::installer_running() || !not_rolled_out(live, &probe_results(s)) {
+        return false;
+    }
+    log::info!("Roblox lists {live} as live, but a client RoALT started asking for it got into a game on an older build: not rolled out to this PC yet, launches go on");
+    *lock(&s.update.not_here) = Some((live.to_owned(), unix_now()));
+    true
+}
+
+/// Each recent probe still running: (the live version it asked for, the version it runs now, in a game).
+fn probe_results(s: &App) -> Vec<(String, Option<String>, bool)> {
+    let probes = lock(&s.update.probes).clone();
+    let list = s.tracker.list();
+    let now = unix_now();
+    probes
+        .into_iter()
+        .filter(|(pid, t, _, noted)| now.saturating_sub(*noted) < NOT_HERE_FOR && crate::instances::process::start_time(*pid) == Some(*t))
+        .map(|(pid, _, asked, _)| {
+            let now = crate::instances::process::exe_path(pid).and_then(|e| installed_version(&e));
+            let in_game = list.iter().any(|i| i.pid == pid && i.state == crate::model::InstanceState::InGame);
+            (asked, now, in_game)
+        })
+        .collect()
+}
+
+/// Roblox lists `live` before it reaches every PC (staged rollouts). A client RoALT started asking
+/// for `live` without it installed, that got into a game still on an older build, wasn't updated
+/// by Roblox: `live` isn't this PC's update yet (pure). In a game, so it is past Roblox's update
+/// step. `probes`: (asked for, runs now, in a game).
+fn not_rolled_out(live: &str, probes: &[(String, Option<String>, bool)]) -> bool {
+    probes.iter().any(|(asked, now, in_game)| asked == live && *in_game && now.as_deref().is_some_and(|v| v != live))
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
 /// Production's live version, asked now, else the last one known; None when never known.
 async fn production_version(s: &App) -> Option<String> {
     match s.api.client_version().await {
         Ok(v) => {
-            *lock(&s.update.latest) = Some(v.clone());
+            s.update.set_latest(v.clone());
             Some(v)
         }
         Err(e) => {
@@ -174,8 +256,8 @@ async fn production_version(s: &App) -> Option<String> {
 ///
 /// Roblox rewrites `clientExe` and the registry's channel for whichever account last played (each
 /// is enrolled in a channel of its own). A client whose build doesn't match the channel it asks
-/// about runs the foreground installer, which closes every running client (research multi-instance
-/// M9). So: production's build with an empty `channel:`, as they always agree. Over a bootstrapper,
+/// about runs the foreground installer, which closes every running client. So: production's build
+/// with an empty `channel:`, as they always agree. Over a bootstrapper,
 /// or with the version unknown, what `client::find` says, as is. Production's build missing: the
 /// client found, asked for production, updates itself (`update_hold` kept it from closing others).
 pub async fn launch_client(s: &App) -> Result<(client::ClientExe, bool)> {
@@ -212,10 +294,13 @@ pub fn client(s: &App) -> RobloxClient {
     let bootstrapper = exe.as_ref().is_some_and(client::managed_by_bootstrapper);
     let version = exe.as_ref().filter(|_| !bootstrapper).and_then(|e| installed_version(&e.path));
     let latest = lock(&s.update.latest).clone();
+    // Production's build installed anywhere (Roblox may point at another channel's), or Roblox
+    // hasn't rolled it out here: not out of date.
+    let stale = latest.as_deref().is_some_and(|l| client::installed_build(l).is_none() && !not_here(s, l));
     RobloxClient {
         path: exe.map(|e| e.path.display().to_string()),
         bootstrapper,
-        outdated: outdated(version.as_deref(), latest.as_deref()),
+        outdated: stale && outdated(version.as_deref(), latest.as_deref()),
         version,
         latest,
     }
@@ -247,7 +332,7 @@ pub fn spawn(app: AppHandle) {
 async fn check(app: &AppHandle) {
     let s = app.state::<App>();
     match s.api.client_version().await {
-        Ok(v) => *lock(&s.update.latest) = Some(v),
+        Ok(v) => s.update.set_latest(v),
         Err(e) => log::info!("Roblox version check failed: {e}"),
     }
     let c = publish(app);
@@ -482,11 +567,37 @@ mod tests {
     #[test]
     fn holds_a_launch_only_when_a_bootstrapper_would_close_clients() {
         let (a, b) = ("version-aaaaaaaaaaaaaaaa", "version-bbbbbbbbbbbbbbbb");
-        assert!(bootstrapper_would_close(Some(a), Some(b), 1));
-        assert!(!bootstrapper_would_close(Some(a), Some(b), 0), "nothing to close");
-        assert!(!bootstrapper_would_close(Some(a), Some(a), 3), "up to date");
-        assert!(!bootstrapper_would_close(None, Some(b), 3), "unknown");
-        assert!(!bootstrapper_would_close(Some(a), None, 3), "unknown");
+        let c = "version-cccccccccccccccc";
+        assert!(bootstrapper_would_close(Some(a), &[Some(b), None], 1));
+        assert!(!bootstrapper_would_close(Some(a), &[Some(b), None], 0), "nothing to close");
+        assert!(!bootstrapper_would_close(Some(a), &[Some(a), None], 3), "up to date");
+        assert!(!bootstrapper_would_close(None, &[Some(b), None], 3), "unknown");
+        assert!(!bootstrapper_would_close(Some(a), &[None, None], 3), "unknown");
+        // Roblox put this PC on a test channel; the bootstrapper keeps to production (or the other way round).
+        assert!(!bootstrapper_would_close(Some(a), &[Some(a), Some(c)], 3), "up to date on production");
+        assert!(!bootstrapper_would_close(Some(c), &[Some(a), Some(c)], 3), "up to date on the channel");
+        assert!(bootstrapper_would_close(Some(b), &[Some(a), Some(c)], 3), "behind both");
+    }
+
+    /// The false "Roblox has an update" hold: Roblox lists a version it hasn't rolled out here.
+    #[test]
+    fn a_probe_in_a_game_on_an_old_build_means_not_rolled_out() {
+        let (old, live) = (Some("version-aaaaaaaaaaaaaaaa".to_owned()), "version-bbbbbbbbbbbbbbbb");
+        let probe = |asked: &str, now: Option<String>, in_game| (asked.to_owned(), now, in_game);
+        assert!(not_rolled_out(live, &[probe(live, old.clone(), true)]), "asked for it, got into a game, not updated");
+        assert!(!not_rolled_out(live, &[probe(live, old.clone(), false)]), "not in a game yet: may still be updating");
+        assert!(!not_rolled_out(live, &[probe("version-cccccccccccccccc", old.clone(), true)]), "asked for another live version");
+        assert!(!not_rolled_out(live, &[probe(live, None, true)]), "version unknown");
+        assert!(!not_rolled_out(live, &[probe(live, Some(live.to_owned()), true)]), "it did update");
+        assert!(!not_rolled_out(live, &[]));
+        assert!(not_rolled_out(live, &[probe(live, None, true), probe(live, old, true)]), "any one is enough");
+    }
+
+    #[test]
+    fn a_custom_install_folder_counts() {
+        let exe = Path::new(r"D:\Games\Roblox\Versions\version-aaaaaaaaaaaaaaaa\RobloxPlayerBeta.exe");
+        assert_eq!(client::versions_dir_of(exe), Some(PathBuf::from(r"D:\Games\Roblox\Versions")));
+        assert_eq!(client::versions_dir_of(Path::new(r"C:\Bloxstrap\Bloxstrap.exe")), None);
     }
 
     #[test]

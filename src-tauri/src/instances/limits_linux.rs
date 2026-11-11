@@ -76,6 +76,11 @@ impl Limiter {
         self.applied.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|(id, a)| (id.clone(), a.limits)).collect()
     }
 
+    /// Linux caps are soft (nice/affinity); none is ever reported refused.
+    pub fn uncapped(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     pub fn release_all(&self) {
         let applied = std::mem::take(&mut *self.applied.lock().unwrap_or_else(|e| e.into_inner()));
         for (_, a) in applied {
@@ -212,7 +217,7 @@ fn plan_full(
             let i = i as u32;
             let share = match v.auto_spread && n > 1 {
                 true if uncapped.contains(id) => Some(pin(i, n, cores)),
-                true => Some(spread(i, n, cores)),
+                true => spread(i, n, cores),
                 false => None,
             };
             let mut l = effective_with(*manual, foreground == Some(*pid) || free.contains(id), v, share, fair);
@@ -271,12 +276,8 @@ fn pin(i: u32, n: u32, cores: u32) -> u64 {
     (0..cores).filter(|c| c % n == i % n).fold(0, |m, c| m | 1 << c)
 }
 
-pub fn spread(i: u32, n: u32, cores: u32) -> u64 {
-    let cores = cores.clamp(1, 64);
-    if n >= cores {
-        return 1 << (i % cores);
-    }
-    (0..cores).filter(|c| c % n == i % n).fold(0, |m, c| m | 1 << c)
+pub fn spread(i: u32, n: u32, cores: u32) -> Option<u64> {
+    (n.saturating_mul(2) <= cores.clamp(1, 64)).then(|| pin(i, n, cores))
 }
 
 #[allow(dead_code)]
@@ -295,9 +296,9 @@ mod tests {
 
     #[test]
     fn spreads_cores_and_clamps() {
-        assert_eq!(spread(0, 2, 4), 0b0101);
-        assert_eq!(spread(1, 2, 4), 0b1010);
-        assert_eq!(spread(2, 3, 2), 1);
+        assert_eq!(spread(0, 2, 4), Some(0b0101));
+        assert_eq!(spread(1, 2, 4), Some(0b1010));
+        assert_eq!(spread(2, 3, 2), None);
         assert_eq!(clamp_affinity(0b111, 0b101), Some(0b101));
         assert_eq!(clamp_affinity(0b010, 0b101), None);
     }

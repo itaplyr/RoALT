@@ -10,6 +10,9 @@
   "That file is too big to be an AccountData.json.": "ไฟล์นั้นใหญ่เกินกว่าจะเป็น AccountData.json",
   "This file is locked with a Roblox Account Manager password. Remove the password in Roblox Account Manager, then import again.": "ไฟล์นี้ล็อกด้วยรหัสผ่านของ Roblox Account Manager ลบรหัสผ่านใน Roblox Account Manager แล้วนำเข้าอีกครั้ง",
   "RoALT couldn't decrypt this file. It must come from Roblox Account Manager on this PC, signed in as the same Windows user.": "RoALT ถอดรหัสไฟล์นี้ไม่ได้ ไฟล์ต้องมาจาก Roblox Account Manager บนพีซีเครื่องนี้ ที่ลงชื่อเข้าใช้ด้วยผู้ใช้ Windows คนเดียวกัน",
+  "Confirm it's you to export Roblox cookies.": "ยืนยันว่าเป็นคุณเพื่อส่งออกคุกกี้ Roblox",
+  "None of these accounts has a cookie to export.": "ไม่มีบัญชีใดในรายการนี้ที่มีคุกกี้ให้ส่งออก",
+  "The exported file is gone.": "ไม่พบไฟล์ที่ส่งออกแล้ว",
   "Confirm it's you to reveal a Roblox cookie.": "ยืนยันว่าเป็นคุณเพื่อแสดงคุกกี้ Roblox",
   "Type a Roblox username.": "พิมพ์ชื่อผู้ใช้ Roblox",
   "No Roblox user is called \"{name}\".": "ไม่มีผู้ใช้ Roblox ชื่อ \"{name}\"",
@@ -56,6 +59,14 @@
   "The close grace must be between 1 and 60 seconds.": "เวลารอปิดต้องอยู่ระหว่าง 1 ถึง 60 วินาที",
   "Anti-AFK must press a key every 1 to 19 minutes.": "กัน AFK ต้องกดปุ่มทุก 1 ถึง 19 นาที",
   "The status summary must be off (0) or every 5 minutes to 24 hours.": "สรุปสถานะต้องปิด (0) หรือทุก 5 นาทีถึง 24 ชั่วโมง",
+  "Close the sign-in and Roblox browser windows first, then move the data folder.": "ปิดหน้าต่างลงชื่อเข้าใช้และหน้าต่างเบราว์เซอร์ Roblox ก่อน แล้วจึงย้ายโฟลเดอร์ข้อมูล",
+  "Roblox's lock belongs to a program running as administrator (often Roblox started by a bootstrapper set to run as administrator). Close it, or turn that off.": "ล็อกของ Roblox เป็นของโปรแกรมที่รันในฐานะผู้ดูแลระบบ (มักเป็น Roblox ที่เปิดโดย bootstrapper ที่ตั้งให้รันในฐานะผู้ดูแลระบบ) ปิดโปรแกรมนั้น หรือปิดการตั้งค่านั้น",
+  "Roblox's lock is held by {names}. Close it, or take it over.": "{names} ถือล็อกของ Roblox อยู่ ปิดมัน หรือรับช่วงต่อ",
+  "process {pid}": "โปรเซส {pid}",
+  "The server list couldn't be read ({why}), so accounts were matched by Roblox on their own.": "อ่านรายชื่อเซิร์ฟเวอร์ไม่ได้ ({why}) Roblox จึงจัดบัญชีให้เอง",
+  "{name} has no private server of this game, so it joins a public one.": "{name} ไม่มีเซิร์ฟเวอร์ส่วนตัวของเกมนี้ จึงเข้าเซิร์ฟเวอร์สาธารณะแทน",
+  "Not enough servers with room were listed, so the rest were matched by Roblox on their own.": "เซิร์ฟเวอร์ที่ยังว่างในรายชื่อมีไม่พอ Roblox จึงจัดบัญชีที่เหลือให้เอง",
+  "Ping takes a Discord user ID (only digits), or a role as <@&id>.": "แท็กต้องเป็น ID ผู้ใช้ Discord (ตัวเลขเท่านั้น) หรือบทบาทในรูปแบบ <@&id>",
   "The launch delay must be between 2 and 60 seconds.": "การหน่วงเวลาเปิดเล่นต้องอยู่ระหว่าง 2 ถึง 60 วินาที",
   "Paste a Discord webhook URL: https://discord.com/api/webhooks/<id>/<token>.": "วาง URL webhook ของ Discord: https://discord.com/api/webhooks/<id>/<token>",
   "**{name}**: the client crashed (place {place}).": "**{name}**: ไคลเอนต์แครช (เพลส {place})",
@@ -299,49 +310,66 @@
   "WebView2 setup failed: {why}": "ตั้งค่า WebView2 ล้มเหลว: {why}",
   "The Roblox sign-in window timed out after 15 minutes. Try again.": "หน้าต่างลงชื่อเข้าใช้ Roblox หมดเวลาหลัง 15 นาที ลองอีกครั้ง",
   "**{name}**: RoALT gave up after {n} relaunches in {minutes} min.": {
-    "other": "**{name}**: RoALT เลิกพยายามหลังเปิดใหม่ {n} ครั้งใน {minutes} นาที",
-    "one": "**{name}**: RoALT gave up after {n} relaunch in {minutes} min."
+    "other": "**{name}**: RoALT เลิกพยายามหลังเปิดใหม่ {n} ครั้งใน {minutes} นาที"
   },
   "{n} clients running · {ram} MB RAM{cpu}.": {
-    "other": "ไคลเอนต์รันอยู่ {n} ตัว · {ram} MB RAM{cpu}",
-    "one": "{n} client running · {ram} MB RAM{cpu}."
+    "other": "ไคลเอนต์รันอยู่ {n} ตัว · {ram} MB RAM{cpu}"
   },
   "…and {n} more.": {
-    "other": "…และอีก {n}",
-    "one": "…and {n} more."
+    "other": "…และอีก {n}"
   },
   "Gave up after {n} rejoins": {
-    "other": "เลิกพยายามหลังเข้าร่วมใหม่ {n} ครั้ง",
-    "one": "Gave up after {n} rejoin"
+    "other": "เลิกพยายามหลังเข้าร่วมใหม่ {n} ครั้ง"
   },
   "{name} wasn't rejoined: it needed {n} rejoins in {minutes} minutes, so RoALT gave up.": {
-    "other": "{name} ไม่ได้เข้าร่วมใหม่: ต้องเข้าร่วมใหม่ {n} ครั้งใน {minutes} นาที RoALT จึงเลิกพยายาม",
-    "one": "{name} wasn't rejoined: it needed {n} rejoin in {minutes} minutes, so RoALT gave up."
+    "other": "{name} ไม่ได้เข้าร่วมใหม่: ต้องเข้าร่วมใหม่ {n} ครั้งใน {minutes} นาที RoALT จึงเลิกพยายาม"
   },
   "Gave up after {n} restarts": {
-    "other": "เลิกพยายามหลังรีสตาร์ต {n} ครั้ง",
-    "one": "Gave up after {n} restart"
+    "other": "เลิกพยายามหลังรีสตาร์ต {n} ครั้ง"
   },
   "{name} wasn't restarted: it needed {n} restarts in {minutes} minutes, so RoALT gave up.": {
-    "other": "{name} ไม่ได้รีสตาร์ต: ต้องรีสตาร์ต {n} ครั้งใน {minutes} นาที RoALT จึงเลิกพยายาม",
-    "one": "{name} wasn't restarted: it needed {n} restart in {minutes} minutes, so RoALT gave up."
+    "other": "{name} ไม่ได้รีสตาร์ต: ต้องรีสตาร์ต {n} ครั้งใน {minutes} นาที RoALT จึงเลิกพยายาม"
   },
   "No server had room for all {n} accounts": {
-    "other": "ไม่มีเซิร์ฟเวอร์ที่ว่างพอสำหรับทั้ง {n} บัญชี",
-    "one": "No server had room for all {n} accounts"
+    "other": "ไม่มีเซิร์ฟเวอร์ที่ว่างพอสำหรับทั้ง {n} บัญชี"
   },
   "{n} alts open": {
-    "other": "เปิดบัญชีรอง {n} บัญชี",
-    "one": "{n} alt open"
+    "other": "เปิดบัญชีรอง {n} บัญชี"
   },
   "Running {n} alts": {
-    "other": "กำลังรันบัญชีรอง {n} บัญชี",
-    "one": "Running {n} alt"
+    "other": "กำลังรันบัญชีรอง {n} บัญชี"
   },
   "{n} alts · {games} games": {
-    "other": "บัญชีรอง {n} · {games} เกม",
-    "one": "{n} alt · {games} games"
+    "other": "บัญชีรอง {n} · {games} เกม"
   },
+  "Make friends takes up to {max} accounts at a time.": "เป็นเพื่อนกันได้ครั้งละไม่เกิน {max} บัญชี",
+  "That Roblox window is still closing. Try again in a moment.": "หน้าต่าง Roblox นั้นยังปิดไม่เสร็จ ลองใหม่อีกครั้งในอีกสักครู่",
+  "Pick AutoHotkey64.exe, the AutoHotkey v2 program.": "เลือก AutoHotkey64.exe ซึ่งเป็นโปรแกรมของ AutoHotkey v2",
+  "That client is already running a macro. Stop it first.": "ไคลเอนต์นั้นกำลังรันมาโครอยู่แล้ว หยุดมันก่อน",
+  "AutoHotkey didn't start: {why}": "AutoHotkey ไม่เริ่มทำงาน: {why}",
+  "Macro {name} stopped with an error: {why}": "มาโคร {name} หยุดทำงานเพราะข้อผิดพลาด: {why}",
+  "Macro {name} stopped with an error.": "มาโคร {name} หยุดทำงานเพราะข้อผิดพลาด",
+  "That client isn't in a game.": "ไคลเอนต์นั้นไม่ได้อยู่ในเกม",
+  "Review {name} on the Macros page before it runs.": "ตรวจดู {name} ในหน้ามาโครก่อนที่จะรัน",
+  "This macro has invisible or text-direction characters. Remove them first.": "มาโครนี้มีอักขระที่มองไม่เห็นหรืออักขระกำหนดทิศทางข้อความ ลบออกก่อน",
+  "Install AutoHotkey v2 to use macros.": "ติดตั้ง AutoHotkey v2 เพื่อใช้มาโคร",
+  "RoALT can't read that file as text. Save it as UTF-8 and import it again.": "RoALT อ่านไฟล์นั้นเป็นข้อความไม่ได้ บันทึกเป็น UTF-8 แล้วนำเข้าอีกครั้ง",
+  "A macro can be at most {max} KiB.": "มาโครมีขนาดได้ไม่เกิน {max} KiB",
+  "{key} is already the panic hotkey.": "{key} เป็นปุ่มลัดฉุกเฉินอยู่แล้ว",
+  "{key} is already the hotkey of {name}.": "{key} เป็นปุ่มลัดของ {name} อยู่แล้ว",
+  "No client in a game can run {name} now.": "ตอนนี้ไม่มีไคลเอนต์ในเกมที่รัน {name} ได้",
+  "Macro {name} didn't start: {why}": "มาโคร {name} ไม่เริ่มทำงาน: {why}",
+  "Macro names need 1 to {max} characters.": "ชื่อมาโครต้องมี 1 ถึง {max} ตัวอักษร",
+  "A macro called \"{name}\" already exists.": "มีมาโครชื่อ \"{name}\" อยู่แล้ว",
+  "Pick Fit or Tiny to see where the windows go.": "เลือก พอดี หรือ จิ๋ว เพื่อดูว่าหน้าต่างจะไปอยู่ตรงไหน",
+  "Pick accounts to see where their windows go.": "เลือกบัญชีเพื่อดูว่าหน้าต่างของบัญชีจะไปอยู่ตรงไหน",
+  "A private server needs a name.": "เซิร์ฟเวอร์ส่วนตัวต้องมีชื่อ",
+  "Only the owner's account can change this.": "เฉพาะบัญชีของเจ้าของเท่านั้นที่เปลี่ยนสิ่งนี้ได้",
+  "Roblox refused this: {why}": "Roblox ปฏิเสธ: {why}",
+  "Roblox refused the purchase and charged nothing: check the price on the game's page.": "Roblox ปฏิเสธการซื้อและไม่ได้เรียกเก็บเงิน: ตรวจสอบราคาในหน้าของเกม",
+  "Roblox wants a verification for this: do it on roblox.com, then try again.": "Roblox ต้องการการยืนยันสำหรับสิ่งนี้: ยืนยันที่ roblox.com แล้วลองอีกครั้ง",
+  "A measurement is already running.": "กำลังวัดอยู่แล้ว",
+  "Start a client and let it reach a game first.": "เปิดไคลเอนต์และรอให้เข้าเกมก่อน",
   "Could not close Roblox (process {pid}).": "Could not close Roblox (process {pid}).",
   "Cordial's profile folder could not be found.": "Cordial's profile folder could not be found.",
   "Could not write the Cordial cookie store: {why}": "Could not write the Cordial cookie store: {why}",
@@ -353,5 +381,7 @@
   "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.": "A headless resolution can be 320 to 7680 pixels wide and 240 to 4320 high.",
   "The downloaded update failed its SHA-256 check.": "The downloaded update failed its SHA-256 check.",
   "That client's window could not be resized.": "That client's window could not be resized.",
-  "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run.": "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run."
+  "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run.": "Roblox on Linux needs Cordial. Install Cordial, or set ROALT_CORDIAL_RUN to its cordial-run.",
+  "That client's window could not be moved.": "That client's window could not be moved.",
+  "Could not clear the previous Roblox sign-in. Try again.": "Could not clear the previous Roblox sign-in. Try again."
 }

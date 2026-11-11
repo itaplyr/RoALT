@@ -9,15 +9,16 @@ v<upstream version>.<linux revision>
 Examples:
 
 ```text
-v0.9.0.1
-v0.9.0.2
-v0.9.1.1
+v0.9.2.1
+v0.9.2.2
+v1.0.0.1
 ```
 
-- `0.9.0` is the upstream RoALT version.
+- `0.9.2` / `1.0.0` is the upstream RoALT version.
 - `.1`, `.2`, ... are Linux-fork releases for that upstream version.
-- When upstream moves to `0.9.1`, the next Linux release starts at `v0.9.1.1`.
-- Four-part tags never collide with upstream's `v0.9.1` tags.
+- The latest Linux tag is `v0.9.2.2` (upstream `0.9.2`). Upstream is now
+  `v1.0.0`, so the next Linux release starts at `v1.0.0.1`.
+- Four-part tags never collide with upstream's three-part tags.
 
 The app version shown in Settings is computed from `Cargo.toml` plus
 `LINUX_REVISION` in `src-tauri/src/self_update_linux.rs`. `Cargo.toml`,
@@ -41,8 +42,8 @@ The app version shown in Settings is computed from `Cargo.toml` plus
 6. Tag and push:
 
    ```bash
-   git tag v0.9.0.1
-   git push fork v0.9.0.1
+   git tag v1.0.0.1
+   git push fork v1.0.0.1
    ```
 
 The **Release Linux** workflow builds the binary and creates a draft release with:

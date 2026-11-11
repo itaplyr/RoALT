@@ -847,6 +847,43 @@ async fn users_by_name_excludes_banned_and_sends_no_cookie() {
 }
 
 #[tokio::test]
+async fn friend_statuses_read_ints_and_strings() {
+    let body = r#"{"data":[{"id":2,"status":1},{"id":3,"status":"RequestSent"},{"id":4,"status":3},{"id":5,"status":"Weird"},{"id":6}]}"#;
+    let (base, reqs) = serve(vec![ok(body)]);
+    let (c, _) = client(&base);
+    let s = c.friend_statuses(4, &Secret::new("OLD"), 1, &[6, 5, 4, 3, 2, 2, 0]).await.unwrap();
+    assert_eq!(s[&2], FriendStatus::Friends);
+    assert_eq!(s[&3], FriendStatus::RequestSent);
+    assert_eq!(s[&4], FriendStatus::RequestReceived);
+    assert_eq!((s[&5], s[&6]), (FriendStatus::NotFriends, FriendStatus::NotFriends));
+    let req = reqs.recv().unwrap();
+    assert_eq!(first_line(&req), "GET /v1/users/1/friends/statuses?userIds=2,3,4,5,6 HTTP/1.1");
+    assert!(has(&req, "\r\ncookie: .ROBLOSECURITY=OLD\r\n"));
+}
+
+#[tokio::test]
+async fn friend_request_and_accept_send_csrf() {
+    let (base, reqs) = serve(vec![csrf_403(), ok("{}"), ok("{}")]);
+    let (c, _) = client(&base);
+    let cookie = Secret::new("OLD");
+    c.request_friendship(4, &cookie, 156).await.unwrap();
+    c.accept_friend(4, &cookie, 261).await.unwrap();
+    let (_, retried, accept) = (reqs.recv().unwrap(), reqs.recv().unwrap(), reqs.recv().unwrap());
+    assert_eq!(first_line(&retried), "POST /v1/users/156/request-friendship HTTP/1.1");
+    assert!(has(&retried, "\r\nx-csrf-token: TOK\r\n"));
+    assert_eq!(first_line(&accept), "POST /v1/users/261/accept-friend-request HTTP/1.1");
+    assert!(has(&accept, "\r\nx-csrf-token: TOK\r\n") && has(&accept, "\r\ncookie: .ROBLOSECURITY=OLD\r\n"));
+}
+
+#[tokio::test]
+async fn friend_request_captcha_is_a_challenge() {
+    let captcha = reply("403 Forbidden", &["rblx-challenge-id: abc", "rblx-challenge-type: captcha", "x-csrf-token: TOK"], "{}");
+    let (base, _reqs) = serve(vec![captcha]);
+    let (c, _) = client(&base);
+    assert!(matches!(c.request_friendship(4, &Secret::new("OLD"), 156).await, Err(AppError::Challenge)));
+}
+
+#[tokio::test]
 async fn friends_online_reads_pascal_case_presence() {
     let body = format!(
         r#"{{"data":[{{"id":156,"name":"builderman","displayName":"Builder","sortScore":1.5,"userPresence":{{
@@ -1149,6 +1186,144 @@ async fn private_servers_without_a_valid_cookie_is_cookie_invalid() {
     let (c, _) = client(&base);
     let r = c.private_servers(4, &Secret::new("OLD"), 920587237, None).await;
     assert!(matches!(r, Err(AppError::CookieInvalid)));
+}
+
+#[tokio::test]
+async fn vip_server_reads_leniently_and_never_keeps_secrets() {
+    use crate::model::{AllowedUser, PrivateServerSettings};
+    let body = format!(
+        r#"{{"id":9,"name":"Mine","game":{{"id":7,"name":"G","rootPlace":{{"id":70}}}},"joinCode":"{ACCESS}","active":true,
+        "link":"https://www.roblox.com/share?code={ACCESS}","accessCode":"{ACCESS}",
+        "subscription":{{"active":false,"expired":false,"expirationDate":"2026-12-01T00:00:00Z","price":100,"canRenew":true}},
+        "permissions":{{"clanAllowed":false,"friendsAllowed":true,"users":[{{"id":3,"name":"alt","displayName":"Alt"}},{{"name":"no id"}}]}}}}"#
+    );
+    let (base, reqs) = serve(vec![ok(&body), ok("{}")]);
+    let (c, _) = client(&base);
+    let cookie = Secret::new("OLD");
+
+    let s = c.vip_server(4, &cookie, 9).await.unwrap();
+    let want = PrivateServerSettings {
+        vip_server_id: 9,
+        name: "Mine".into(),
+        active: true,
+        friends_allowed: true,
+        allowed_users: vec![AllowedUser { user_id: 3, username: "alt".into(), display_name: "Alt".into() }],
+        renews: false,
+        expired: false,
+        expires: Some("2026-12-01T00:00:00Z".into()),
+        price: Some(100),
+    };
+    assert_eq!(s, want);
+    assert!(!serde_json::to_string(&s).unwrap().contains(ACCESS));
+    let req = reqs.recv().unwrap();
+    assert_eq!(first_line(&req), "GET /v1/vip-servers/9 HTTP/1.1");
+    assert!(has(&req, "\r\ncookie: .ROBLOSECURITY=OLD\r\n"));
+
+    // Nothing but the id known: everything off / empty.
+    let bare = c.vip_server(4, &cookie, 9).await.unwrap();
+    assert_eq!(bare, PrivateServerSettings { name: "".into(), active: false, friends_allowed: false, allowed_users: vec![], expires: None, price: None, ..want });
+}
+
+#[tokio::test]
+async fn vip_server_update_sends_only_the_set_parts_after_a_csrf_retry() {
+    use crate::model::PrivateServerPatch;
+    let (base, reqs) = serve(vec![csrf_403(), ok("{}"), ok("{}"), ok("{}")]);
+    let (c, _) = client(&base);
+    let cookie = Secret::new("OLD");
+
+    let patch = PrivateServerPatch {
+        name: Some("  New name ".into()),
+        new_join_code: Some(true),
+        users_to_add: Some(vec![3, 0, 3]),
+        users_to_remove: Some(vec![]),
+        ..Default::default()
+    };
+    c.vip_server_update(4, &cookie, 9, &patch).await.unwrap();
+    let (first, retried, permissions) = (reqs.recv().unwrap(), reqs.recv().unwrap(), reqs.recv().unwrap());
+    assert!(!has(&first, "x-csrf-token"));
+    assert_eq!(first_line(&retried), "PATCH /v1/vip-servers/9 HTTP/1.1");
+    assert!(has(&retried, "\r\nx-csrf-token: TOK\r\n"));
+    assert_eq!(body_of(&retried), serde_json::json!({ "name": "New name", "newJoinCode": true }));
+    assert_eq!(first_line(&permissions), "PATCH /v1/vip-servers/9/permissions HTTP/1.1");
+    assert_eq!(body_of(&permissions), serde_json::json!({ "usersToAdd": [3] }));
+
+    // Only the server part set: no permissions call. `newJoinCode: false` is no change.
+    let patch = PrivateServerPatch { active: Some(false), new_join_code: Some(false), ..Default::default() };
+    c.vip_server_update(4, &cookie, 9, &patch).await.unwrap();
+    let req = reqs.recv().unwrap();
+    assert_eq!((first_line(&req), body_of(&req)), ("PATCH /v1/vip-servers/9 HTTP/1.1", serde_json::json!({ "active": false })));
+}
+
+#[tokio::test]
+async fn vip_server_update_without_changes_or_with_a_blank_name_makes_no_call() {
+    use crate::model::PrivateServerPatch;
+    // No canned answer: any call fails as Network.
+    let (base, _reqs) = serve(vec![]);
+    let (c, _) = client(&base);
+    let cookie = Secret::new("OLD");
+    let empty = PrivateServerPatch { users_to_add: Some(vec![0]), new_join_code: Some(false), ..Default::default() };
+    c.vip_server_update(4, &cookie, 9, &empty).await.unwrap();
+    let blank = PrivateServerPatch { name: Some(" \t ".into()), friends_allowed: Some(true), ..Default::default() };
+    assert!(matches!(c.vip_server_update(4, &cookie, 9, &blank).await, Err(AppError::Invalid(_))));
+    assert!(matches!(c.vip_server_buy(4, &cookie, 7, "  ", 100, ACCESS).await, Err(AppError::Invalid(_))));
+    assert!(matches!(c.vip_server_buy(4, &cookie, 7, "Mine", 100, "").await, Err(AppError::Internal(_))));
+}
+
+#[tokio::test]
+async fn vip_server_subscription_and_buy_bodies() {
+    let (base, reqs) = serve(vec![ok("{}"), ok("{}"), ok(&format!(r#"{{"id":9,"joinCode":"{ACCESS}"}}"#))]);
+    let (c, _) = client(&base);
+    let cookie = Secret::new("OLD");
+
+    c.vip_server_subscription(4, &cookie, 9, true, 100).await.unwrap();
+    c.vip_server_subscription(4, &cookie, 9, false, 100).await.unwrap();
+    for active in [true, false] {
+        let req = reqs.recv().unwrap();
+        assert_eq!(first_line(&req), "PATCH /v1/vip-servers/9/subscription HTTP/1.1");
+        assert_eq!(body_of(&req), serde_json::json!({ "active": active, "price": 100 }));
+    }
+
+    c.vip_server_buy(4, &cookie, 7, " Mine ", 100, ACCESS).await.unwrap();
+    let req = reqs.recv().unwrap();
+    assert_eq!(first_line(&req), "POST /v1/games/vip-servers/7 HTTP/1.1");
+    assert!(has(&req, "\r\ncookie: .ROBLOSECURITY=OLD\r\n"));
+    let want = serde_json::json!({ "name": "Mine", "expectedPrice": 100, "isPurchaseConfirmed": true, "idempotencyKey": ACCESS });
+    assert_eq!(body_of(&req), want);
+}
+
+#[tokio::test]
+async fn vip_server_refusals_map_to_cookie_invalid_and_forbidden() {
+    let not_owner = || reply("403 Forbidden", &[], r#"{"errors":[{"code":0,"message":"Authorization has been denied for this request."}]}"#);
+    let (base, _reqs) = serve(vec![reply("401 Unauthorized", &[], &fixture("private-servers-unauth.json")), not_owner(), not_owner()]);
+    let (c, _) = client(&base);
+    let cookie = Secret::new("OLD");
+    assert!(matches!(c.vip_server(4, &cookie, 9).await, Err(AppError::CookieInvalid)));
+    // A 403 without a CSRF token, even with Roblox's text: not the owner (the command words it so).
+    assert!(c.vip_server_subscription(4, &cookie, 9, false, 100).await.unwrap_err().is_forbidden());
+    assert!(c.vip_server(4, &cookie, 9).await.unwrap_err().is_forbidden());
+}
+
+#[tokio::test]
+async fn vip_server_refusals_quote_robloxs_own_text() {
+    let (base, _reqs) = serve(vec![
+        reply("400 Bad Request", &[], r#"{"errors":[{"code":12,"message":"The price\n is wrong."}]}"#),
+        reply("400 Bad Request", &[], "{}"),
+        reply("403 Forbidden", &[], r#"{"errors":[{"code":2,"message":"Not friends."}]}"#),
+        reply("500 Internal Server Error", &[], r#"{"errors":[{"message":"Oops"}]}"#),
+    ]);
+    let (c, _) = client(&base);
+    let cookie = Secret::new("OLD");
+    let text = |r: crate::error::Result<()>| match r {
+        Err(AppError::Invalid(m)) => m,
+        other => panic!("{:?}", other.err()),
+    };
+    assert!(text(c.vip_server_buy(4, &cookie, 7, "Mine", 99, ACCESS).await).ends_with("The price is wrong."));
+    // No text: the purchase still reads as refused, not as "HTTP 400".
+    assert!(text(c.vip_server_buy(4, &cookie, 7, "Mine", 99, ACCESS).await).contains("charged nothing"));
+    let patch = crate::model::PrivateServerPatch { users_to_add: Some(vec![5]), ..Default::default() };
+    assert!(text(c.vip_server_update(4, &cookie, 9, &patch).await).ends_with("Not friends."));
+    // A 5xx may have gone through: it stays a Roblox error for the UI to treat as unsure.
+    assert!(matches!(c.vip_server_buy(4, &cookie, 7, "Mine", 100, ACCESS).await, Err(AppError::Roblox(_))));
 }
 
 #[test]

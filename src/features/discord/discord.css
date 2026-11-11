@@ -1,0 +1,44 @@
+/* Discord: one column, as wide as Settings'. */
+@layer views {
+  .dc-page {
+    max-width: 840px;
+    margin-inline: auto;
+  }
+  .dc-head {
+    margin-bottom: 24px;
+  }
+  /* The lead is the summary of the page's "More about": body text, not a label. */
+  .dc-lead {
+    margin-top: 4px;
+  }
+  .dc-lead > .disclosure-summary {
+    color: var(--fg-2);
+    font-size: var(--fs-body);
+    font-weight: 400;
+  }
+  .dc-lead .disclosure-body {
+    max-width: 64ch;
+  }
+
+  /* The webhook's state, in a hint's colour; the field for a new URL under the row. */
+  .dc-line {
+    color: var(--fg-2);
+  }
+  .dc-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding-top: 12px;
+  }
+  .dc-url {
+    flex: 1 1 260px;
+    min-width: 0;
+    min-height: var(--h-md);
+  }
+
+  /* One event a row: two to a row, most hints wrapped onto a second line. */
+  .dc-events {
+    margin-top: 32px;
+  }
+}

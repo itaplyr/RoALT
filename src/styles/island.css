@@ -1,0 +1,317 @@
+/* The island: the app's one living control. Items are 36px tiles on a 44px pill; the current one is a
+   solid accent tile wearing its label. Groups (the corner mark) open in place as an inset pill.
+   Widths spring in ui/island (Morph); colours and the ghost are CSS and motion values. */
+@layer components {
+  .island {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    height: var(--island-h);
+    padding: var(--island-pad);
+    border-radius: var(--r-pill);
+    background: var(--island);
+    box-shadow: var(--shadow-island);
+    color: var(--fg-2);
+  }
+  .island-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    height: 100%;
+  }
+  .island-row > .sort-row {
+    display: contents;
+  }
+  .island-slot {
+    display: flex;
+  }
+  /* The liquid layer under the tiles (ui/island Drops). Opaque fills: the goo filter melts by alpha. */
+  .island-drops {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    filter: url(#island-goo);
+  }
+  :root[data-rm] .island-drops {
+    filter: none;
+  }
+  .island-ghost {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: var(--tile);
+    border-radius: var(--r-pill);
+    background: color-mix(in srgb, var(--fg) 9%, var(--island));
+    pointer-events: none;
+  }
+  .island-drop {
+    border-radius: var(--r-pill);
+    background: var(--accent);
+  }
+  .island-group-drop {
+    border-radius: var(--r-pill);
+    background: var(--island-inset);
+    transition: background-color var(--dur-base) var(--ease-out);
+  }
+  /* An open group beside the current place: one drop with it, so light too. */
+  .island[data-linked] .island-group-drop {
+    background: var(--accent);
+  }
+  .island[data-linked] .island-child:not([aria-current="page"]) {
+    color: color-mix(in srgb, var(--on-accent) 78%, var(--accent));
+  }
+  .island[data-linked] .island-child:not([aria-current="page"]):hover,
+  .island[data-linked] .island-child:not([aria-current="page"]):focus-visible {
+    background: color-mix(in srgb, var(--on-accent) 10%, transparent);
+    color: var(--on-accent);
+  }
+
+  .island-item {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    height: var(--tile);
+    min-width: var(--tile);
+    padding: 0 10px;
+    border-radius: var(--r-pill);
+    color: inherit;
+    font-size: var(--fs-small);
+    font-weight: 500;
+    white-space: nowrap;
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out),
+      box-shadow var(--dur-fast) var(--ease-out),
+      scale var(--dur-fast) var(--ease-out);
+  }
+  /* 44px tall targets inside the 44px island. */
+  .island-item::before {
+    content: "";
+    position: absolute;
+    inset: -4px -1px;
+  }
+  .island-item:hover,
+  .island-item:focus-visible {
+    color: var(--fg);
+  }
+  .island-item:active {
+    scale: var(--press-deep);
+  }
+  .island-item:focus-visible {
+    outline-offset: 1px;
+  }
+  /* The current place's fill is the drop under it (.island-drop); the tile keeps the ink. */
+  .island-item[aria-current="page"],
+  .island-item[data-open] {
+    color: var(--on-accent);
+  }
+  .island-item[data-open] {
+    background: transparent;
+    color: var(--fg);
+    box-shadow: none;
+  }
+  /* A group: three dots under its icon ("more inside"); on hover or focus they join into a bar. The
+     side dots are shadows of the middle one, so the join is one transition. */
+  .island-item[data-group]::after {
+    content: "";
+    position: absolute;
+    bottom: 5px;
+    left: 50%;
+    width: 2.5px;
+    height: 2.5px;
+    translate: -50% 0;
+    border-radius: var(--r-pill);
+    background: currentColor;
+    opacity: 0.6;
+    box-shadow:
+      -4.5px 0 0 currentColor,
+      4.5px 0 0 currentColor;
+    transition:
+      width var(--dur-fast) var(--ease-out),
+      box-shadow var(--dur-fast) var(--ease-out),
+      opacity var(--dur-fast) var(--ease-out);
+  }
+  .island-item[data-group]:hover::after,
+  .island-item[data-group]:focus-visible::after {
+    width: 13px;
+    opacity: 1;
+    box-shadow:
+      0 0 0 currentColor,
+      0 0 0 currentColor;
+  }
+  /* The icon rises to make room for the dots; a labelled (current) group keeps its text centred. */
+  .island-item[data-group]:not([aria-current]) > :first-child {
+    translate: 0 -2px;
+  }
+  .island-item[data-group][aria-current="page"]::after {
+    bottom: 3px;
+  }
+  .island-label {
+    display: inline-block;
+    max-width: 144px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .island-count {
+    font-size: var(--fs-meta);
+    font-variant-numeric: tabular-nums;
+    opacity: 0.62;
+  }
+  .island-badge {
+    position: absolute;
+    top: 2px;
+    inset-inline-end: 2px;
+    min-width: 15px;
+    height: 15px;
+    padding: 0 4px;
+    display: grid;
+    place-content: center;
+    border-radius: var(--r-pill);
+    background: var(--fg);
+    color: var(--on-fg);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    box-shadow: 0 0 0 2px var(--island);
+  }
+
+  /* An open group: the inset pill, one step up. */
+  /* Its pill is a drop too (.island-group-drop), so it can melt into the light beside it. */
+  .island-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    height: var(--tile);
+    padding: 3px;
+    border-radius: var(--r-pill);
+  }
+  .island-child {
+    position: relative;
+    z-index: 1;
+    display: inline-grid;
+    place-content: center;
+    flex: none;
+    height: var(--tile-child);
+    min-width: var(--tile-child);
+    padding: 0 7px;
+    border-radius: var(--r-pill);
+    color: var(--fg-2);
+    font-size: var(--fs-small);
+    font-weight: 500;
+    white-space: nowrap;
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out),
+      scale var(--dur-fast) var(--ease-out);
+  }
+  .island-child::before {
+    content: "";
+    position: absolute;
+    inset: -7px -1px;
+  }
+  .island-child:hover,
+  .island-child:focus-visible {
+    background: var(--hover);
+    color: var(--fg);
+  }
+  .island-child:active {
+    scale: var(--press-deep);
+  }
+  .island-child[aria-current="page"] {
+    color: var(--on-accent);
+  }
+  .island-child[data-close] {
+    color: var(--fg-3);
+  }
+
+  .island-sep {
+    width: 1px;
+    height: 20px;
+    margin: 0 4px;
+    flex: none;
+    background: var(--line);
+  }
+
+  /* Live activities: capsules that open island sheets. */
+  .island-capsule {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex: none;
+    height: var(--tile);
+    padding-inline: 10px 12px;
+    border-radius: var(--r-pill);
+    background: var(--island-inset);
+    box-shadow: inset 0 0 0 1px var(--line);
+    color: var(--fg);
+    font-size: var(--fs-small);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out),
+      scale var(--dur-fast) var(--ease-out);
+  }
+  .island-capsule::before {
+    content: "";
+    position: absolute;
+    inset: -4px -1px;
+  }
+  .island-capsule:hover {
+    background: color-mix(in srgb, var(--island-inset) 70%, var(--fg) 8%);
+  }
+  .island-capsule:active {
+    scale: var(--press-deep);
+  }
+  .island-capsule[aria-expanded="true"] {
+    background: var(--accent);
+    color: var(--on-accent);
+    box-shadow: inset 0 0 0 1px var(--accent-ring);
+  }
+  .island-capsule .capsule-detail {
+    /* Holds its Swap: the leaving words sit over the arriving ones. */
+    position: relative;
+    display: inline-flex;
+    max-width: 220px;
+    overflow: hidden;
+    color: var(--fg-2);
+    font-weight: 500;
+  }
+  .island-capsule[aria-expanded="true"] .capsule-detail {
+    color: inherit;
+    opacity: 0.75;
+  }
+  @container titlebar (width < 1180px) {
+    .island-capsule .capsule-detail {
+      display: none;
+    }
+  }
+  .island[data-group-open] .island-capsule .capsule-detail {
+    display: none;
+  }
+  .capsule-ring {
+    flex: none;
+    transform: rotate(-90deg);
+  }
+  .capsule-ring circle {
+    fill: none;
+    stroke-width: 2.5;
+  }
+  .capsule-ring .ring-track {
+    stroke: var(--line);
+  }
+  .capsule-ring .ring-value {
+    stroke: currentColor;
+    stroke-linecap: round;
+  }
+}

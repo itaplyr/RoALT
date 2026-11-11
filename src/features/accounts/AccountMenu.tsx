@@ -1,106 +1,73 @@
-import { menuKeys } from "../../ui/menu";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { api, type AccountSummary } from "../../api";
+import { api, type AccountPatch, type AccountSummary, type Instance } from "../../api";
 import { useUpdateAccount } from "../../data";
-import { Icon, type IconName } from "../../ui/Icon";
-import { toast, toastError } from "../../ui/Toast";
 import { t } from "../../i18n";
+import { ContextMenu, MenuCheckItem, MenuItem, MenuLabel, MenuSeparator } from "../../ui/Popover";
+import { toastError } from "../../ui/Toast";
+import { clip } from "./DetailOverview";
+import { accountName } from "./shared";
 
-export type MenuAt = { account: AccountSummary; x: number; y: number };
+/** Where an account's menu opens: at the pointer, or under its "…" button; focus goes back to `from`.
+ * `solo`: about this account only, whatever is ticked (the detail panel's menu). */
+export type MenuAt = { id: number; x: number; y: number; from: HTMLElement; solo?: boolean };
 
-/** Right-click menu of an account row. With several rows ticked and this one among them,
- * Launch, Validate and Remove apply to all of them. */
-export function AccountMenu({ at, onClose, selection, canLaunch, onLaunch, onValidate, onRemove }: {
+/** An account's menu in two labelled parts: what applies to the ticked rows (when this one is among
+ * several), then what applies to this account alone. */
+export function AccountMenu({ at, account: a, selection, live, canLaunch, onClose, onLaunch, onValidate, onRemove }: {
   at: MenuAt | null;
-  onClose: () => void;
+  /** The account `at` points at, as it is now (the checkboxes follow its edits). */
+  account: AccountSummary | undefined;
   /** Ticked account ids. */
   selection: number[];
+  live: Map<number, Instance>;
   canLaunch: (id: number) => boolean;
+  onClose: () => void;
   onLaunch: (ids: number[]) => void;
   onValidate: (ids: number[]) => void;
   onRemove: (ids: number[]) => void;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState({ left: 0, top: 0 });
   const update = useUpdateAccount();
-  const session = useMutation({ mutationFn: (id: number) => api.accountOpenSession(id) });
-
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el || !at) return;
-    el.showPopover();
-    // Keep it inside the window.
-    const r = el.getBoundingClientRect();
-    setPos({ left: Math.max(4, Math.min(at.x, innerWidth - r.width - 4)), top: Math.max(4, Math.min(at.y, innerHeight - r.height - 4)) });
-    el.querySelector<HTMLElement>(".menu-item:not(:disabled)")?.focus();
-  }, [at]);
-
-  useEffect(() => {
-    const el = ref.current;
-    const toggled = (e: Event) => (e as ToggleEvent).newState === "closed" && onClose();
-    el?.addEventListener("toggle", toggled);
-    return () => el?.removeEventListener("toggle", toggled);
-  }, [onClose]);
-
-  const a = at?.account;
-  const ids = a && selection.length > 1 && selection.includes(a.id) ? selection : a ? [a.id] : [];
+  const ids = a && !at?.solo && selection.length > 1 && selection.includes(a.id) ? selection : a ? [a.id] : [];
   const many = ids.length > 1;
-  const anyValid = ids.some(canLaunch);
-  const run = (f: () => unknown) => () => {
-    ref.current?.hidePopover();
-    void f();
-  };
-  const clip = (text: string, done: string) => writeText(text).then(() => toast(done), toastError);
-
-  const items: ([IconName, string, () => unknown, boolean?] | null)[] = a
-    ? [
-        ["play", many ? t("launch.launchMany", { count: ids.length }) : t("common.launch"), () => onLaunch(ids), !anyValid],
-        ["signin", t("accounts.menu.openSession"), () => session.mutateAsync(a.id).catch(toastError)],
-        ["external", t("accounts.menu.openProfile"), () => openUrl(`https://www.roblox.com/users/${a.userId}/profile`).catch(toastError)],
-        null,
-        ["copy", t("accounts.menu.copyUsername"), () => clip(a.username, t("accounts.menu.usernameCopied"))],
-        ["copy", t("accounts.menu.copyUserId"), () => clip(String(a.userId), t("accounts.menu.userIdCopied"))],
-        null,
-        ["star", a.favourite ? t("accounts.menu.unfavourite") : t("accounts.menu.favourite"), () => update.mutate({ id: a.id, patch: { favourite: !a.favourite } })],
-        [
-          "check",
-          a.allowDisconnect ? t("accounts.menu.disallowDisconnect") : t("accounts.menu.allowDisconnect"),
-          () => update.mutate({ id: a.id, patch: { allowDisconnect: !a.allowDisconnect } }),
-        ],
-        ["refresh", many ? t("accounts.menu.validateMany", { count: ids.length }) : t("accounts.menu.validate"), () => onValidate(ids)],
-        ["trash", many ? t("accounts.menu.removeMany", { count: ids.length }) : t("common.removeEllipsis"), () => onRemove(ids)],
-      ]
-    : [];
+  const save = (patch: AccountPatch) => a && update.mutate({ id: a.id, patch });
+  const inst = a && live.get(a.id);
 
   return (
-    <div
-      ref={ref}
-      popover="auto"
-      role="menu"
-      aria-label={a ? t("accounts.menu.actionsFor", { name: a.username }) : t("accounts.menu.actions")}
-      className="menu"
-      onKeyDown={menuKeys}
-      style={{ position: "fixed", positionArea: "none", inset: "auto", left: pos.left, top: pos.top, margin: 0, maxHeight: "none" }}
-    >
-      {items.map((it, i) =>
-        it === null ? (
-          <div key={i} role="separator" className="h-px my-1 bg-line" />
-        ) : (
-          <button
-            key={it[1]}
-            role="menuitem"
-            className={`menu-item ${it[0] === "trash" ? "text-orange" : ""}`}
-            disabled={it[3]}
-            onClick={run(it[2])}
-          >
-            <Icon name={it[0]} size={12} fill={it[0] === "star" && a?.favourite} />
-            {it[1]}
-          </button>
-        ),
+    <ContextMenu at={a ? at : null} label={a ? t("accounts.menu.actionsFor", { name: accountName(a) }) : t("accounts.menu.actions")} onClose={onClose}>
+      {a && (
+        <>
+          {many && (
+            <>
+              <MenuLabel>{t("accounts.selected", { count: ids.length })}</MenuLabel>
+              {ids.some(canLaunch) && <MenuItem icon="play" onSelect={() => onLaunch(ids)}>{t("common.playEllipsis")}</MenuItem>}
+              <MenuItem icon="refresh" onSelect={() => onValidate(ids)}>{t("accounts.menu.validateMany", { count: ids.length })}</MenuItem>
+              <MenuItem icon="trash" danger onSelect={() => onRemove(ids)}>{t("accounts.menu.removeMany", { count: ids.length })}</MenuItem>
+              <MenuSeparator />
+            </>
+          )}
+          <MenuLabel>@{a.username}</MenuLabel>
+          {inst ? (
+            <MenuItem icon="monitor" onSelect={() => api.instanceShow(inst.id, "focus").catch(toastError)}>{t("home.show")}</MenuItem>
+          ) : (
+            !many && canLaunch(a.id) && <MenuItem icon="play" onSelect={() => onLaunch([a.id])}>{t("common.playEllipsis")}</MenuItem>
+          )}
+          {!many && <MenuItem icon="refresh" onSelect={() => onValidate([a.id])}>{t("accounts.menu.validate")}</MenuItem>}
+          <MenuItem icon="signin" onSelect={() => api.accountOpenSession(a.id).catch(toastError)}>{t("accounts.menu.openSession")}</MenuItem>
+          <MenuItem icon="external" onSelect={() => openUrl(`https://www.roblox.com/users/${a.userId}/profile`).catch(toastError)}>{t("accounts.menu.openProfile")}</MenuItem>
+          <MenuItem icon="copy" onSelect={() => clip(a.username, t("accounts.menu.usernameCopied"))}>{t("accounts.menu.copyUsername")}</MenuItem>
+          <MenuItem icon="copy" onSelect={() => clip(String(a.userId), t("accounts.menu.userIdCopied"))}>{t("accounts.menu.copyUserId")}</MenuItem>
+          <MenuSeparator />
+          <MenuCheckItem checked={a.favourite} onChange={(favourite) => save({ favourite })}>{t("accounts.detail.favourite")}</MenuCheckItem>
+          <MenuCheckItem checked={a.main} onChange={(main) => save({ main })}>{t("accounts.detail.main")}</MenuCheckItem>
+          <MenuCheckItem checked={!a.allowDisconnect} onChange={(back) => save({ allowDisconnect: !back })}>{t("accounts.detail.bringBack")}</MenuCheckItem>
+          {!many && (
+            <>
+              <MenuSeparator />
+              <MenuItem icon="trash" danger onSelect={() => onRemove([a.id])}>{t("common.removeEllipsis")}</MenuItem>
+            </>
+          )}
+        </>
       )}
-    </div>
+    </ContextMenu>
   );
 }

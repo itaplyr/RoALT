@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 
 
-use crate::error::Result;
+use crate::error::{AppError, Result};
 
 pub const MIN_KBPS: u32 = 64;
 pub const MAX_KBPS: u32 = 10_000_000;
@@ -13,7 +13,7 @@ pub fn script(_kbps: u32) -> Result<String> {
 }
 
 pub fn apply(_kbps: u32) -> Result<()> {
-    Ok(())
+    Err(AppError::Invalid("Bandwidth limiting is not available on Linux.".into()))
 }
 
 pub fn boot_ms(now_ms: i64) -> i64 {

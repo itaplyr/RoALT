@@ -1,0 +1,205 @@
+/* The island: one quiet black stage, one living control. Surfaces step by lightness and hairlines;
+   only what floats casts a shadow. Monochrome by default: the accent is white on dark, ink on light,
+   and a user accent (Settings) replaces it. Hue is for status, account identity and live data. */
+@layer tokens {
+  :root {
+    color-scheme: dark;
+    /* Ground and surfaces. --ground also paints the window before the UI (src-tauri main.rs). */
+    --ground: #0a0a0a;
+    --surface-1: #111111; /* panels, cards, the rail */
+    --surface-2: #191919; /* fields, tracks, secondary buttons */
+    --surface-3: #222222; /* tags, pressed tracks */
+    --island: #141414;
+    --island-inset: #222222; /* the open group's pill: one step up, as in the reference */
+    --float: #161616; /* menus, dialogs, toasts, sheets */
+    --thumb: #303030; /* segmented and tab thumbs: a neutral raised tile, not the accent */
+    --hover: rgb(255 255 255 / 0.07);
+    --press: rgb(255 255 255 / 0.11);
+    --sel: rgb(255 255 255 / 0.09);
+    --pick: rgb(255 255 255 / 0.15); /* a pressed filter chip */
+    --pick-ring: rgb(255 255 255 / 0.26);
+    --line: rgb(255 255 255 / 0.08); /* hairlines; never the only cue */
+    --edge: #6e6e6e; /* control boundaries: >= 3:1 on ground, surfaces and the island */
+    /* Text: 16.9 / 9.1 / 6.5 : 1 on the ground. */
+    --fg: #ededed;
+    --fg-2: #b0b0b0;
+    --fg-3: #949494;
+    --fg-disabled: #6a6a6a;
+    --on-fg: #0a0a0a; /* text on an --fg fill (tooltips, badges); never see-through */
+    /* The accent: selection, the one primary action, live progress and focus. */
+    --accent: #f5f5f5;
+    --on-accent: #0a0a0a;
+    --accent-text: #f5f5f5;
+    --accent-ring: transparent; /* a user accent under 3:1 on the island gets an edge */
+    --focus: #f5f5f5;
+    /* Status: always with a shape and a word. */
+    --ok: #4ade80;
+    --info: #60a5fa;
+    --attention: #fb923c;
+    --warn: #fbbf24;
+    --err: #f87171;
+    --tint-pct: 14%;
+    --backdrop: rgb(0 0 0 / 0.6);
+    --scrollbar: rgb(255 255 255 / 0.18);
+
+    /* Shape. Concentric: an inner corner is the outer one less the padding. */
+    --r-pill: 999px;
+    --r-xl: 22px;
+    --r-lg: 16px;
+    --r-md: 12px;
+    --r-sm: 10px;
+    --r-xs: 6px;
+    /* Control heights: default, dense, row actions, tags. */
+    --h-lg: 40px;
+    --h-md: 34px;
+    --h-sm: 28px;
+    --h-xs: 22px;
+    --titlebar-h: 52px;
+    --island-h: 44px;
+    --island-pad: 4px;
+    --tile: 36px;
+    --tile-child: 30px;
+    --row-h: 56px;
+    --page-px: 32px;
+    --page-pt: 24px;
+    --page-gap: 24px;
+
+    /* Type. Geist covers latin, cyrillic and vietnamese; the rest fall back to Windows' own faces. */
+    --font-ui: "Geist Variable", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    --font-code: "Geist Mono Variable", ui-monospace, Consolas, monospace;
+    --fs-micro: 11px;
+    --fs-meta: 12px;
+    --fs-small: 13px;
+    --fs-body: 14px;
+    --fs-section: 16px;
+    --fs-title: 24px;
+    --fs-metric: 28px;
+    --lh-body: 1.5;
+
+    /* Only what floats: each shadow carries its own hairline ring, so floats need no border. */
+    --shadow-island: 0 0 0 1px rgb(255 255 255 / 0.07), 0 8px 24px -6px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.35);
+    --shadow-pop: 0 0 0 1px rgb(255 255 255 / 0.08), 0 16px 40px -8px rgb(0 0 0 / 0.65), 0 4px 12px rgb(0 0 0 / 0.35);
+    --shadow-dialog: 0 0 0 1px rgb(255 255 255 / 0.08), 0 32px 80px -12px rgb(0 0 0 / 0.75);
+    --shadow-thumb: 0 1px 2px rgb(0 0 0 / 0.5);
+
+    /* Motion. Mirrored in src/ui/motion/tokens.ts (a dev check compares them). */
+    --dur-instant: 80ms;
+    --dur-fast: 140ms;
+    --dur-base: 200ms;
+    --dur-slow: 320ms;
+    --dur-exit: 120ms;
+    --dur-dialog-exit: 160ms;
+    --dur-view-in: 460ms;
+    --dur-view-out: 220ms;
+    --dur-move: 220ms;
+    --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-in: cubic-bezier(0.4, 0, 1, 1);
+    --ease-inout: cubic-bezier(0.65, 0, 0.35, 1);
+    /* The liquid spring (bounce .34), sampled from its closed form; it lasts --dur-spring. It
+       overshoots about 6% and settles: what moves or grows lands with a little give. */
+    --spring: linear(0, 0.051, 0.172, 0.327, 0.489, 0.64, 0.769, 0.873, 0.952, 1.006, 1.039, 1.057, 1.063, 1.061, 1.054, 1.044, 1.034, 1.024, 1.016, 1.009, 1.004, 1, 0.998, 0.997, 0.996, 0.996, 0.997, 0.997, 0.998, 0.998, 0.999, 0.999, 1);
+    /* Bounce .12: for what should settle without a wobble (labels, fills). */
+    --spring-soft: linear(0, 0.048, 0.158, 0.292, 0.427, 0.552, 0.659, 0.747, 0.818, 0.872, 0.913, 0.943, 0.965, 0.979, 0.989, 0.996, 0.999, 1.002, 1.003, 1.003, 1.003, 1.003, 1.002, 1.002, 1.001, 1.001, 1.001, 1.001, 1, 1, 1, 1, 1);
+    --dur-spring: 520ms;
+    --dur-spring-slow: 700ms;
+    --rise-sm: 6px;
+    --rise-md: 14px;
+    --pop-scale: 0.9;
+    /* A menu's first size and corners as it swells out of its trigger. */
+    --drop-scale: 0.6;
+    --drop-radius: 32px;
+    --press-scale: 0.95;
+    --press-deep: 0.9; /* island tiles and icon circles press deeper */
+
+    /* Legacy names, so views not yet redesigned keep working on the new tokens. */
+    --frame: var(--ground);
+    --bg: var(--ground);
+    --panel: var(--surface-1);
+    --raised: var(--surface-2);
+    --text: var(--fg);
+    --dim: var(--fg-2);
+    --grey: var(--fg-3);
+    --blue: var(--info);
+    --orange: var(--attention);
+    --line-strong: var(--edge);
+    --hair: var(--line);
+    --on: var(--accent);
+    --on-ink: var(--on-accent);
+    --ease: var(--ease-out);
+  }
+
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --ground: #f3f3f3;
+    --surface-1: #ffffff;
+    --surface-2: #ececec;
+    --surface-3: #e2e2e2;
+    --island: #ffffff;
+    --island-inset: #ececec;
+    --float: #ffffff;
+    --thumb: #ffffff;
+    --hover: rgb(0 0 0 / 0.05);
+    --press: rgb(0 0 0 / 0.09);
+    --sel: rgb(0 0 0 / 0.06);
+    --pick: rgb(0 0 0 / 0.08);
+    --pick-ring: rgb(0 0 0 / 0.28);
+    --line: rgb(0 0 0 / 0.09);
+    --edge: #7c7c7c;
+    --fg: #111111;
+    --fg-2: #4d4d4d;
+    --fg-3: #616161;
+    --fg-disabled: #9c9c9c;
+    --on-fg: #f3f3f3;
+    --accent: #111111;
+    --on-accent: #ffffff;
+    --accent-text: #111111;
+    --focus: #111111;
+    --ok: #166534;
+    --info: #1d4ed8;
+    --attention: #9a3412;
+    --warn: #854d0e;
+    --err: #b91c1c;
+    --tint-pct: 10%;
+    --backdrop: rgb(17 17 17 / 0.28);
+    --scrollbar: rgb(0 0 0 / 0.22);
+    --shadow-island: 0 0 0 1px rgb(0 0 0 / 0.07), 0 8px 24px -8px rgb(0 0 0 / 0.16), 0 2px 6px rgb(0 0 0 / 0.06);
+    --shadow-pop: 0 0 0 1px rgb(0 0 0 / 0.08), 0 16px 40px -8px rgb(0 0 0 / 0.18), 0 4px 12px rgb(0 0 0 / 0.06);
+    --shadow-dialog: 0 0 0 1px rgb(0 0 0 / 0.08), 0 32px 80px -12px rgb(0 0 0 / 0.25);
+    --shadow-thumb: 0 1px 3px rgb(0 0 0 / 0.14), 0 0 0 1px rgb(0 0 0 / 0.04);
+  }
+
+  /* A chosen accent (src/app/theme.ts sets these on <html>, contrast-checked per theme). */
+  :root[data-accent] {
+    --accent: var(--user-accent);
+    --on-accent: var(--user-on-accent);
+    --accent-text: var(--user-accent-text);
+    --focus: var(--user-accent-text);
+    --accent-ring: var(--user-accent-ring, transparent);
+  }
+
+  /* Faces for scripts Geist doesn't carry, and the line height Thai needs. */
+  :root:lang(ar) {
+    --font-ui: "Segoe UI Variable Text", "Segoe UI", "Geist Variable", system-ui, sans-serif;
+  }
+  :root:lang(th) {
+    --font-ui: "Geist Variable", "Leelawadee UI", "Segoe UI", system-ui, sans-serif;
+    --lh-body: 1.6;
+  }
+  :root:lang(ja) {
+    --font-ui: "Geist Variable", "Yu Gothic UI", "Meiryo UI", system-ui, sans-serif;
+  }
+  :root:lang(zh) {
+    --font-ui: "Geist Variable", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  :root:lang(ko) {
+    --font-ui: "Geist Variable", "Malgun Gothic", system-ui, sans-serif;
+  }
+  :root:is(:lang(ja), :lang(zh), :lang(ko), :lang(th)) {
+    --fs-micro: 12px;
+  }
+  @media (max-width: 1100px) {
+    :root {
+      --page-px: 24px;
+    }
+  }
+}

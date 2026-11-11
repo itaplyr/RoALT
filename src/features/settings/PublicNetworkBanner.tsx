@@ -1,17 +1,38 @@
+import "./settings.css";
+import { AnimatePresence, motion } from "motion/react";
 import type { Settings } from "../../api";
 import { useNetwork } from "../../data";
 import { Icon } from "../../ui/Icon";
+import { RISE, SPRING, TWEEN } from "../../ui/motion";
 import { t } from "../../i18n";
 
-/** Under the title bar while the public-network guard is on and a Public network is connected
- * (`network`): what RoALT refuses there. */
-export function PublicNetworkBanner({ settings }: { settings: Settings }) {
+/** Whether launching is blocked here: a Public network with the guard on (`network`). */
+export function usePublicBlock(settings: Settings | undefined) {
   const onPublic = useNetwork().data?.public;
-  if (!onPublic || settings.allowPublicNetworks) return null;
+  return !!onPublic && settings?.allowPublicNetworks === false;
+}
+
+/** While the vault is locked (no island), the public-network block as a slim pill under the title
+ * bar. It drops in from where the island would be, and lifts away faster. */
+export function PublicNetworkBanner({ settings }: { settings: Settings }) {
+  const blocked = usePublicBlock(settings);
+  // The live region stays put (out of the layout); only its words come and go, so they are read.
   return (
-    <div role="status" className="enter panel flex-none flex flex-wrap items-center gap-x-4 gap-y-2 mx-3 mt-1 mb-2 px-4 py-2.5">
-      <Icon name="lock" />
-      <span className="flex-1 min-w-0">{t("settings.publicBannerBlocked")}</span>
+    <div role="status" className="contents">
+      <AnimatePresence>
+        {blocked && (
+          <motion.div
+            key="public"
+            className="set-public-pill"
+            initial={{ opacity: 0, y: -RISE.md }}
+            animate={{ opacity: 1, y: 0, transition: SPRING.smooth }}
+            exit={{ opacity: 0, y: -RISE.sm, transition: TWEEN.exit }}
+          >
+            <Icon name="globe" size={14} />
+            <span>{t("settings.publicBannerBlocked")}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

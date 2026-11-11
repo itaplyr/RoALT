@@ -1,0 +1,255 @@
+/* Macros: the scripts, what runs them, and what runs now. Rows keep the settings kit's rhythm. */
+@layer views {
+  .mac-page {
+    max-width: 840px;
+    margin-inline: auto;
+  }
+  .mac-top {
+    display: grid;
+    gap: 14px;
+    margin-bottom: 24px;
+  }
+  .mac-lead {
+    margin-top: 4px;
+  }
+  .mac-lead > .disclosure-summary {
+    color: var(--fg-2);
+    font-size: var(--fs-body);
+    font-weight: 400;
+  }
+  .mac-lead .disclosure-body {
+    max-width: 64ch;
+  }
+
+  /* A risk said in one line, the rest of it one click away; and the same caution in the review. */
+  .mac-warn {
+    padding: 8px 14px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: color-mix(in srgb, var(--warn) 7%, var(--surface-1));
+  }
+  .mac-warn > .disclosure-summary {
+    width: auto;
+    color: var(--fg);
+    font-size: var(--fs-body);
+  }
+  .mac-warn .disclosure-body {
+    padding: 2px 0 6px;
+    padding-inline-start: 24px;
+  }
+  .mac-caution {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding-block: 10px;
+    line-height: 1.5;
+  }
+  .mac-caution > svg {
+    margin-top: 3px;
+  }
+
+  .mac-ahk {
+    color: var(--fg-2);
+  }
+  .mac-ahk .mono {
+    overflow-wrap: anywhere;
+  }
+  .mac-missing {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+  }
+  .mac-missing > svg {
+    margin-top: 3px;
+  }
+
+  .mac-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 16px;
+    margin-bottom: 10px;
+    padding-inline: 2px;
+  }
+  .mac-tools {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .mac-reason {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 2px 10px;
+    color: var(--fg-2);
+    font-size: var(--fs-small);
+  }
+  .mac-reason > svg {
+    color: var(--warn);
+  }
+
+  /* One panel of rows apart by hairlines, concentric with it (16 outside, 4 padding, 12 here). */
+  .mac-list {
+    padding: 4px;
+  }
+  .mac-item {
+    position: relative;
+  }
+  .mac-item + .mac-item::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    inset-inline: 14px;
+    height: 1px;
+    background: var(--line);
+  }
+  .mac-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 20px;
+    min-height: 60px;
+    padding: 12px 14px;
+  }
+  .mac-what {
+    flex: 1 1 240px;
+    min-width: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+  }
+  .mac-stack {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+  }
+  .mac-name {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500;
+  }
+  .mac-sub {
+    color: var(--fg-3);
+    font-size: var(--fs-small);
+  }
+  /* "Run on launch" waits on Auto-run: dimmed while that is off, with the words beside it. */
+  .mac-launch {
+    transition: opacity var(--dur-base) var(--ease-out);
+  }
+  .mac-launch[data-off] {
+    opacity: 0.5;
+  }
+  .mac-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .mac-empty {
+    padding: 28px 14px;
+    color: var(--fg-2);
+    text-align: center;
+    text-wrap: pretty;
+  }
+  .mac-running {
+    padding-top: 32px;
+  }
+
+  /* Dialogs. */
+  .mac-form {
+    display: grid;
+    gap: 16px;
+  }
+  .mac-key {
+    max-width: 280px;
+  }
+  .mac-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .mac-hint {
+    color: var(--fg-3);
+    font-size: var(--fs-small);
+  }
+  .mac-script {
+    height: clamp(160px, 30vh, 400px);
+    /* No drag handle: the dialog's height springs after its content, and would chase the drag. */
+    resize: none;
+    white-space: pre;
+    tab-size: 4;
+    font-size: var(--fs-meta);
+  }
+  /* In the smallest window the editor scrolls: Save stays in reach, and so does what refused it (a
+     block, so the error opens over the buttons without a flex gap appearing at once). */
+  .mac-foot {
+    display: block;
+    position: sticky;
+    bottom: 0;
+    margin-top: -12px;
+    padding-top: 12px;
+    background: var(--float);
+  }
+  .mac-foot .mac-error {
+    padding: 0 0 12px;
+  }
+  .mac-clients {
+    max-height: 280px;
+    margin-top: 6px;
+    padding: 6px;
+  }
+  .mac-picks {
+    display: grid;
+    gap: 2px;
+  }
+  .mac-pick {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
+    padding: 0 10px;
+    border-radius: var(--r-xs);
+    cursor: pointer;
+    transition: background-color var(--dur-fast) var(--ease-out);
+  }
+  .mac-pick:hover {
+    background: var(--hover);
+  }
+  .mac-pick:has(:checked) {
+    background: var(--sel);
+  }
+  .mac-pick:has(:disabled) {
+    cursor: default;
+  }
+  .mac-pick-note {
+    margin-inline-start: auto;
+    flex: none;
+    color: var(--fg-3);
+    font-size: var(--fs-small);
+  }
+  .mac-none {
+    display: grid;
+    justify-items: center;
+    gap: 10px;
+    padding: 20px 12px;
+    color: var(--fg-2);
+    text-align: center;
+  }
+  .mac-source {
+    max-height: 50vh;
+    margin-top: 12px;
+    padding: 12px 14px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    tab-size: 4;
+    font-size: var(--fs-meta);
+  }
+  .mac-error {
+    padding-top: 12px;
+  }
+}

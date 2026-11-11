@@ -1,0 +1,325 @@
+/* Settings' screen, and the settings kit's rows (Performance, Discord and Macros draw them too). */
+@layer views {
+  .set-page {
+    max-width: 840px;
+    margin-inline: auto;
+  }
+  .set-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px 24px;
+    margin-bottom: 24px;
+  }
+  .set-search {
+    flex: 0 1 280px;
+    min-width: 200px;
+  }
+
+  /* A group: its heading, then one panel of rows. More room above a heading than below it. */
+  .set-section + .set-section {
+    margin-top: 32px;
+  }
+  .set-heading {
+    margin-bottom: 10px;
+    padding-inline: 2px;
+  }
+  .set-group {
+    padding: 4px;
+  }
+
+  /* A row: its words at the start, its control at the end, wrapping under the words when narrow.
+     Concentric with the panel: 16px outside, 4px padding, 12px here. */
+  .set-row {
+    position: relative;
+    padding: 14px;
+    border-radius: var(--r-md);
+  }
+  .set-wrap {
+    position: relative;
+  }
+  :is(.set-row, .set-wrap) + :is(.set-row, .set-wrap)::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    inset-inline: 14px;
+    height: 1px;
+    background: var(--line);
+  }
+  .set-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 24px;
+  }
+  .set-text {
+    flex: 1 1 240px;
+    min-width: 0;
+  }
+  .set-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    min-height: 22px;
+    min-width: 0;
+  }
+  .set-label {
+    font-weight: 500;
+  }
+  .set-hint {
+    margin-top: 2px;
+    color: var(--fg-2);
+    font-size: var(--fs-small);
+    text-wrap: pretty;
+  }
+  .set-hint > [data-more] {
+    cursor: pointer;
+  }
+  .set-detail {
+    margin-top: 4px;
+    min-width: 0;
+    color: var(--fg-3);
+    font-size: var(--fs-small);
+  }
+  .set-control {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    max-width: 100%;
+  }
+  .set-control:empty {
+    display: none;
+  }
+
+  /* "More about": a quiet chevron after the hint; its text opens to its height under the row. */
+  .set-more-btn {
+    display: inline-grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    margin-block: -4px;
+    margin-inline-start: 4px;
+    vertical-align: middle;
+    border-radius: var(--r-pill);
+    color: var(--fg-3);
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out);
+  }
+  .set-more-btn:hover,
+  .set-more-btn[aria-expanded="true"] {
+    color: var(--fg);
+  }
+  .set-more-btn:hover {
+    background: var(--hover);
+  }
+  .set-more {
+    display: grid;
+    gap: 6px;
+    max-width: 64ch;
+    padding-top: 10px;
+    color: var(--fg-2);
+    font-size: var(--fs-small);
+    line-height: 1.55;
+    text-wrap: pretty;
+  }
+
+  /* Rows that depend on this one: indented, one surface step up. */
+  .set-subs-pad {
+    padding-top: 12px;
+    padding-inline-start: 16px;
+  }
+  .set-subs {
+    padding: 2px;
+    border-radius: var(--r-md);
+    background: color-mix(in srgb, var(--surface-2) 70%, var(--surface-1));
+  }
+  .set-subs .set-row {
+    padding: 12px;
+    border-radius: var(--r-sm);
+  }
+  .set-subs :is(.set-row, .set-wrap) + :is(.set-row, .set-wrap)::before {
+    inset-inline: 12px;
+  }
+
+  .set-result,
+  .set-error {
+    padding-top: 8px;
+    font-size: var(--fs-small);
+  }
+  .set-result {
+    color: var(--fg-2);
+  }
+
+  /* Search results: groups spaced like an area's (inside each item, so a leaving one folds whole). */
+  .set-results > * + * > .set-section {
+    padding-top: 32px;
+  }
+  /* A hit in another view: the whole row goes there. */
+  .set-link {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    text-align: start;
+    transition: background-color var(--dur-fast) var(--ease-out);
+  }
+  .set-link:hover {
+    background: var(--hover);
+  }
+  .set-link-icon {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--r-pill);
+    background: var(--surface-2);
+    color: var(--fg-2);
+  }
+  .set-go {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    flex: none;
+    color: var(--fg-3);
+    font-size: var(--fs-small);
+    transition: color var(--dur-fast) var(--ease-out);
+  }
+  .set-link:hover .set-go {
+    color: var(--fg);
+  }
+
+  /* Accent swatches. The ring that marks the pick is one element that travels between them. */
+  .set-swatches {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+  }
+  .set-swatches .swatch[aria-pressed="true"]:not(:focus-visible) {
+    outline-color: transparent;
+  }
+  .set-ring {
+    position: absolute;
+    inset: -4px;
+    border: 2px solid var(--fg);
+    border-radius: var(--r-pill);
+    pointer-events: none;
+  }
+  /* The swatches keep their own colours there, the ring with them: a system one, so it shows. */
+  @media (forced-colors: active) {
+    .set-ring {
+      border-color: Highlight;
+    }
+  }
+  /* Monochrome: half white, half ink, in either theme. */
+  .set-mono {
+    background: var(--fg);
+  }
+  .set-mono-half {
+    position: absolute;
+    inset: 1px;
+    border-radius: var(--r-pill);
+    background: var(--on-fg);
+    clip-path: inset(0 0 0 50%);
+  }
+  .set-custom {
+    display: grid;
+    place-items: center;
+    background: var(--surface-3);
+    color: var(--fg-2);
+    cursor: pointer;
+  }
+  .set-custom input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+  }
+  .set-custom:has(:focus-visible) {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  .set-thumb {
+    flex: none;
+    width: 44px;
+    height: 28px;
+    border-radius: var(--r-xs);
+    object-fit: cover;
+    outline: 1px solid var(--line);
+    outline-offset: -1px;
+  }
+  .set-volume {
+    flex: 0 1 160px;
+  }
+  .set-net {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+  /* The import's report: four counts in one well. */
+  .set-report {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    padding: 14px 16px;
+  }
+  .set-count {
+    font-size: var(--fs-metric);
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+  }
+
+  /* Shortcuts: two lists side by side when there is room, rows apart by hairlines. */
+  .set-keys {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    column-gap: 8px;
+  }
+  .set-key {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    min-height: 44px;
+    padding: 8px 14px;
+  }
+  .set-key + .set-key::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    inset-inline: 14px;
+    height: 1px;
+    background: var(--line);
+  }
+
+  /* While locked there is no island: the public-network block is a slim pill under the title bar. */
+  .set-public-pill {
+    flex: none;
+    align-self: center;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    padding-block: 7px;
+    padding-inline: 12px 16px;
+    border-radius: var(--r-pill);
+    background: color-mix(in srgb, var(--attention) 8%, var(--surface-1));
+    outline: 1px solid var(--line);
+    outline-offset: -1px;
+    color: var(--fg-2);
+    font-size: var(--fs-small);
+  }
+  .set-public-pill > svg {
+    color: var(--attention);
+  }
+}

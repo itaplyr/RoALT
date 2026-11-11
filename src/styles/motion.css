@@ -1,0 +1,500 @@
+/* Keyframes, motion utilities, view transitions and the reduced-motion rules. Unlayered on purpose:
+   these must win over every layered rule. Durations and curves come from tokens.css. */
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    translate: 0 var(--rise-md);
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes nudge {
+  0%,
+  100% {
+    translate: 0;
+  }
+  20% {
+    translate: -6px 0;
+  }
+  40% {
+    translate: 5px 0;
+  }
+  60% {
+    translate: -3px 0;
+  }
+  80% {
+    translate: 2px 0;
+  }
+}
+@keyframes nudge2 {
+  0%,
+  100% {
+    translate: 0;
+  }
+  20% {
+    translate: -6px 0;
+  }
+  40% {
+    translate: 5px 0;
+  }
+  60% {
+    translate: -3px 0;
+  }
+  80% {
+    translate: 2px 0;
+  }
+}
+@keyframes spin {
+  to {
+    rotate: 360deg;
+  }
+}
+@keyframes breathe {
+  50% {
+    opacity: 0.55;
+  }
+}
+@keyframes slide {
+  from {
+    translate: -100% 0;
+  }
+  to {
+    translate: 100% 0;
+  }
+}
+@keyframes drain {
+  to {
+    scale: 0 1;
+  }
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@keyframes flash-row {
+  0%,
+  100% {
+    background-color: transparent;
+  }
+  30% {
+    background-color: color-mix(in srgb, var(--accent-text) 14%, transparent);
+  }
+}
+
+/* "backwards" only: a finished rise must not pin anything (drag-to-reorder sets transform inline). */
+.enter {
+  animation: rise var(--dur-base) var(--ease-out) backwards;
+}
+.shake {
+  animation: nudge 0.42s var(--ease-out);
+}
+.shake2 {
+  animation: nudge2 0.42s var(--ease-out);
+}
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+.pulse {
+  animation: pulse 1.1s ease-in-out infinite;
+}
+/* Loading placeholder: a flat fill at the content's size, breathing. No shimmer. */
+.skel {
+  border-radius: var(--r-xs);
+  background: var(--surface-3);
+  animation: breathe 1.6s ease-in-out infinite;
+}
+/* An indeterminate bar: a short slice runs across (compositor only). */
+.live-bar {
+  position: relative;
+  height: 3px;
+  border-radius: var(--r-pill);
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.live-bar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  border-radius: inherit;
+  background: var(--accent-text);
+  animation: slide 1.1s var(--ease-inout) infinite;
+}
+.drain {
+  transform-origin: left;
+  animation: drain 20s linear forwards;
+}
+:root[dir="rtl"] .drain {
+  transform-origin: right;
+}
+.flash {
+  animation: flash-row 0.9s var(--ease-out);
+}
+/* Press feedback with the individual property, so it never fights motion's transform. */
+.press:active {
+  scale: var(--press-scale);
+}
+
+/* Numbers, IDs and links read left to right in every language. */
+.mono {
+  unicode-bidi: plaintext;
+}
+input.mono,
+textarea.mono {
+  direction: ltr;
+  text-align: left;
+}
+
+/* "Hold to stop all": fills with a bright edge, its label presses in and trembles near the end, and
+   it drains if let go. The label and not the button: a moving edge would slip out from under the
+   pointer and end the hold. */
+.hold-label {
+  display: inline-block;
+}
+.hold-btn[data-held] .hold-label {
+  animation: hold-tremble var(--hold) linear forwards;
+}
+.hold-fill {
+  position: absolute;
+  inset: 0;
+  transform: scaleX(0);
+  transform-origin: left;
+  background: linear-gradient(to right, color-mix(in srgb, var(--err) 22%, transparent) 88%, color-mix(in srgb, var(--err) 70%, transparent));
+  transition: transform 0.22s var(--ease-out);
+}
+:root[dir="rtl"] .hold-fill {
+  transform-origin: right;
+  background: linear-gradient(to left, color-mix(in srgb, var(--err) 22%, transparent) 88%, color-mix(in srgb, var(--err) 70%, transparent));
+}
+.hold-btn[data-held] .hold-fill {
+  transform: scaleX(1);
+  transition: transform var(--hold) linear;
+}
+.hold-btn[data-busy] .hold-fill {
+  transform: scaleX(1);
+  animation: hold-busy 0.9s ease-in-out infinite;
+}
+@keyframes hold-tremble {
+  0%, 64% { transform: scale(0.975); }
+  70% { transform: scale(0.975) translateX(-0.5px); }
+  76% { transform: scale(0.975) translateX(0.5px); }
+  82% { transform: scale(0.97) translateX(-1px); }
+  88% { transform: scale(0.97) translateX(1px); }
+  94% { transform: scale(0.965) translateX(-1.5px); }
+  100% { transform: scale(0.965) translateX(1.5px); }
+}
+@keyframes hold-busy {
+  50% { opacity: 0.45; }
+}
+
+/* View switches (src/app/Shell): only the content cross-fades; the bar, island and rail stay live. */
+:root {
+  view-transition-name: none;
+}
+::view-transition {
+  pointer-events: none;
+}
+::view-transition-group(*) {
+  animation-duration: var(--dur-view-in);
+}
+/* Liquid: the old page melts (blur, a little smaller, fading) while the new one pours in from where
+   the press was (--vt-x/--vt-y, set by ui/motion/reactive), sharpening as it spreads. */
+::view-transition-old(.view-out) {
+  animation: vt-out var(--dur-view-out) var(--ease-in) both;
+}
+::view-transition-new(.view-in) {
+  animation:
+    vt-reveal var(--dur-view-in) var(--ease-inout) both,
+    vt-in var(--dur-view-in) var(--spring) both;
+}
+@keyframes vt-out {
+  to {
+    opacity: 0;
+    filter: blur(8px);
+    scale: 0.97;
+  }
+}
+@keyframes vt-in {
+  from {
+    filter: blur(6px);
+    scale: 1.015;
+  }
+}
+@keyframes vt-reveal {
+  from {
+    clip-path: circle(0px at var(--vt-x, 50%) var(--vt-y, 0px));
+  }
+  to {
+    clip-path: circle(150vmax at var(--vt-x, 50%) var(--vt-y, 0px));
+  }
+}
+/* The theme switch: one snapshot of the whole window cross-fades, nothing else moves. */
+:root[data-vt="theme"] {
+  view-transition-name: root;
+}
+:root[data-vt="theme"]::view-transition-old(root),
+:root[data-vt="theme"]::view-transition-new(root) {
+  animation-duration: 0.22s;
+  animation-timing-function: var(--ease-out);
+}
+/* While the theme flips, nothing transitions on its own (a long list would freeze the window). */
+:root[data-instant] *,
+:root[data-instant] *::before,
+:root[data-instant] *::after {
+  transition: none !important;
+}
+
+/* ---- Liquid highlights (ui/motion/liquid places them; they start hidden until measured) ---- */
+.lq-drop {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  opacity: 0;
+  pointer-events: none;
+  will-change: transform, width;
+}
+
+/* ---- Reactive surfaces (ui/motion/reactive sets the attributes and variables) ---- */
+
+/* A press leaves ink where it landed: a circle that spreads and fades, clipped to the control. */
+.menu-item {
+  position: relative;
+}
+.lq-ink {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  pointer-events: none;
+}
+.lq-ripple {
+  position: absolute;
+  width: 240px;
+  height: 240px;
+  margin: -120px 0 0 -120px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0;
+  animation: lq-ripple 620ms var(--ease-out) forwards;
+}
+@keyframes lq-ripple {
+  from {
+    opacity: 0.22;
+    scale: 0;
+  }
+  to {
+    opacity: 0;
+    scale: 1;
+  }
+}
+
+/* A chip's pressed fill blooms from the press point and drains back to it. */
+.chip {
+  isolation: isolate;
+  overflow: hidden;
+}
+.chip[aria-pressed="true"],
+.chip[data-on] {
+  background: var(--surface-2);
+}
+.chip::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  left: var(--px, 50%);
+  top: var(--py, 50%);
+  width: 280px;
+  height: 280px;
+  margin: -140px 0 0 -140px;
+  border-radius: 50%;
+  background: var(--pick);
+  scale: 0;
+  transition: scale 240ms var(--ease-in);
+  pointer-events: none;
+}
+.chip[aria-pressed="true"]::before,
+.chip[data-on]::before {
+  scale: 1;
+  transition: scale 560ms var(--spring-soft);
+}
+
+/* Primary buttons lean a little toward the pointer and spring back when it leaves. */
+.btn-primary,
+.btn-play {
+  translate: var(--lx, 0px) var(--ly, 0px);
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    scale var(--dur-spring) var(--spring),
+    opacity var(--dur-fast) var(--ease-out),
+    translate var(--dur-spring) var(--spring);
+}
+
+/* A switch's thumb stretches as it travels and squashes when it lands (only once it was pressed). */
+.switch[data-moved][aria-checked="true"]::after {
+  transform-origin: left center;
+  animation: lq-thumb-on var(--dur-spring) var(--ease-out);
+}
+.switch[data-moved][aria-checked="false"]::after {
+  transform-origin: right center;
+  animation: lq-thumb-off var(--dur-spring) var(--ease-out);
+}
+:root[dir="rtl"] .switch[data-moved][aria-checked="true"]::after {
+  transform-origin: right center;
+}
+:root[dir="rtl"] .switch[data-moved][aria-checked="false"]::after {
+  transform-origin: left center;
+}
+@keyframes lq-thumb-on {
+  0% { transform: scaleX(1); }
+  35% { transform: scaleX(1.55); }
+  70% { transform: scale(0.88, 1.08); }
+  100% { transform: none; }
+}
+@keyframes lq-thumb-off {
+  0% { transform: scaleX(1); }
+  35% { transform: scaleX(1.55); }
+  70% { transform: scale(0.88, 1.08); }
+  100% { transform: none; }
+}
+
+/* A checkbox wobbles like jelly when pressed, and its tick draws itself. */
+.cb[data-moved]:checked {
+  animation: lq-jelly 460ms var(--ease-out);
+}
+.cb[data-moved]:not(:checked) {
+  animation: lq-jelly2 460ms var(--ease-out);
+}
+.cb[data-moved]:checked::after {
+  animation: lq-tick 300ms var(--ease-out) 80ms both;
+}
+@keyframes lq-jelly {
+  30% { scale: 0.8 0.86; }
+  55% { scale: 1.14 1.08; }
+  80% { scale: 0.96; }
+}
+@keyframes lq-jelly2 {
+  30% { scale: 0.8 0.86; }
+  55% { scale: 1.14 1.08; }
+  80% { scale: 0.96; }
+}
+@keyframes lq-tick {
+  from { clip-path: inset(0 0 0 100%); }
+  to { clip-path: inset(0 0 0 0); }
+}
+
+/* Client cards: a soft light follows the pointer across the card's own surface (behind its content,
+   never over the live picture). No tilt: the cards are drag-to-reorder tiles. */
+.home-card {
+  isolation: isolate;
+}
+.home-card::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  left: var(--mx, 50%);
+  top: var(--my, 50%);
+  width: 360px;
+  height: 360px;
+  margin: -180px 0 0 -180px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--fg) 9%, transparent), transparent);
+  opacity: 0;
+  transition: opacity 300ms var(--ease-out);
+  pointer-events: none;
+}
+.home-card:hover::after {
+  opacity: 1;
+}
+
+/* Reduced motion (html[data-rm], from Settings › Motion or ?rm=1 in dev): no travel, no scale, no
+   loops; colour and opacity feedback stays, and so does progress that means something. The splash
+   plays regardless: it is the brand's one moment. */
+:root[data-rm] {
+  --rise-sm: 0px;
+  --rise-md: 0px;
+  --pop-scale: 1;
+  --drop-scale: 1;
+  --drop-radius: var(--r-lg);
+  --press-scale: 1;
+  --press-deep: 1;
+  --dur-move: 0ms;
+  --spring: ease-out;
+  --dur-spring: 120ms;
+  --dur-spring-slow: 120ms;
+}
+:root[data-rm] *:not(.splash, .splash *, .drain) {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+}
+/* `*` misses pseudo-elements: the indeterminate bar turns into a full one that breathes (as spinners
+   do below), and the held label stops trembling. The hold fill is a transition: it still fills. */
+:root[data-rm] .live-bar::before {
+  width: 100%;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+:root[data-rm] .hold-btn[data-held] .hold-label {
+  animation: none;
+}
+/* Squish and grow feedback on thumbs and swatches: their colour change is the feedback. */
+:root[data-rm] .switch:active::after,
+:root[data-rm] .range:active::-webkit-slider-thumb,
+:root[data-rm] .swatch:hover {
+  scale: none;
+}
+/* Doubled classes: these must outrank the blanket rule above. */
+:root[data-rm] .enter.enter {
+  animation: fade-in 120ms ease-out backwards !important;
+}
+:root[data-rm] .spin.spin {
+  animation: pulse 1.6s ease-in-out infinite !important;
+}
+:root[data-rm] .scroll {
+  scroll-behavior: auto;
+}
+:root[data-rm]::view-transition-old(*) {
+  animation: vt-fade-out 120ms ease-out both !important;
+}
+:root[data-rm]::view-transition-new(*) {
+  animation: fade-in 120ms ease-out both !important;
+}
+@keyframes vt-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+:root[data-rm] .lq-ink,
+:root[data-rm] .switch::after,
+:root[data-rm] .cb {
+  animation: none !important;
+}
+:root[data-rm] .btn-primary,
+:root[data-rm] .btn-play {
+  translate: none;
+}
+:root[data-rm] .chip::before {
+  transition-duration: 120ms;
+  transition-timing-function: ease-out;
+}
+
+/* Motion Off (html[data-motion-off]): nothing animates or transitions; every change is immediate.
+   The splash (it ends on its own transition) and meaningful progress (the cookie's drain, the
+   hold-to-stop fill) are kept. */
+:root[data-motion-off] *:not(.splash, .splash *, .drain, .hold-fill),
+:root[data-motion-off] *:not(.splash, .splash *)::before,
+:root[data-motion-off] *:not(.splash, .splash *)::after {
+  transition: none !important;
+  animation: none !important;
+}
+:root[data-motion-off]::view-transition-group(*),
+:root[data-motion-off]::view-transition-old(*),
+:root[data-motion-off]::view-transition-new(*) {
+  animation: none !important;
+}

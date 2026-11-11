@@ -1,181 +1,324 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { AnimatePresence, motion, useAnimate } from "motion/react";
 import { api, asError, type VaultStatus } from "../../api";
 import { qk } from "../../data";
-import { Icon } from "../../ui/Icon";
+import { Button } from "../../ui/Button";
+import { Field, Input } from "../../ui/Field";
+import { DUR, EASE, Morph, prefersReducedMotion, SPRING, Swap, TWEEN } from "../../ui/motion";
 import { friendly } from "../../ui/Toast";
-import { t } from "../../i18n";
-import { MIN_PASSWORD } from "./PasswordDialog";
+import { getLang, t } from "../../i18n";
+import { MIN_PASSWORD, PasswordField } from "./PasswordDialog";
+import { publishRecoveryCode } from "./recoveryCode";
+import "./vault.css";
 
 export type LockReason = "start" | "manual" | "idle";
 
-export function UnlockScreen({ status, reason, onRecovered }: { status: VaultStatus; reason: LockReason; onRecovered: (code: string) => void }) {
+/** What a form tells the card: a failed try, its problem gone, the vault open. */
+type Card = { onFail: () => void; onFixed: () => void; onOpen: () => void };
+/** How long the shackle lifts before the card starts to leave. */
+const LIFT_MS = 120;
+
+/**
+ * The locked vault: one card, the master password in it. With a recovery code, "Forgot password?"
+ * morphs the card into a reset (code, new password, confirm) that unlocks too. The fresh code goes
+ * to `onRecovered` when given (the old path), else to RecoveryCodeHost.
+ */
+export function UnlockScreen({ status, reason, onRecovered }: { status: VaultStatus; reason: LockReason; onRecovered?: (code: string) => void }) {
   const qc = useQueryClient();
-  const input = useRef<HTMLInputElement>(null);
+  const [card, animate] = useAnimate<HTMLDivElement>();
   const [recovering, setRecovering] = useState(false);
-  const [pw, setPw] = useState("");
-  const [peek, setPeek] = useState(false);
-  const [code, setCode] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [shakes, setShakes] = useState(0);
-  const [busy, setBusy] = useState(false);
+  const [wrong, setWrong] = useState(false);
+  const [open, setOpen] = useState(false);
 
-  useEffect(() => input.current?.focus(), [recovering]);
-
-  const fail = (msg: string) => {
-    setError(msg);
-    setShakes((n) => n + 1);
+  const events: Card = {
+    onFail: () => {
+      setWrong(true);
+      // Reduced motion: no shake; the red keyhole and the field's outline still say it.
+      if (!prefersReducedMotion()) animate(card.current, { x: [0, -6, 5, -3, 2, 0] }, { duration: 0.42, ease: EASE.out });
+    },
+    onFixed: () => setWrong(false),
+    // The shackle lifts and the card leaves; then the shell takes its place. On a timer, not the
+    // animation's end: a window out of sight draws no frames, and the vault is open already.
+    onOpen: () => {
+      setWrong(false);
+      setOpen(true);
+      animate(card.current, { opacity: 0, scale: 0.97 }, { ...TWEEN.exit, delay: LIFT_MS / 1000 });
+      setTimeout(() => {
+        qc.setQueryData<VaultStatus>(qk.vault, { ...status, locked: false });
+        qc.invalidateQueries();
+      }, LIFT_MS + DUR.exit);
+    },
+  };
+  const toggle = () => {
+    setRecovering(!recovering);
+    setWrong(false);
   };
 
-  const unlocked = () => {
-    setPw("");
-    setCode("");
-    setConfirm("");
-    qc.setQueryData<VaultStatus>(qk.vault, { ...status, locked: false });
-    qc.invalidateQueries();
+  // From the tray with auto-lock off it comes as "idle" too.
+  const why = reason === "idle" && status.autoLockMinutes > 0 ? t("vault.lockedIdle", { count: status.autoLockMinutes }) : reason === "start" ? "" : t("vault.lockedManual");
+  const lead = [why, t("vault.prompt", { count: status.accounts })].filter(Boolean).join(" ");
+
+  return (
+    <main className="vault-stage scroll flex-1 min-w-0">
+      <div ref={card} className="vault-card enter">
+        <Lock open={open} wrong={wrong} />
+        {/* The card springs to the new mode's height; the old one fades out before the new one fades in. */}
+        <Morph axis="height" transition={SPRING.size}>
+          <div className="relative">
+            <AnimatePresence mode="popLayout" initial={false}>
+              <motion.div
+                key={recovering ? "recover" : "unlock"}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1, transition: { ...TWEEN.fade, delay: DUR.exit / 1000 } }}
+                exit={{ opacity: 0, transition: TWEEN.exit }}
+              >
+                {recovering ? (
+                  <RecoverForm {...events} onBack={toggle} onRecovered={onRecovered} />
+                ) : (
+                  <UnlockForm {...events} lead={lead} hasRecovery={status.hasRecovery} onForgot={toggle} />
+                )}
+              </motion.div>
+            </AnimatePresence>
+          </div>
+        </Morph>
+        <p className="vault-local">{t("vault.local")}</p>
+      </div>
+    </main>
+  );
+}
+
+function UnlockForm({ lead, hasRecovery, onForgot, onFail, onFixed, onOpen }: Card & { lead: string; hasRecovery: boolean; onForgot: () => void }) {
+  const form = useRef<HTMLFormElement>(null);
+  const label = t("settings.masterPassword");
+  const [pw, setPw] = useState("");
+  const [peek, setPeek] = useState(false);
+  // `field`: about the password (under it, the field outlined); else about the attempt (under the form).
+  const [problem, setProblem] = useState<{ field: boolean; text: string } | null>(null);
+  // Without a code, a wrong password brings up how to start over; it stays as long as the card.
+  const [tried, setTried] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => form.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus(), []);
+
+  const fail = (field: boolean, text: string) => {
+    setProblem({ field, text });
+    onFail();
+    refocus(form.current);
   };
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (busy) return;
-    if (recovering) {
-      if (!code.trim()) return fail(t("vault.recovery.enterCode"));
-      if (pw.length < MIN_PASSWORD) return fail(t("vault.tooShort", { count: MIN_PASSWORD }));
-      if (pw !== confirm) return fail(t("vault.mismatch"));
-    } else if (!pw) return;
+    if (!pw) return fail(true, t("vault.enterField", { label: getLang() === "en" ? label.toLowerCase() : label }));
     setBusy(true);
     try {
-      if (recovering) onRecovered(await api.vaultRecover(code, pw));
-      else await api.vaultUnlock(pw);
-      unlocked();
+      await api.vaultUnlock(pw);
+      // Busy until the card has gone.
+      onOpen();
     } catch (err) {
       const e2 = asError(err);
-      if (e2.kind !== "wrongPassword") fail(friendly(e2));
-      else fail(t(recovering ? "vault.recovery.wrongCode" : "ui.error.wrongPassword"));
-      input.current?.select();
-    } finally {
+      const wrong = e2.kind === "wrongPassword";
       setBusy(false);
+      if (wrong) setTried(true);
+      fail(wrong, wrong ? t("ui.error.wrongPassword") : friendly(e2));
     }
   }
 
-  const switchMode = () => {
-    setRecovering(!recovering);
-    setPw("");
-    setCode("");
-    setConfirm("");
-    setError(null);
-  };
+  return (
+    <form ref={form} onSubmit={submit} className="flex flex-col gap-4">
+      <Head title={t("vault.title")} text={lead} />
+      <PasswordField
+        label={label}
+        value={pw}
+        onChange={(v) => {
+          setPw(v);
+          if (problem) {
+            setProblem(null);
+            onFixed();
+          }
+        }}
+        autoComplete="current-password"
+        error={problem?.field ? problem.text : undefined}
+        withKey
+        autoFocus
+        peek={peek}
+        onPeek={() => setPeek(!peek)}
+      />
+      {problem && !problem.field && <p role="alert" className="alert">{problem.text}</p>}
+      {tried && !hasRecovery && <p className="vault-forgot well selectable">{t("vault.forgot")}</p>}
+      <div className="flex flex-col gap-2">
+        <Button type="submit" variant="primary" block busy={busy}>
+          <Swap k={busy ? "busy" : "idle"}>{busy ? t("vault.unlocking") : t("vault.unlock")}</Swap>
+        </Button>
+        {hasRecovery && (
+          <Button variant="ghost" size="md" className="self-center" onClick={onForgot} disabled={busy}>
+            {t("vault.recovery.forgotLink")}
+          </Button>
+        )}
+      </div>
+    </form>
+  );
+}
 
-  // From the tray with auto-lock off it comes as "idle" too.
-  const lead = reason === "idle" && status.autoLockMinutes > 0 ? t("vault.lockedIdle", { count: status.autoLockMinutes }) : reason === "start" ? "" : t("vault.lockedManual");
+/** Where a reset's problem shows: under its field, or under the form. */
+type Slot = "code" | "next" | "confirm" | "form";
+
+function RecoverForm({ onBack, onRecovered, onFail, onFixed, onOpen }: Card & { onBack: () => void; onRecovered?: (code: string) => void }) {
+  const form = useRef<HTMLFormElement>(null);
+  const [code, setCode] = useState("");
+  const [nw, setNw] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [peek, setPeek] = useState(false);
+  // The confirmation is checked once it has been left, then as either field changes.
+  const [left, setLeft] = useState(false);
+  const [problem, setProblem] = useState<{ at: Slot; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => form.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus(), []);
+
+  const fail = (at: Slot, text: string) => {
+    setProblem({ at, text });
+    onFail();
+    refocus(form.current);
+  };
+  const edit = (at: Slot, set: (v: string) => void) => (v: string) => {
+    set(v);
+    // A mismatch is about both passwords: either edit hands it to the live check.
+    if (problem?.at === at || (at === "next" && problem?.at === "confirm")) {
+      setProblem(null);
+      onFixed();
+    }
+  };
+  const errorAt = (at: Slot) => (problem?.at === at ? problem.text : undefined);
+  const mismatch = left && !!confirm && confirm !== nw;
+  const togglePeek = () => setPeek(!peek);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    if (!code.trim()) return fail("code", t("vault.recovery.enterCode"));
+    if (nw.length < MIN_PASSWORD) return fail("next", t("vault.tooShort", { count: MIN_PASSWORD }));
+    if (nw !== confirm) {
+      setLeft(true);
+      return fail("confirm", t("vault.mismatch"));
+    }
+    setBusy(true);
+    setProblem(null);
+    onFixed();
+    try {
+      const fresh = await api.vaultRecover(code, nw);
+      // At once: the old code is void now, and the card is about to go.
+      if (onRecovered) onRecovered(fresh);
+      else publishRecoveryCode(fresh);
+      onOpen();
+    } catch (err) {
+      const e2 = asError(err);
+      setBusy(false);
+      if (e2.kind === "wrongPassword") fail("code", t("vault.recovery.wrongCode"));
+      else fail("form", friendly(e2));
+    }
+  }
 
   return (
-    <main className="flex-1 grid place-items-center px-4 py-10 overflow-auto">
-      <form
-        onSubmit={submit}
-        className={`enter ${shakes ? (shakes % 2 ? "shake" : "shake2") : ""} panel w-full max-w-[400px] flex flex-col gap-5 p-8`}
-      >
-        <div className="flex flex-col gap-3.5">
-          <svg width="36" height="36" viewBox="0 0 36 36" aria-hidden="true">
-            <rect x="6" y="15" width="24" height="17" rx="3" fill="none" stroke="currentColor" strokeWidth="2" />
-            <path d="M11 15V9a7 7 0 0 1 14 0v6" fill="none" stroke="currentColor" strokeWidth="2" />
-            <circle cx="18" cy="23" r="2.5" fill="var(--accent-text)" />
-          </svg>
-          <h1 className="page-title">{recovering ? t("vault.recovery.forgotTitle") : t("vault.title")}</h1>
-          <p className="text-dim">
-            {recovering ? t("vault.recovery.forgotText") : <>{lead && `${lead} `}{t("vault.prompt", { count: status.accounts })}</>}
-          </p>
-        </div>
-
-        {recovering && (
-          <div className="flex flex-col gap-2">
-            <label className="label" htmlFor="unlock-code">{t("vault.recovery.code")}</label>
-            <input
-              ref={input}
-              id="unlock-code"
-              className="field mono uppercase tracking-[0.12em]"
-              value={code}
-              onChange={(e) => {
-                setCode(e.target.value);
-                setError(null);
-              }}
-              placeholder="XXX-XXX-XXX"
-              autoComplete="off"
-              spellCheck={false}
-              aria-invalid={!!error}
-            />
-          </div>
+    <form
+      ref={form}
+      onSubmit={submit}
+      onKeyDown={(e) => {
+        if (e.key === "Escape" && !busy) onBack();
+      }}
+      className="flex flex-col gap-4"
+    >
+      <Head title={t("vault.recovery.forgotTitle")} text={t("vault.recovery.forgotText")} />
+      <Field label={t("vault.recovery.code")} error={errorAt("code")}>
+        {({ id, describedBy, invalid }) => (
+          <Input
+            id={id}
+            mono
+            invalid={invalid}
+            aria-describedby={describedBy}
+            className="uppercase tracking-[0.12em]"
+            value={code}
+            onChange={(e) => edit("code", setCode)(e.target.value)}
+            placeholder="XXX-XXX-XXX"
+            autoComplete="off"
+            data-autofocus
+          />
         )}
+      </Field>
+      <PasswordField
+        label={t("vault.newPassword")}
+        value={nw}
+        onChange={edit("next", setNw)}
+        autoComplete="new-password"
+        hint={t("vault.minLength", { count: MIN_PASSWORD })}
+        error={errorAt("next")}
+        withKey
+        peek={peek}
+        onPeek={togglePeek}
+      />
+      <PasswordField
+        label={t("vault.confirm")}
+        value={confirm}
+        onChange={edit("confirm", setConfirm)}
+        onBlur={() => setLeft(true)}
+        autoComplete="new-password"
+        error={errorAt("confirm") ?? (mismatch ? t("vault.mismatch") : undefined)}
+        peek={peek}
+        onPeek={togglePeek}
+      />
+      {problem?.at === "form" && <p role="alert" className="alert">{problem.text}</p>}
+      <div className="flex flex-col gap-2 pt-1">
+        <Button type="submit" variant="primary" block busy={busy}>
+          <Swap k={busy ? "busy" : "idle"}>{busy ? t("vault.working") : t("vault.recovery.forgotSubmit")}</Swap>
+        </Button>
+        <Button variant="ghost" size="md" className="self-center" onClick={onBack} disabled={busy}>
+          {t("vault.recovery.backToPassword")}
+        </Button>
+      </div>
+    </form>
+  );
+}
 
-        <div className="flex flex-col gap-2">
-          <label className="label" htmlFor="unlock-pw">{recovering ? t("vault.newPassword") : t("settings.masterPassword")}</label>
-          <div className="field flex p-0 overflow-hidden" style={{ borderColor: error && !recovering ? "var(--orange)" : undefined }}>
-            <input
-              ref={recovering ? undefined : input}
-              id="unlock-pw"
-              type={peek ? "text" : "password"}
-              value={pw}
-              onChange={(e) => {
-                setPw(e.target.value);
-                setError(null);
-              }}
-              autoComplete={recovering ? "new-password" : "current-password"}
-              spellCheck={false}
-              aria-invalid={!recovering && !!error}
-              aria-describedby={error ? "unlock-err" : undefined}
-              className="flex-1 min-w-0 h-11 px-3 bg-transparent outline-none tracking-[0.08em]"
-            />
-            <button
-              type="button"
-              className="wc h-11 w-11"
-              aria-label={peek ? t("vault.hidePassword") : t("vault.showPassword")}
-              aria-pressed={peek}
-              onClick={() => setPeek(!peek)}
-            >
-              <Icon name={peek ? "eyeOff" : "eye"} />
-            </button>
-          </div>
-          {recovering && <span className="text-xs text-dim">{t("vault.minLength", { count: MIN_PASSWORD })}</span>}
-        </div>
+/** After a failed try: to the field to fix, its text selected so typing replaces it. */
+function refocus(form: HTMLFormElement | null) {
+  requestAnimationFrame(() => {
+    const field = form?.querySelector<HTMLInputElement>("input[aria-invalid=true]");
+    field?.focus();
+    field?.select();
+  });
+}
 
-        {recovering && (
-          <div className="flex flex-col gap-2">
-            <label className="label" htmlFor="unlock-confirm">{t("vault.confirm")}</label>
-            <input
-              id="unlock-confirm"
-              type={peek ? "text" : "password"}
-              className="field"
-              value={confirm}
-              onChange={(e) => {
-                setConfirm(e.target.value);
-                setError(null);
-              }}
-              autoComplete="new-password"
-              spellCheck={false}
-            />
-          </div>
-        )}
+function Head({ title, text }: { title: string; text: string }) {
+  return (
+    <div className="vault-head">
+      <h1>{title}</h1>
+      <p>{text}</p>
+    </div>
+  );
+}
 
-        {error && <div id="unlock-err" role="alert" className="alert">{error}</div>}
-        {error && !recovering && !status.hasRecovery && <p className="text-[13px] text-dim -mt-3">{t("vault.forgot")}</p>}
-
-        <button type="submit" className="btn btn-primary" disabled={busy}>
-          {recovering
-            ? busy ? t("vault.working") : t("vault.recovery.forgotSubmit")
-            : busy ? t("vault.unlocking") : t("vault.unlock")}
-        </button>
-
-        {status.hasRecovery && (
-          <button type="button" className="btn self-center" onClick={switchMode} disabled={busy}>
-            {recovering ? t("vault.recovery.backToPassword") : t("vault.recovery.forgotLink")}
-          </button>
-        )}
-
-        <div className="mono flex flex-col gap-1 pt-4 border-t border-line text-[11px] text-dim">
-          <span>{t("vault.local")}</span>
-        </div>
-      </form>
-    </main>
+/** The lock, in 1.5 px outline. Its keyhole is the accent, red after a failed try. The shackle drops
+ * shut as the card arrives and lifts when the vault opens. */
+function Lock({ open, wrong }: { open: boolean; wrong: boolean }) {
+  const above = useId();
+  return (
+    <svg className="vault-lock" data-wrong={wrong || undefined} width="40" height="40" viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" aria-hidden="true">
+      <clipPath id={above}>
+        <rect width="40" height="19" />
+      </clipPath>
+      {/* Cut at the body's top edge, so the long leg stays inside it when the shackle lifts. */}
+      <g clipPath={`url(#${above})`}>
+        <motion.path
+          d="M14 25V13a6 6 0 0 1 12 0v6"
+          initial={{ y: -5 }}
+          animate={{ y: open ? -5 : 0 }}
+          transition={{ ...SPRING.snappy, delay: open ? 0 : DUR.fast / 1000 }}
+        />
+      </g>
+      <rect x="9" y="19" width="22" height="16" rx="5" />
+      <g className="vault-keyhole">
+        <circle cx="20" cy="25.5" r="2.25" stroke="none" />
+        <path d="M20 27v3" />
+      </g>
+    </svg>
   );
 }

@@ -89,17 +89,30 @@ fn in_store(path: &Path) -> bool {
     path.components().any(|c| c.as_os_str().eq_ignore_ascii_case("WindowsApps"))
 }
 
-/// The `Versions` folders clients live in: Roblox's own (per user first), then Bloxstrap's and
-/// Fishstrap's copies.
+/// Bootstrappers that keep their own copy of Roblox in `%LOCALAPPDATA%\<name>\Versions`
+/// (Froststrap and Voidstrap are forks of the first two and keep the same layout).
+const BOOTSTRAPPERS: [&str; 4] = ["Bloxstrap", "Fishstrap", "Froststrap", "Voidstrap"];
+
+/// The `Versions` folders clients live in: Roblox's own (per user first), then the
+/// bootstrappers' copies.
 pub(super) fn versions_dirs() -> Vec<PathBuf> {
     let roblox = ["LOCALAPPDATA", "ProgramFiles(x86)", "ProgramFiles"].iter().filter_map(std::env::var_os).map(|d| PathBuf::from(d).join("Roblox"));
-    let strap = std::env::var_os("LOCALAPPDATA").into_iter().flat_map(|d| ["Bloxstrap", "Fishstrap"].map(|b| PathBuf::from(&d).join(b)));
+    let strap = std::env::var_os("LOCALAPPDATA").into_iter().flat_map(|d| BOOTSTRAPPERS.map(|b| PathBuf::from(&d).join(b)));
     roblox.chain(strap).map(|d| d.join("Versions")).collect()
 }
 
-/// The installed client of Roblox version `version` (`version-…`), whatever `find` picks.
+/// The installed client of Roblox version `version` (`version-…`), whatever `find` picks: in the
+/// usual `Versions` folders or beside the client `find` names (Roblox installed somewhere else).
 pub fn installed_build(version: &str) -> Option<PathBuf> {
-    build_in(&versions_dirs(), version)
+    let mut dirs = versions_dirs();
+    dirs.extend(find().ok().and_then(|e| versions_dir_of(&e.path)));
+    build_in(&dirs, version)
+}
+
+/// The `Versions` folder a `Versions\<version>\RobloxPlayerBeta.exe` sits in (pure).
+pub(crate) fn versions_dir_of(exe: &Path) -> Option<PathBuf> {
+    let dir = exe.parent()?.parent()?;
+    dir.file_name()?.eq_ignore_ascii_case("Versions").then(|| dir.to_path_buf())
 }
 
 fn build_in(dirs: &[PathBuf], version: &str) -> Option<PathBuf> {
@@ -190,7 +203,7 @@ fn handler_exe(command: &str) -> Option<PathBuf> {
 pub fn remove_profile_secrets(_user_id: i64) {}
 
 /// A bootstrapper owns this install, so Roblox's installer must not run over it: `exe` is a
-/// bootstrapper, sits under a `Bloxstrap`/`Fishstrap` folder (they set `clientExe` to their own
+/// bootstrapper, sits under a `BOOTSTRAPPERS` folder (they set `clientExe` to their own
 /// `Versions` copy), or the `roblox-player` protocol handler isn't RobloxPlayerBeta.exe.
 pub fn managed_by_bootstrapper(exe: &ClientExe) -> bool {
     let handler = handlers().find(|p| p.is_file());
@@ -224,7 +237,7 @@ pub fn bootstrapper_version(exe: &ClientExe) -> Option<String> {
 }
 
 fn in_bootstrapper_folder(path: &Path) -> bool {
-    path.components().any(|c| ["bloxstrap", "fishstrap"].iter().any(|b| c.as_os_str().eq_ignore_ascii_case(b)))
+    path.components().any(|c| BOOTSTRAPPERS.iter().any(|b| c.as_os_str().eq_ignore_ascii_case(b)))
 }
 
 fn is_player(path: &Path) -> bool {
@@ -280,6 +293,8 @@ mod tests {
 
         assert!(in_bootstrapper_folder(Path::new(r"C:\Users\you\AppData\Local\Bloxstrap\Versions\version-9ac8595712b447a7\RobloxPlayerBeta.exe")));
         assert!(in_bootstrapper_folder(Path::new(r"D:\FISHSTRAP\Versions\x\RobloxPlayerBeta.exe")));
+        assert!(in_bootstrapper_folder(Path::new(r"C:\Users\you\AppData\Local\Froststrap\Versions\x\RobloxPlayerBeta.exe")));
+        assert!(in_bootstrapper_folder(Path::new(r"C:\Users\you\AppData\Local\Voidstrap\Versions\x\RobloxPlayerBeta.exe")));
         assert!(!in_bootstrapper_folder(Path::new(roblox)));
     }
 

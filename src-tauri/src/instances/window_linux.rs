@@ -794,6 +794,122 @@ pub fn micro(_id: &str, pid: u32, on: bool, size: (u32, u32)) -> Result<(u32, u3
     if ok { Ok((w as u32, h as u32)) } else { Err(AppError::Invalid(tr!("That client's window could not be resized."))) }
 }
 
+/// A window rect (x, y, width, height).
+pub type Rect = (i32, i32, i32, i32);
+
+/// The smallest client Roblox lets its window shrink to (used to decide a Fit cell is a "tiny"
+/// one instead of its normal size).
+const ROBLOX_MIN: (u32, u32) = (816, 638);
+
+/// The work area of the monitor the clients are on: Hyprland's focused monitor, Sway's focused
+/// output, or the X11 screen. `None` for an unrecognised compositor.
+pub fn work_area() -> Option<Rect> {
+    match compositor()? {
+        Compositor::Hyprland => hypr_focused_monitor(),
+        Compositor::Sway => sway_focused_output(),
+        Compositor::X11 => x11_screen(),
+    }
+}
+
+/// The frame size (window minus client area) of `pid`'s window. Compositors here report only the
+/// outer size, so the frame is unknown and treated as none.
+pub fn frame_of(pid: u32) -> Option<(i32, i32)> {
+    compositor()?;
+    window_info(pid).map(|_| (0, 0))
+}
+
+/// The frame size of a normal window before any client was measured: none on this desktop.
+pub fn default_frame() -> (i32, i32) {
+    (0, 0)
+}
+
+fn small_size(cell: (i32, i32), frame: (i32, i32)) -> Option<(u32, u32)> {
+    let (w, h) = ((cell.0 - frame.0).max(1) as u32, (cell.1 - frame.1).max(1) as u32);
+    (w < ROBLOX_MIN.0 || h < ROBLOX_MIN.1).then_some((w, h))
+}
+
+/// Cells (x, y, w, h) for `n` windows in `area` (x, y, w, h): `cell`-sized ones left to right,
+/// top to bottom, starting over at the top once the area is full; else the column count whose
+/// cells hold the biggest 4:3 picture, fewer columns on a tie (pure).
+pub fn grid(n: usize, area: (i32, i32, i32, i32), cell: Option<(i32, i32)>) -> Vec<(i32, i32, i32, i32)> {
+    let (ax, ay, aw, ah) = area;
+    if n == 0 || aw <= 0 || ah <= 0 {
+        return Vec::new();
+    }
+    let (cols, cw, ch, per) = match cell {
+        Some((cw, ch)) => {
+            let (cw, ch) = (cw.max(1), ch.max(1));
+            let cols = (aw / cw).max(1) as usize;
+            (cols, cw, ch, cols * (ah / ch).max(1) as usize)
+        }
+        None => {
+            let picture = |c: usize| (aw / c as i32).min(ah / n.div_ceil(c) as i32 * 4 / 3);
+            let cols = (1..=n).fold(1, |best, c| if picture(c) > picture(best) { c } else { best });
+            (cols, aw / cols as i32, ah / n.div_ceil(cols) as i32, n)
+        }
+    };
+    (0..n)
+        .map(|i| {
+            let slot = i % per;
+            (ax + (slot % cols) as i32 * cw, ay + (slot / cols) as i32 * ch, cw, ch)
+        })
+        .collect()
+}
+
+/// Where slot `slot` of `n` goes in `layout` on `area`, for windows with `frame`: the window rect,
+/// and the client size the tiny sweep keeps it at (None: the rect is its normal size from now on).
+/// Tiny cells don't depend on `n`, so they never move; Fit is `grid`'s (pure).
+pub fn slot_rect(
+    layout: crate::model::WindowLayout,
+    slot: usize,
+    n: usize,
+    area: Rect,
+    frame: (i32, i32),
+    micro: (u32, u32),
+) -> Option<(Rect, Option<(u32, u32)>)> {
+    use crate::model::WindowLayout;
+    match layout {
+        WindowLayout::Off => None,
+        WindowLayout::Fit => {
+            let rect = *grid(n.max(slot + 1), area, None).get(slot)?;
+            Some((rect, small_size((rect.2, rect.3), frame)))
+        }
+        WindowLayout::Tiny => {
+            let cell = (micro.0 as i32 + frame.0, micro.1 as i32 + frame.1);
+            Some((*grid(slot + 1, area, Some(cell)).get(slot)?, Some(micro)))
+        }
+    }
+}
+
+/// Puts one client's window at `rect` (window size, frame included). `small` is bookkeeping the
+/// tracker keeps; the caller (`Tracker::set_micro`) owns it, so nothing more is done here.
+pub fn place(_id: &str, pid: u32, rect: Rect, _small: Option<(u32, u32)>) -> Result<()> {
+    // An unknown Wayland compositor has no dependable window control: a no-op, not an error.
+    if compositor().is_none() {
+        return Ok(());
+    }
+    let info = window_info(pid).ok_or_else(|| AppError::Invalid(tr!("That client has no window yet.")))?;
+    let (x, y, w, h) = rect;
+    let ok = match &info.selector {
+        Selector::Hypr(selector) => {
+            let moved = hypr_move(selector, x, y);
+            let resized = hypr_resize(selector, w, h);
+            moved && resized
+        }
+        Selector::Sway(owner) => {
+            let moved = sway_sel(*owner, &format!("move position {x} {y}"));
+            let resized = sway_sel(*owner, &format!("resize set {w} {h}"));
+            moved && resized
+        }
+        Selector::X11(id) => {
+            let moved = x11_move(*id, x, y);
+            let resized = x11_resize(*id, w, h);
+            moved && resized
+        }
+    };
+    if ok { Ok(()) } else { Err(AppError::Invalid(tr!("That client's window could not be moved."))) }
+}
+
 /// Cells (x, y, w, h) for `n` windows in `area`: a square-ish grid, or fixed cells of `micro`
 /// size. `+4` keeps adjacent windows from sharing a border.
 fn layout(n: usize, area: (i32, i32, i32, i32), micro: Option<(u32, u32)>) -> Vec<(i32, i32, i32, i32)> {

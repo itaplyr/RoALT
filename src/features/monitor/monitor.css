@@ -1,0 +1,245 @@
+/* Monitor's own styles: the summary and the clients table. Cells never animate; rows only rise in
+   and glide to a new place (MonitorView: useRowMotion). */
+@layer views {
+  .mon {
+    container-type: inline-size;
+    /* The sticky cells' fill and a row's hover, opaque even over a background image (where --ground
+       turns see-through; --on-fg is the same colour, never see-through): they cover what scrolls under. */
+    --mon-cell: var(--on-fg);
+    --mon-hover: color-mix(in srgb, var(--fg) 7%, var(--mon-cell));
+  }
+  .mon-wait {
+    color: var(--fg-3);
+    animation: fade-in var(--dur-base) var(--ease-out) 300ms backwards;
+  }
+
+  /* The summary: one panel of six figures split by hairlines, two, three or six to a row. A figure's
+     label, value and chart share rows with its neighbours (subgrid), so values line up however a
+     label wraps. Each figure draws its top and start lines; the panel's edge clips the outer ones. */
+  .mon-strip {
+    overflow: clip;
+  }
+  .mon-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-block-start: -1px;
+    margin-inline-start: -1px;
+  }
+  @container (min-width: 440px) {
+    .mon-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+  @container (min-width: 860px) {
+    .mon-grid {
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+    }
+  }
+  .mon-cell {
+    grid-row: span 3;
+    display: grid;
+    grid-template-rows: subgrid;
+    row-gap: 4px;
+    min-width: 0;
+    padding: 14px 16px 12px;
+    border-block-start: 1px solid var(--line);
+    border-inline-start: 1px solid var(--line);
+  }
+  /* Two rows of figures: each chart goes beside its value, so the table keeps its rows. */
+  @container (max-width: 859px) {
+    .mon-cell {
+      grid-template-columns: auto minmax(0, 96px);
+      column-gap: 12px;
+    }
+    .mon-label {
+      grid-column: 1 / -1;
+    }
+    .mon-chart {
+      grid-row: 2;
+      grid-column: 2;
+      align-self: center;
+    }
+  }
+  .mon-label {
+    color: var(--fg-2);
+    font-size: var(--fs-small);
+    line-height: 1.35;
+  }
+  .mon-value {
+    font-size: var(--fs-title);
+    font-weight: 600;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+  }
+  .mon-spark {
+    display: block;
+    width: 100%;
+    height: 24px;
+    overflow: visible;
+  }
+  .mon-spark-base {
+    stroke: var(--line);
+    stroke-width: 1;
+  }
+  .mon-spark-area {
+    fill: var(--accent-text);
+    opacity: 0.1;
+  }
+  .mon-spark-line {
+    fill: none;
+    stroke: var(--accent-text);
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  /* The table scrolls in its own box, so its header and its Account and Limits columns stay put. */
+  .mon-scroll {
+    flex: 1;
+    min-height: 200px;
+    margin-block-start: var(--page-gap);
+    scroll-timeline: --mon-x inline;
+  }
+  .mon-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: var(--fs-small);
+  }
+  .mon-table :is(th, td) {
+    padding-inline: 10px;
+    white-space: nowrap;
+  }
+  .mon-table tbody td {
+    height: 40px;
+    border-top: 1px solid var(--line);
+    background: var(--ground);
+    transition: background-color var(--dur-fast) var(--ease-out);
+  }
+  /* The hovered row reads as one band: no rule through or under it. */
+  .mon-table tbody tr:first-child > td,
+  .mon-table tbody tr:hover > td,
+  .mon-table tbody tr:hover + tr > td {
+    border-top-color: transparent;
+  }
+  .mon-table tbody tr:hover > td {
+    background: var(--mon-hover);
+  }
+  .mon-table thead th,
+  .mon-table tbody td:is(.mon-acc, .mon-act) {
+    background: var(--mon-cell);
+  }
+  .mon-num {
+    text-align: end;
+  }
+  .mon-acc {
+    position: sticky;
+    inset-inline-start: 0;
+    z-index: 1;
+    border-inline-end: 1px solid var(--line);
+  }
+  .mon-act {
+    position: sticky;
+    inset-inline-end: 0;
+    z-index: 1;
+    border-inline-start: 1px solid var(--line);
+  }
+  thead :is(.mon-acc, .mon-act) {
+    z-index: 4;
+  }
+  /* Their edges show only while columns pass under them (the timeline is inactive when nothing
+     scrolls sideways, which leaves the edges clear). */
+  @supports (animation-timeline: scroll()) {
+    .mon-acc {
+      border-inline-end-color: transparent;
+      animation: mon-edge-start linear both;
+      animation-timeline: --mon-x;
+    }
+    .mon-act {
+      border-inline-start-color: transparent;
+      animation: mon-edge-end linear both;
+      animation-timeline: --mon-x;
+    }
+  }
+  @keyframes mon-edge-start {
+    0% {
+      border-inline-end-color: transparent;
+    }
+    2%,
+    100% {
+      border-inline-end-color: var(--line);
+    }
+  }
+  @keyframes mon-edge-end {
+    0%,
+    98% {
+      border-inline-start-color: var(--line);
+    }
+    100% {
+      border-inline-start-color: transparent;
+    }
+  }
+  .mon-who {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 180px;
+    color: var(--fg);
+    font-weight: 500;
+  }
+  .mon-state {
+    display: flex;
+    max-width: 230px;
+  }
+  .mon-trend {
+    display: none;
+  }
+  .mon-trend .mon-spark {
+    width: 88px;
+    height: 20px;
+  }
+  /* From where the table holds them beside a name at its longest (180 px) without scrolling. */
+  @container (min-width: 1280px) {
+    .mon-trend {
+      display: table-cell;
+    }
+  }
+
+  /* Sortable headers: the chevron shows the direction and turns over between them. */
+  .mon-sort {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 28px;
+    padding: 0 6px;
+    margin-inline: -6px;
+    border-radius: var(--r-xs);
+    white-space: nowrap;
+    transition:
+      color var(--dur-fast) var(--ease-out),
+      background-color var(--dur-fast) var(--ease-out);
+  }
+  .mon-sort:hover {
+    background: var(--hover);
+    color: var(--fg);
+  }
+  .mon-sort[data-dir] {
+    color: var(--fg);
+  }
+  .mon-sort-mark {
+    opacity: 0;
+    transition:
+      opacity var(--dur-fast) var(--ease-out),
+      rotate var(--dur-move) var(--ease-out);
+  }
+  .mon-sort:hover .mon-sort-mark {
+    opacity: 0.5;
+  }
+  .mon-sort[data-dir] .mon-sort-mark {
+    opacity: 1;
+  }
+  .mon-sort[data-dir="asc"] .mon-sort-mark {
+    rotate: 180deg;
+  }
+}

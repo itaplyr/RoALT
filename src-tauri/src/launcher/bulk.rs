@@ -1,4 +1,4 @@
-//! Bulk launch: one batch at a time, strictly one account after another (DESIGN.md §6).
+//! Bulk launch: one batch at a time, strictly one account after another.
 //!
 //! The runner, per batch:
 //! 1. Same server (both modes): resolve the target with the first account's cookie
@@ -14,6 +14,11 @@
 //!    its server is read from its tracked instance (`Instance.job_id`, up to 90 s), else from
 //!    its own presence (its own cookie, `game_id`); the rest are sent there. Not found → the
 //!    rest launch with the target as given, with a note.
+//!    Spreading (`OwnPrivate`, `RandomPublic`, `Closest`): one page of the place's public
+//!    servers (`BestLatency` for `Closest`, else Recommended and shuffled), each with room for
+//!    one more and a spare seat (`spread_servers`). Each account, once before its launch, gets
+//!    a private server it owns (`OwnPrivate`: its first page of private servers, its cookie),
+//!    else the next public server, else the target as given (with a note).
 //! 2. Per account: stage `Ticket`, then `commands::launch_tracked` (the favourite is touched
 //!    for the first started client only), then `Starting` with its instance id; later stages
 //!    mirror that instance (`stage_of`; a disconnect is `Done` for an account that allows it).
@@ -35,6 +40,7 @@
 //! 5. Every change emits `bulk://progress` with the whole `BulkProgress`, and `Bulk` keeps the
 //!    latest copy for `bulk_current`.
 
+use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -51,8 +57,9 @@ use crate::instances::{auth_failed, challenged, wrong_account};
 use crate::roblox_api::types::UserPresence;
 use crate::model::{
     AccountStatus, AccountSummary, BulkItem, BulkProgress, BulkRequest, BulkStage, GameServer, Instance,
-    InstanceState, LaunchTarget, SameServer, ServerOrder,
+    InstanceState, LaunchTarget, PrivateServer, SameServer, ServerOrder,
 };
+use crate::vault::Secret;
 
 const EVENT: &str = "bulk://progress";
 const MIN_DELAY: u32 = 2_000;
@@ -219,7 +226,7 @@ impl Bulk {
     }
 
     /// Starts a single launch (button, tray): refused while a batch, an auto-rejoin or another
-    /// launch runs, so launches go one at a time (DESIGN §6). In flight until the guard drops.
+    /// launch runs, so launches go one at a time. In flight until the guard drops.
     pub fn begin_single_launch(&self) -> Result<Busy<'_>> {
         self.check_single_launch()?;
         // Taken atomically, so two launches asked for at once can't both start.
@@ -286,8 +293,13 @@ pub fn start(app: AppHandle, mut req: BulkRequest) -> Result<String> {
         return Err(AppError::Invalid(crate::commands::installing()));
     }
     let mut accounts = Vec::with_capacity(ids.len());
+    // The ones the window layout places: the accounts the user plays (full quality) keep their window.
+    let mut laid_out = Vec::new();
     for &id in ids {
         let a = s.db.account(id)?;
+        if !a.full_quality {
+            laid_out.push(id);
+        }
         let name = name_of(&a);
         if let Some(why) = cant_launch(a.status) {
             return Err(AppError::Invalid(tr!("{name} can't launch: {why}", name = name, why = why)));
@@ -321,6 +333,10 @@ pub fn start(app: AppHandle, mut req: BulkRequest) -> Result<String> {
             *batch = last;
             return Err(AppError::Invalid(crate::commands::installing()));
         }
+    }
+    // Layout slots up front, in list order: clients reach a game in whatever order they load.
+    if s.db.settings().is_ok_and(|v| v.window_layout != crate::model::WindowLayout::Off) {
+        s.tracker.reserve_slots(&laid_out, true);
     }
     let _ = app.emit(EVENT, &progress);
     log::info!("bulk batch {}: {} account(s)", progress.batch_id, accounts.len());
@@ -418,6 +434,9 @@ impl Run {
         if let Some(why) = &stop {
             log::warn!("bulk batch {} stopped early: {why}", self.batch_id);
         }
+        // Accounts that never started give their layout slots up; a Fit grid closes up. Before `done`:
+        // a batch started after that must not have its own up-front slots cleared by this one.
+        crate::instances::layout_batch_done(&self.app);
         self.update(|p| {
             if let Some(why) = stop {
                 halt(p, why);
@@ -431,8 +450,11 @@ impl Run {
 
     /// Every launch in order; `Some(why)` when the batch has to stop.
     async fn launch_all(&self, req: &BulkRequest) -> Option<String> {
-        let (mut server, mut follow) = (None, None);
-        if req.same_server != SameServer::Off {
+        let (mut server, mut follow, mut spread) = (None, None, None);
+        if req.same_server.spreads() {
+            self.set_stage(0, BulkStage::Ticket);
+            spread = self.spread(req).await;
+        } else if req.same_server != SameServer::Off {
             self.set_stage(0, BulkStage::Ticket);
             (server, follow) = self.same_server(req).await;
             if let Some(found) = &server {
@@ -474,11 +496,16 @@ impl Run {
                 }
             }
 
+            self.set_stage(i, BulkStage::Ticket);
+            // Once per account: a retry after a 403 must not take a second server.
+            let target = match spread.as_mut() {
+                Some(sp) => self.spread_target(a, sp, req).await,
+                None => target_for(&req.target, server.as_ref()),
+            };
             loop {
                 self.set_stage(i, BulkStage::Ticket);
-                let target = target_for(&req.target, server.as_ref());
                 let favourite = if started { None } else { req.favourite_id };
-                let refused = match crate::commands::launch_tracked(&self.app, &s, a.id, target, favourite, Some(req.delay_ms), req.fps_cap, true, None).await {
+                let refused = match crate::commands::launch_tracked(&self.app, &s, a.id, target.clone(), favourite, Some(req.delay_ms), req.fps_cap, true, None).await {
                     Ok((info, inst)) => {
                         started = true;
                         self.update(|p| {
@@ -563,20 +590,9 @@ impl Run {
     /// The server everyone is sent to (`PickFirst`), or the place whose server the rest follow
     /// the first started client into (module docs, step 1).
     async fn same_server(&self, req: &BulkRequest) -> (Option<(i64, String)>, Option<i64>) {
+        let Some((place_id, cookie)) = self.resolve_place(req).await else { return (None, None) };
         let s = self.app.state::<App>();
         let first = &self.accounts[0];
-        let resolved = match super::account_cookie(&s, first.id) {
-            Ok(cookie) => super::resolve(&s.api, first.id, &cookie, &req.target).await.map(|(join, _)| (join, cookie)),
-            Err(e) => Err(e),
-        };
-        let (place_id, cookie) = match resolved {
-            Ok((Join::Game { place_id, .. }, cookie)) => (place_id, cookie),
-            Ok(_) => return (None, None),
-            Err(e) => {
-                self.note(tr!("The target couldn't be checked ({why}), so each account joins on its own.", why = e.message()));
-                return (None, None);
-            }
-        };
         if req.same_server == SameServer::FollowFirst {
             return (None, Some(place_id));
         }
@@ -588,6 +604,76 @@ impl Run {
         };
         self.note(tr!("{why}, so the rest follow the first account's server.", why = why));
         (None, Some(place_id))
+    }
+
+    /// The public game the target names, resolved with the first account's cookie, and that
+    /// cookie. None when the target already names one server, or couldn't be checked (a note).
+    async fn resolve_place(&self, req: &BulkRequest) -> Option<(i64, Secret)> {
+        let s = self.app.state::<App>();
+        let first = &self.accounts[0];
+        let resolved = match super::account_cookie(&s, first.id) {
+            Ok(cookie) => super::resolve(&s.api, first.id, &cookie, &req.target).await.map(|(join, _)| (join, cookie)),
+            Err(e) => Err(e),
+        };
+        match resolved {
+            Ok((Join::Game { place_id, .. }, cookie)) => Some((place_id, cookie)),
+            Ok(_) => None,
+            Err(e) => {
+                self.note(tr!("The target couldn't be checked ({why}), so each account joins on its own.", why = e.message()));
+                None
+            }
+        }
+    }
+
+    /// The game and the public servers a spreading batch hands out (module docs, step 1).
+    async fn spread(&self, req: &BulkRequest) -> Option<Spread> {
+        let (place_id, cookie) = self.resolve_place(req).await?;
+        let s = self.app.state::<App>();
+        let closest = req.same_server == SameServer::Closest;
+        let order = if closest { ServerOrder::BestLatency } else { ServerOrder::Recommended };
+        let public = match server_page(&s.api, self.accounts[0].id, &cookie, place_id, order).await {
+            Ok(list) => spread_servers(&list, !closest),
+            Err(e) => {
+                self.note(tr!("The server list couldn't be read ({why}), so accounts were matched by Roblox on their own.", why = e.message()));
+                VecDeque::new()
+            }
+        };
+        Some(Spread { place_id, public })
+    }
+
+    /// One account's server in a spreading batch: a private server it owns (`OwnPrivate`), else
+    /// the next public one, else the target as given.
+    async fn spread_target(&self, a: &Account, sp: &mut Spread, req: &BulkRequest) -> LaunchTarget {
+        if req.same_server == SameServer::OwnPrivate {
+            match self.own_private(a, sp.place_id).await {
+                Some(access_code) => return LaunchTarget::PrivateAccess { place_id: sp.place_id, access_code },
+                None => self.note(tr!("{name} has no private server of this game, so it joins a public one.", name = a.name)),
+            }
+        }
+        match sp.public.pop_front() {
+            Some(job_id) => LaunchTarget::Server { place_id: sp.place_id, job_id },
+            None => {
+                self.note(tr!("Not enough servers with room were listed, so the rest were matched by Roblox on their own."));
+                req.target.clone()
+            }
+        }
+    }
+
+    /// The access code of a private server `a` owns of `place_id`.
+    async fn own_private(&self, a: &Account, place_id: i64) -> Option<String> {
+        let s = self.app.state::<App>();
+        let cookie = super::account_cookie(&s, a.id)
+            .inspect_err(|e| log::warn!("bulk batch {}: cookie of account {} could not be read: {e}", self.batch_id, a.id))
+            .ok()?;
+        // shortcut: first page of the list only, enough unless an account owns a page's worth of servers of one game.
+        match s.api.private_servers(a.id, &cookie, place_id, None).await {
+            Ok(page) if !page.join_restricted => own_server(&page.servers, a.user_id),
+            Ok(_) => None,
+            Err(e) => {
+                log::warn!("bulk batch {}: private servers of account {} could not be read: {e}", self.batch_id, a.id);
+                None
+            }
+        }
     }
 
     /// The server the leading client went to: from its log (up to 90 s), else from its own
@@ -699,16 +785,55 @@ impl Run {
 async fn pick_server(
     api: &crate::roblox_api::Client,
     account_id: i64,
-    cookie: &crate::vault::Secret,
+    cookie: &Secret,
     place_id: i64,
     n: usize,
 ) -> Result<Option<String>> {
+    Ok(choose_server(&server_page(api, account_id, cookie, place_id, ServerOrder::Recommended).await?, n))
+}
+
+/// One page of the place's servers in `order`, full ones left out; the fullest first if Roblox
+/// refuses `order` for this account.
+async fn server_page(
+    api: &crate::roblox_api::Client,
+    account_id: i64,
+    cookie: &Secret,
+    place_id: i64,
+    order: ServerOrder,
+) -> Result<Vec<GameServer>> {
     let list = |order| api.servers_public(account_id, Some(cookie), place_id, order, true, 100, None);
-    let page = match list(ServerOrder::Recommended).await {
+    let page = match list(order).await {
         Err(AppError::Invalid(_)) => list(ServerOrder::OccupancyDesc).await?,
         r => r?,
     };
-    Ok(choose_server(&page.servers, n))
+    Ok(page.servers)
+}
+
+/// Where a spreading batch sends its accounts: the game, and the public servers not handed out yet.
+struct Spread {
+    place_id: i64,
+    public: VecDeque<String>,
+}
+
+/// Public servers for a spreading batch, one per account: GUID ids with room for one more and a
+/// spare seat, each once, in list order or shuffled.
+pub fn spread_servers(servers: &[GameServer], shuffle: bool) -> VecDeque<String> {
+    let mut seen = HashSet::new();
+    let mut ids: Vec<String> = servers
+        .iter()
+        .filter(|s| is_uuid(&s.id) && s.playing >= 0 && i64::from(s.playing) + 2 <= i64::from(s.max_players))
+        .filter(|s| seen.insert(s.id.as_str()))
+        .map(|s| s.id.clone())
+        .collect();
+    if shuffle {
+        ids.sort_by_cached_key(|_| Uuid::new_v4().as_u128());
+    }
+    ids.into()
+}
+
+/// The access code of a private server `user_id` owns and may join.
+fn own_server(servers: &[PrivateServer], user_id: i64) -> Option<String> {
+    servers.iter().filter(|p| p.owner_id == Some(user_id)).find_map(|p| p.access_code.clone())
 }
 
 /// A new batch: every account `Queued`, the delay clamped.
@@ -744,12 +869,15 @@ fn cant_launch(status: AccountStatus) -> Option<String> {
 }
 
 /// A launch error that stops the batch (why and what to do); None when only that item fails.
+/// A refusal for now (`Wait`: an update that would close the running clients, Roblox's
+/// installer, a public network) refuses every account the same way, so it stops the rest too.
 fn stop_reason(e: &AppError, name: &str) -> Option<String> {
     match e {
         AppError::Challenge => {
             Some(tr!("Roblox wants a human check for {name}. Sign in to it again with Add account > Sign in with Roblox.", name = name))
         }
         AppError::Locked => Some(tr!("The vault locked. Unlock it.")),
+        AppError::Wait(why) => Some(why.clone()),
         _ => None,
     }
 }
@@ -871,6 +999,7 @@ mod tests {
             relaunching: false,
             relaunch_problem: None,
             sign_in_problem: false,
+            micro_size: None,
             applied_limits: Default::default(),
         }
     }
@@ -901,6 +1030,44 @@ mod tests {
         assert_eq!(choose_server(&[], 1), None);
         // Duplicates (pages repeat servers) change nothing.
         assert_eq!(choose_server(&[server(&a, 30, 35), server(&c, 20, 35), server(&a, 30, 35)], 3), Some(a.clone()));
+    }
+
+    #[test]
+    fn spread_servers_hands_out_each_server_with_room_once() {
+        let (a, b, c, d) = (guid(1), guid(2), guid(3), guid(4));
+        let list = [
+            server(&a, 10, 20),
+            server(&b, 19, 20), // room for one, no spare seat
+            server(&c, 0, 8),
+            server(&a, 10, 20), // pages repeat servers
+            server("not-a-guid", 1, 20),
+            server(&guid(5), -1, 20),
+            server(&d, 18, 20),
+        ];
+        let kept = [a.clone(), c.clone(), d.clone()];
+        assert_eq!(spread_servers(&list, false), kept, "list order kept (Closest)");
+        let mut shuffled: Vec<String> = spread_servers(&list, true).into();
+        shuffled.sort();
+        assert_eq!(shuffled, kept, "shuffled, the same servers");
+        assert!(spread_servers(&[], true).is_empty());
+    }
+
+    #[test]
+    fn own_server_is_one_this_user_owns_and_can_join() {
+        let ps = |owner: Option<i64>, code: Option<&str>| PrivateServer {
+            vip_server_id: 1,
+            name: "S".into(),
+            owner_id: owner,
+            owner_name: None,
+            playing: 0,
+            max_players: 10,
+            job_id: None,
+            access_code: code.map(Into::into),
+        };
+        let list = [ps(Some(7), Some("friend")), ps(Some(5), None), ps(Some(5), Some("mine")), ps(Some(5), Some("second"))];
+        assert_eq!(own_server(&list, 5), Some("mine".into()));
+        assert_eq!(own_server(&list, 9), None);
+        assert_eq!(own_server(&[ps(None, Some("x"))], 5), None);
     }
 
     #[test]
@@ -1043,10 +1210,15 @@ mod tests {
     }
 
     #[test]
-    fn only_a_challenge_a_locked_vault_or_a_wrong_account_stops_the_batch() {
+    fn only_a_challenge_a_locked_vault_a_refusal_for_now_or_a_wrong_account_stops_the_batch() {
         let why = stop_reason(&AppError::Challenge, "Alt 1").unwrap();
         assert!(why.contains("Alt 1") && why.contains("Sign in"), "{why}");
         assert!(stop_reason(&AppError::Locked, "Alt 1").unwrap().contains("Unlock"));
+        // The update hold refuses every account alike: said once, not on each row.
+        let hold = "Roblox has an update. Close your clients first, then launch.";
+        assert_eq!(stop_reason(&AppError::Wait(hold.into()), "Alt 1").as_deref(), Some(hold));
+        // One account being busy is about that account only: the rest go on.
+        assert_eq!(stop_reason(&AppError::Busy("Alt 1 is already running.".into()), "Alt 1"), None);
         for e in [AppError::CookieInvalid, AppError::Network("x".into()), AppError::Roblox("HTTP 500".into())] {
             assert_eq!(stop_reason(&e, "Alt 1"), None, "{e}");
         }
@@ -1185,6 +1357,7 @@ mod tests {
             launch_args: None,
             discord_muted: false,
             full_quality: false,
+            main: false,
             fps_cap: None,
 
         };

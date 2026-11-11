@@ -19,7 +19,8 @@ use crate::model::{Instance, InstanceState};
 /// The "RoALT" application on Discord's Developer Portal; its art asset `roalt` is the logo.
 const CLIENT_ID: &str = "1565066775752741165";
 const DOWNLOAD: &str = "https://github.com/inspectsoftware/RoALT/releases/latest";
-const INVITE: &str = "https://discord.gg/qcj68tHKCX";
+/// The same invite as the app's (`src/features/donate/links.ts`).
+const INVITE: &str = "https://discord.gg/roaltdev";
 /// Discord allows about 5 activity updates per 20 s; one is sent only when it changed.
 const TICK: Duration = Duration::from_secs(5);
 
@@ -214,6 +215,7 @@ mod tests {
             relaunching: false,
             relaunch_problem: None,
             sign_in_problem: false,
+            micro_size: None,
             applied_limits: Limits::default(),
         }
     }

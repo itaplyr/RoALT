@@ -1,0 +1,35 @@
+/* Donate: the amounts in rows of one magnitude each, hairlines between the rows. */
+@layer views {
+  /* A classed subject: a bare `* + *` makes Chrome restyle every list's siblings (the Accounts table). */
+  .donate-row + .donate-row {
+    border-top: 1px solid var(--line);
+  }
+  .donate-row {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 8px;
+    padding-block: 8px;
+  }
+  .donate-amount {
+    justify-content: center;
+    min-height: var(--h-lg);
+    padding: 0 4px;
+    font-size: var(--fs-body);
+    font-variant-numeric: tabular-nums;
+  }
+  /* The amount picked, held pressed in the accent while the dialog goes. It lights at once: a fade
+     would pass through a grey where the label can't be read. */
+  .donate-amount[data-picked] {
+    background: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent-ring);
+    color: var(--on-accent);
+    transition: scale var(--dur-fast) var(--ease-out);
+  }
+  @media (forced-colors: active) {
+    .donate-amount[data-picked] {
+      forced-color-adjust: none;
+      background: Highlight;
+      color: HighlightText;
+    }
+  }
+}

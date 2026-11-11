@@ -1,0 +1,360 @@
+/* What floats: dialogs, menus, sheets, toasts, tooltips. Top layer only; each opens from where it came
+   (translate + scale under @starting-style), exits faster than it entered. */
+@layer components {
+  /* Native <dialog>: fades and rises in, and out again (allow-discrete keeps it in the top layer). */
+  .dlg {
+    margin: auto;
+    padding: 0;
+    max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 64px);
+    border: 0;
+    border-radius: var(--r-xl);
+    background: var(--float);
+    color: var(--fg);
+    box-shadow: var(--shadow-dialog);
+    overflow: auto;
+    scrollbar-width: thin;
+    opacity: 0;
+    translate: 0 var(--rise-md);
+    scale: var(--pop-scale);
+    transition:
+      opacity var(--dur-dialog-exit) var(--ease-in),
+      translate var(--dur-dialog-exit) var(--ease-in),
+      scale var(--dur-dialog-exit) var(--ease-in),
+      overlay var(--dur-dialog-exit) allow-discrete,
+      display var(--dur-dialog-exit) allow-discrete;
+  }
+  .dlg[open] {
+    opacity: 1;
+    translate: 0 0;
+    scale: 1;
+    transition:
+      opacity var(--dur-base) var(--ease-out),
+      translate var(--dur-spring) var(--spring),
+      scale var(--dur-spring) var(--spring),
+      overlay var(--dur-base) allow-discrete,
+      display var(--dur-base) allow-discrete;
+  }
+  .dlg::backdrop {
+    background: transparent;
+    transition:
+      background-color var(--dur-dialog-exit) var(--ease-out),
+      overlay var(--dur-dialog-exit) allow-discrete,
+      display var(--dur-dialog-exit) allow-discrete;
+  }
+  .dlg[open]::backdrop {
+    background: var(--backdrop);
+  }
+  @starting-style {
+    .dlg[open] {
+      opacity: 0;
+      translate: 0 var(--rise-md);
+      scale: var(--pop-scale);
+    }
+    .dlg[open]::backdrop {
+      background: transparent;
+    }
+  }
+  .dlg-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 56px;
+    padding-block: 10px 6px;
+    padding-inline: 22px 10px;
+  }
+  .dlg-title {
+    flex: 1;
+    min-width: 0;
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .dlg-body {
+    padding: 0 22px 20px;
+  }
+  .dlg-foot {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 0 22px 20px;
+  }
+
+  /* Popover menu anchored to its trigger (opens below by default; flips when there's no room). */
+  .menu {
+    inset: auto;
+    margin: 6px 0;
+    position-area: block-end span-inline-end;
+    position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline;
+    min-width: 220px;
+    max-width: min(360px, calc(100vw - 16px));
+    max-height: min(420px, calc(100vh - 16px));
+    overflow: auto;
+    scrollbar-width: thin;
+    padding: 6px;
+    border: 0;
+    border-radius: var(--r-lg);
+    background: var(--float);
+    color: var(--fg);
+    box-shadow: var(--shadow-pop);
+    opacity: 0;
+    scale: var(--pop-scale);
+    translate: 0 calc(var(--rise-sm) * -1);
+    /* From the trigger's corner (the menu opens beside its start edge). */
+    transform-origin: top left;
+    transition:
+      opacity var(--dur-exit) var(--ease-in),
+      scale var(--dur-exit) var(--ease-in),
+      translate var(--dur-exit) var(--ease-in),
+      overlay var(--dur-exit) allow-discrete,
+      display var(--dur-exit) allow-discrete;
+  }
+  /* It swells out of its trigger as a drop: smaller and rounder, then its corners settle. */
+  .menu:popover-open {
+    opacity: 1;
+    scale: 1;
+    translate: 0 0;
+    transition:
+      opacity var(--dur-fast) var(--ease-out),
+      scale var(--dur-spring) var(--spring),
+      translate var(--dur-spring) var(--spring),
+      border-radius var(--dur-slow) var(--ease-out),
+      overlay var(--dur-fast) allow-discrete,
+      display var(--dur-fast) allow-discrete;
+  }
+  @starting-style {
+    .menu:popover-open {
+      opacity: 0;
+      scale: var(--drop-scale);
+      translate: 0 calc(var(--rise-sm) * -1);
+      border-radius: var(--drop-radius);
+    }
+  }
+  /* Opening upward: it grows from below. */
+  .menu[data-up] {
+    position-area: block-start span-inline-end;
+    transform-origin: bottom left;
+  }
+  :root[dir="rtl"] .menu {
+    transform-origin: top right;
+  }
+  :root[dir="rtl"] .menu[data-up] {
+    transform-origin: bottom right;
+  }
+  .menu-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 36px;
+    padding: 0 10px;
+    border-radius: var(--r-sm);
+    color: var(--fg);
+    text-align: start;
+    font-size: var(--fs-body);
+    transition: background-color var(--dur-instant) var(--ease-out);
+  }
+  .menu-item > svg {
+    color: var(--fg-2);
+  }
+  .menu-item:hover:not(:disabled),
+  .menu-item:focus-visible {
+    background: var(--hover);
+    outline: none;
+  }
+  .menu-item:focus-visible {
+    box-shadow: inset 0 0 0 2px var(--focus);
+  }
+  .menu-item:disabled {
+    color: var(--fg-3);
+  }
+  .menu-item:disabled > svg {
+    color: var(--fg-disabled);
+  }
+  .menu-item[data-danger] {
+    color: var(--err);
+  }
+  .menu-item[data-danger] > svg {
+    color: var(--err);
+  }
+  .menu-item .kbd {
+    margin-inline-start: auto;
+  }
+  .menu-sep {
+    height: 1px;
+    margin: 5px 4px;
+    background: var(--line);
+  }
+  .menu-label {
+    padding: 8px 10px 4px;
+    color: var(--fg-3);
+    font-size: var(--fs-meta);
+    font-weight: 500;
+  }
+
+  /* An island sheet: anchored under its capsule, the island's own material. */
+  .island-sheet {
+    inset: auto;
+    margin: 8px 0 0;
+    position-area: block-end;
+    position-try-fallbacks: flip-inline;
+    justify-self: anchor-center;
+    width: min(380px, calc(100vw - 24px));
+    max-height: min(520px, calc(100vh - 80px));
+    overflow: auto;
+    scrollbar-width: thin;
+    padding: 0;
+    border: 0;
+    border-radius: var(--r-xl);
+    background: var(--float);
+    color: var(--fg);
+    box-shadow: var(--shadow-pop);
+    opacity: 0;
+    /* Twice a popover's travel (it unfolds out of its capsule); none under reduced motion. */
+    scale: calc(1 - (1 - var(--pop-scale)) * 2);
+    translate: 0 calc(var(--rise-md) * -1.25);
+    transform-origin: top center;
+    transition:
+      opacity var(--dur-exit) var(--ease-in),
+      scale var(--dur-exit) var(--ease-in),
+      translate var(--dur-exit) var(--ease-in),
+      overlay var(--dur-exit) allow-discrete,
+      display var(--dur-exit) allow-discrete;
+  }
+  .island-sheet:popover-open {
+    opacity: 1;
+    scale: 1;
+    translate: 0 0;
+    transition:
+      opacity var(--dur-fast) var(--ease-out),
+      scale var(--dur-spring-slow) var(--spring),
+      translate var(--dur-spring-slow) var(--spring),
+      overlay var(--dur-fast) allow-discrete,
+      display var(--dur-fast) allow-discrete;
+  }
+  @starting-style {
+    .island-sheet:popover-open {
+      opacity: 0;
+      scale: calc(1 - (1 - var(--pop-scale)) * 2);
+      translate: 0 calc(var(--rise-md) * -1.25);
+    }
+  }
+
+  /* Toasts: pills at the bottom end. Their stack is a passive popover (the top layer, above a
+     dialog), without the browser's popover box. */
+  .toaster {
+    inset-block: auto 16px;
+    inset-inline: auto 16px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    overflow: visible;
+  }
+  .toast {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: max-content;
+    max-width: 380px;
+    min-height: 44px;
+    padding-block: 6px;
+    padding-inline: 16px 6px;
+    border-radius: 22px;
+    background: var(--float);
+    box-shadow: var(--shadow-pop);
+    color: var(--fg);
+    pointer-events: auto;
+  }
+  .toast-mark {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--ok);
+  }
+  .toast-error .toast-mark {
+    border-radius: 1px;
+    background: var(--attention);
+    transform: rotate(45deg);
+  }
+
+  /* One tooltip for the app (ui/Tooltip): anchored to what it explains. */
+  .tooltip {
+    inset: auto;
+    margin: 6px;
+    position-area: block-end;
+    position-try-fallbacks: flip-block;
+    justify-self: anchor-center;
+    max-width: 280px;
+    padding: 6px 10px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: var(--fg);
+    color: var(--on-fg);
+    font-size: var(--fs-meta);
+    font-weight: 500;
+    line-height: 1.35;
+    pointer-events: none;
+    opacity: 0;
+    translate: 0 -2px;
+    transition:
+      opacity var(--dur-instant) var(--ease-out),
+      translate var(--dur-fast) var(--ease-out),
+      overlay var(--dur-instant) allow-discrete,
+      display var(--dur-instant) allow-discrete;
+  }
+  .tooltip:popover-open {
+    opacity: 1;
+    translate: 0 0;
+  }
+  @starting-style {
+    .tooltip:popover-open {
+      opacity: 0;
+      translate: 0 -2px;
+    }
+  }
+  .tooltip[data-side="top"] {
+    position-area: block-start;
+  }
+  .tooltip .kbd {
+    margin-inline-start: 6px;
+    background: rgb(127 127 127 / 0.28);
+    color: inherit;
+    box-shadow: none;
+  }
+
+  /* A contextual pill toolbar: the island's material, docked where the work is. */
+  .pill-toolbar {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    max-width: 100%;
+    min-height: var(--island-h);
+    padding: var(--island-pad);
+    border-radius: var(--r-pill);
+    background: var(--island);
+    box-shadow: var(--shadow-island);
+  }
+  .pill-toolbar[data-placement="sticky-bottom"] {
+    position: sticky;
+    bottom: 16px;
+    z-index: 20;
+    margin-inline: auto;
+  }
+  .pill-sep {
+    width: 1px;
+    height: 20px;
+    margin: 0 4px;
+    flex: none;
+    background: var(--line);
+  }
+  .pill-label {
+    padding-inline: 12px 10px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+}

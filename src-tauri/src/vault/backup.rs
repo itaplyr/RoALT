@@ -24,6 +24,20 @@ pub struct BackupPayload {
     pub groups: Vec<BackupGroup>,
     #[serde(default)]
     pub favourites: Vec<BackupFavourite>,
+    /// Absent in backups from before macros; restored ones start untrusted.
+    #[serde(default)]
+    pub macros: Vec<BackupMacro>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupMacro {
+    pub name: String,
+    pub body: String,
+    #[serde(default)]
+    pub hotkey: String,
+    #[serde(default)]
+    pub run_on_launch: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -60,6 +74,8 @@ pub struct BackupAccount {
     pub fps_cap: Option<u32>,
     #[serde(default)]
     pub full_quality: bool,
+    #[serde(default)]
+    pub main: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -134,7 +150,15 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
-    let res = fs::File::create(&tmp)
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let res = options
+        .open(&tmp)
         .and_then(|mut f| {
             f.write_all(bytes)?;
             f.sync_all()
@@ -159,6 +183,7 @@ mod tests {
     fn sample() -> BackupPayload {
         BackupPayload {
             favourites: Vec::new(),
+            macros: vec![BackupMacro { name: "Farm".into(), body: "Send 'w'\n".into(), hotkey: "Ctrl+F1".into(), run_on_launch: true }],
             version: 1,
             exported_at: 1_700_000_000,
             accounts: vec![BackupAccount {
@@ -177,6 +202,7 @@ mod tests {
                 discord_muted: true,
                 fps_cap: Some(30),
                 full_quality: true,
+                main: true,
             }],
             groups: vec![BackupGroup { name: "Mains".into(), color: None, sort_order: 0 }],
         }
@@ -197,7 +223,17 @@ mod tests {
         assert_eq!(back.accounts[0].cookie.as_str(), "fake-cookie");
         assert_eq!(back.accounts[0].groups, ["Mains"]);
         assert_eq!(back.groups[0].name, "Mains");
+        let m = &back.macros[0];
+        assert_eq!((m.name.as_str(), m.body.as_str(), m.hotkey.as_str(), m.run_on_launch), ("Farm", "Send 'w'\n", "Ctrl+F1", true));
         assert!(matches!(wrong, Err(AppError::WrongPassword)));
+    }
+
+    #[test]
+    fn a_backup_from_before_macros_still_reads() {
+        let old: BackupPayload = serde_json::from_str(r#"{"version":1,"exportedAt":5,"accounts":[],"groups":[],"favourites":[]}"#).unwrap();
+        assert!(old.macros.is_empty());
+        let m: BackupMacro = serde_json::from_str(r#"{"name":"x","body":""}"#).unwrap();
+        assert!(m.hotkey.is_empty() && !m.run_on_launch);
     }
 
     #[test]

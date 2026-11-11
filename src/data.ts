@@ -32,6 +32,10 @@ export const qk = {
   shutdown: ["shutdown"],
   background: ["background"],
   network: ["network"],
+  ahk: ["ahk"],
+  macros: ["macros"],
+  macroRuns: ["macroRuns"],
+  news: ["news"],
 } as const;
 
 export const queryClient = new QueryClient({
@@ -49,7 +53,9 @@ const bySortOrder = <T extends { sortOrder: number }>(list: T[]) => [...list].so
 
 export const useVault = () => useQuery({ queryKey: qk.vault, queryFn: api.vaultStatus });
 export const useSettings = () => useQuery({ queryKey: qk.settings, queryFn: api.settingsGet });
-export const useAccounts = () => useQuery({ queryKey: qk.accounts, queryFn: api.accountsList, select: bySortOrder });
+/** The MAIN account first, then the user's order (as the backend lists them). */
+const mainFirst = (list: AccountSummary[]) => bySortOrder(list).sort((a, b) => Number(b.main) - Number(a.main));
+export const useAccounts = () => useQuery({ queryKey: qk.accounts, queryFn: api.accountsList, select: mainFirst });
 export const useGroups = () => useQuery({ queryKey: qk.groups, queryFn: api.groupsList, select: bySortOrder });
 export const useFavourites = () => useQuery({ queryKey: qk.favourites, queryFn: api.favouritesList, select: bySortOrder });
 
@@ -63,12 +69,13 @@ export const useMetrics = () =>
 /** How busy the whole PC is; polled like the metrics. */
 export const useSystemUsage = (enabled: boolean) =>
   useQuery({ queryKey: qk.system, queryFn: api.systemUsage, enabled, staleTime: 0, refetchInterval: 2000, refetchIntervalInBackground: false });
-/** While the lock is wanted but not held, asks again every 5 s (Roblox may have been closed). */
+/** While the lock is wanted but not held, asks again every 5 s (Roblox may have been closed);
+ * so too after a failed read, which would otherwise stay unknown. */
 export const useMultiStatus = () =>
   useQuery({
     queryKey: qk.multi,
     queryFn: api.multiInstanceStatus,
-    refetchInterval: (q) => (q.state.data?.enabled && !q.state.data.active ? 5000 : false),
+    refetchInterval: (q) => (q.state.status === "error" || (q.state.data?.enabled && !q.state.data.active) ? 5000 : false),
     refetchIntervalInBackground: false,
   });
 
@@ -80,6 +87,13 @@ export function publicBlock(network: { public: boolean } | undefined, settings: 
   if (!network?.public || settings?.allowPublicNetworks !== false) return null;
   return t("app.publicBlocked");
 }
+
+export const useMacros = () => useQuery({ queryKey: qk.macros, queryFn: api.macrosList });
+/** What runs now; macros://runs replaces it. */
+export const useMacroRuns = () => useQuery({ queryKey: qk.macroRuns, queryFn: api.macroRuns });
+
+/** Home's News: fetched at start, then every 30 minutes while RoALT runs. */
+export const useNews = () => useQuery({ queryKey: qk.news, queryFn: api.news, staleTime: 30 * 60_000, refetchInterval: 30 * 60_000 });
 
 /** The Roblox client and its versions; roblox://client replaces it. */
 export const useRobloxClient = () => useQuery({ queryKey: qk.client, queryFn: api.robloxClient });
@@ -137,7 +151,11 @@ export function useUpdateAccount() {
     onMutate: ({ id, patch }) =>
       setAccounts(qc, (list) =>
         list.map((a) =>
-          a.id === id ? { ...a, ...patch, color: patch.color === undefined ? a.color : patch.color || null } : a,
+          a.id === id
+            ? { ...a, ...patch, color: patch.color === undefined ? a.color : patch.color || null }
+            : patch.main && a.main // one MAIN: the old one loses it
+              ? { ...a, main: false }
+              : a,
         ),
       ),
     onSuccess: (acc) => setAccounts(qc, (list) => list.map((a) => (a.id === acc.id ? acc : a))),
@@ -145,11 +163,13 @@ export function useUpdateAccount() {
   });
 }
 
-/** Optimistic settings change (theme and density apply at once). */
-export function useSetSettings() {
+/** Optimistic settings change (theme and density apply at once). `quiet`: the caller shows a failure
+ * itself (beside the control), so it doesn't toast. */
+export function useSetSettings(opts: { quiet?: boolean } = {}) {
   const qc = useQueryClient();
   return useMutation({
     mutationKey: qk.settings,
+    meta: opts.quiet ? { quiet: true } : undefined,
     mutationFn: (patch: SettingsPatch) => api.settingsSet(patch),
     onMutate: (patch) => qc.setQueryData<Settings>(qk.settings, (s) => (s ? { ...s, ...patch } : s)),
     onSuccess: (s) => {

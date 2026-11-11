@@ -15,12 +15,14 @@
 // Moving the data folder to a path containing "bad" fails as a folder that already has a RoALT database.
 // Anti-AFK (when on) "presses a key" in each opted-in client in a game every 20 s, so the time moves.
 // Discord: any discord.com webhook URL is accepted; one whose token contains "deleted" fails the test.
+// Macros: AutoHotkey is "installed"; "Shared farm loop" is imported (untrusted) and refuses to run until trusted.
+// Runs only change state: nothing presses keys, and a client ending ends its run.
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import type {
   AccountInfo, AccountStatus, AccountSummary, BulkProgress, BulkRequest, BulkStage, Crash, Favourite, GameInfo, GameServer, Group, Instance,
-  JoinCandidate, LaunchTarget, MultiInstanceStatus, ParsedInput, Presence, PrivateServer, PrivateServerPage, ServerOrder, ServerPage,
-  RobloxClient, Settings, VaultMode,
+  JoinCandidate, LaunchTarget, MultiInstanceStatus, ParsedInput, Presence, PrivateServer, PrivateServerBuy, PrivateServerPage, PrivateServerPatch, PrivateServerSettings, ServerOrder, ServerPage,
+  RobloxClient, Settings, VaultMode, Macro, MacroInput, MacroRun,
 } from "../api";
 
 const MIN = 60_000;
@@ -66,6 +68,7 @@ let accounts: AccountSummary[] = seed.map(([alias, displayName, username, userId
   discordMuted: false,
   fpsCap: i === 1 ? 15 : null,
   fullQuality: false,
+  main: i === 0,
 }));
 
 let settings: Settings = {
@@ -75,9 +78,9 @@ let settings: Settings = {
   memRestartMb: 0, memThrottle: { mb: 0, cpuCap: 10 }, trimEveryMin: 0, autoSpread: false, fairCap: false,
   adaptive: { enabled: false, background: { cpuCap: 25, eco: true, trimEveryMin: null, affinity: null } }, bandwidthKbps: 0,
   antiAfk: { enabled: false, intervalMin: 15 },
-  discord: { crash: true, hang: true, memRestart: true, disconnect: true, restart: true, breaker: true, batchDone: true, launch: false, statusEveryMin: 0 },
-  autoUpdate: false, selfUpdate: true, tabLayout: "top", discordPresence: true, minimizeOnLaunch: false, liveHiddenPreviews: true, microWidth: 320, microHeight: 240, tinyOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0, lowGraphics: true, skipSplash: false, lighterRendering: true, renderFlags: { msaa: "x1", texture: "lowest", mode: "default", graySky: false, noGrass: true, lowestFrm: true, pauseVoxelizer: false },
-  allowPublicNetworks: true, language: "", headless: false, keepRunningOnClose: false, headlessWidth: 640, headlessHeight: 360,
+  discord: { crash: true, hang: true, memRestart: true, disconnect: true, restart: true, breaker: true, batchDone: true, launch: false, statusEveryMin: 0, ping: "" },
+  autoUpdate: false, selfUpdate: true, tabLayout: "top", discordPresence: true, minimizeOnLaunch: false, microWidth: 320, microHeight: 240, tinyOnLaunch: false, panicHotkey: "", cleanLogs: false, fpsCap: 0, lowGraphics: true, skipSplash: false, protectMain: true, muteOnLaunch: false, windowLayout: "off", lighterRendering: true, renderFlags: { msaa: "x1", texture: "lowest", mode: "default", graySky: false, noGrass: true, lowestFrm: true, pauseVoxelizer: false },
+  allowPublicNetworks: true, language: "", headless: false, keepRunningOnClose: false, headlessWidth: 640, headlessHeight: 360, ahkPath: "", macroAutorun: false,
 };
 
 // Outdated, so Settings offers the update and the Launch view warns before a batch.
@@ -198,10 +201,11 @@ function endInstance(id: string, note: string) {
   i.endedAt = Date.now();
   i.note = note;
   instancesChanged();
+  stopMacroRuns((r) => r.instanceId === id);
 }
 /** The last performance profile "saved" in the preview (performance_export). */
 let lastProfile: string | null = null;
-const PERF_KEYS = ["fpsCap", "lowGraphics", "lighterRendering", "renderFlags", "minimizeOnLaunch", "liveHiddenPreviews", "microWidth", "microHeight", "tinyOnLaunch", "memRestartMb", "memThrottle", "trimEveryMin", "autoSpread", "fairCap", "adaptive"] as const;
+const PERF_KEYS = ["fpsCap", "lowGraphics", "lighterRendering", "renderFlags", "minimizeOnLaunch", "muteOnLaunch", "microWidth", "microHeight", "tinyOnLaunch", "memRestartMb", "memThrottle", "trimEveryMin", "autoSpread", "fairCap", "adaptive"] as const;
 
 function perfProfile(previewFps: number) {
   const s: Record<string, unknown> = {};
@@ -316,7 +320,7 @@ function addFake(username: string): AccountSummary {
   const a: AccountSummary = {
     id, userId: 6000000000 + id, username, displayName: username.replace(/_/g, " "), alias: "", notes: "", color: null,
     favourite: false, sortOrder: accounts.length, groupIds: [], status: "valid", statusCheckedAt: Date.now(), createdAt: Date.now(),
-    allowDisconnect: false, launchArgs: null, discordMuted: false, fpsCap: null, fullQuality: false,
+    allowDisconnect: false, launchArgs: null, discordMuted: false, fpsCap: null, fullQuality: false, main: false,
   };
   accounts.push(a);
   changed();
@@ -394,7 +398,7 @@ const target = (t: LaunchTarget): ParsedInput => ({ kind: "target", target: t })
 const bad = (reason: string): ParsedInput => ({ kind: "invalid", reason });
 const follow = (v?: string) => (idOf(v) ? target({ kind: "followUser", userId: Number(v) }) : bad("That user ID isn't valid."));
 
-/** A small stand-in for launcher::target::parse (the real rules: docs/research/ref_parse.py). */
+/** A small stand-in for launcher::target::parse (the real rules: src-tauri/src/launcher/target.rs). */
 function parseTarget(raw: string): ParsedInput {
   const s = raw.trim().replace(/^<|>$/g, "");
   if (!s) return bad("Paste a game link, an ID or @username.");
@@ -475,6 +479,20 @@ const placeOfTarget = (t: LaunchTarget) => ("placeId" in t ? t.placeId : t.kind 
 // ---------- M5: bulk launch, servers ----------
 
 const EXPIRED = "This cookie is not valid or has expired. Sign in again.";
+// ---------- macros ----------
+
+let macros: Macro[] = [
+  { id: 1, name: "Anti-idle jump", body: "; A_Args[1]: the client's window id, A_Args[2]: its pid\nwin := \"ahk_id \" A_Args[1]\nLoop {\n  WinActivate win\n  if WinWaitActive(win, , 2)\n    Send \"{Space}\"\n  Sleep 60000\n}\n", trusted: true, hotkey: "Ctrl+Shift+F1", runOnLaunch: true, createdAt: now - DAY, updatedAt: now - DAY },
+  { id: 2, name: "Shared farm loop", body: "Loop {\n  Send \"{w down}\"\n  Sleep 2000\n  Send \"{w up}\"\n}\n", trusted: false, hotkey: "", runOnLaunch: false, createdAt: now - MIN, updatedAt: now - MIN },
+];
+let macroRuns: MacroRun[] = [];
+const runsChanged = () => void emit("macros://runs", structuredClone(macroRuns));
+function stopMacroRuns(which: (r: MacroRun) => boolean) {
+  const before = macroRuns.length;
+  macroRuns = macroRuns.filter((r) => !which(r));
+  if (macroRuns.length !== before) runsChanged();
+}
+
 let batch: BulkProgress | null = null;
 let batchCancel = false;
 function bulkChanged() {
@@ -548,16 +566,51 @@ function guestLimited() {
   guest = guest.minute === minute ? { minute, calls: guest.calls + 1 } : { minute, calls: 1 };
   return guest.calls > 3 ? Math.ceil(((minute + 1) * MIN - Date.now()) / 1000) : 0;
 }
+// Owner-side state of each private server; servers owned by a vault account get its userId.
+const vips = new Map<number, { ownerId: number | null; ownerName: string | null; settings: PrivateServerSettings }>();
+const bought: { vipServerId: number; ownerName: string }[] = [];
+const boughtKeys = new Set<string>();
+const NOT_OWNER = "Only the owner's account can change this.";
+const NO_NAME = "A private server needs a name.";
+
+function vipFor(vipServerId: number, name: string, ownerName: string | null) {
+  if (!vips.has(vipServerId)) {
+    const owner = accounts.find((x) => x.username === ownerName);
+    vips.set(vipServerId, {
+      ownerId: owner?.userId ?? (ownerName ? 1_000_000 + vipServerId : null),
+      ownerName,
+      settings: {
+        vipServerId, name, active: true, friendsAllowed: true, allowedUsers: [],
+        renews: false, expired: false, expires: new Date(now + 12 * DAY).toISOString(), price: 100,
+      },
+    });
+  }
+  return vips.get(vipServerId)!;
+}
+
+/** The server's settings when `accountId` is its (valid) owner, else the mock's refusal. */
+function ownedVip(accountId: number, vipServerId: number) {
+  const a = find(accountId);
+  if (!a) return fail("notFound", "Not found.");
+  if (a.status !== "valid") return fail("cookieInvalid", EXPIRED);
+  const v = vips.get(vipServerId);
+  return v && v.ownerId === a.userId ? v.settings : fail("invalid", NOT_OWNER);
+}
+
 function privatePage(placeId: number, a: AccountSummary): PrivateServerPage {
-  const s = (vipServerId: number, name: string, ownerName: string | null, playing: number, maxPlayers: number, joinable: boolean): PrivateServer => ({
-    vipServerId, name, ownerId: ownerName ? 1_000_000 + vipServerId : null, ownerName, playing, maxPlayers,
-    jobId: playing ? crypto.randomUUID() : null, accessCode: joinable ? crypto.randomUUID() : null,
-  });
+  const s = (vipServerId: number, name: string, ownerName: string | null, playing: number, maxPlayers: number, joinable: boolean): PrivateServer => {
+    const v = vipFor(vipServerId, name, ownerName);
+    return {
+      vipServerId, name: v.settings.name, ownerId: v.ownerId, ownerName, playing, maxPlayers,
+      jobId: playing ? crypto.randomUUID() : null, accessCode: joinable ? crypto.randomUUID() : null,
+    };
+  };
   const servers = placeId === OBBY.placeId ? [] : [
     s(70011, "Nova's VIP", "nova_builds", 3, 12, true),
     s(70012, "Trade hub", "lunatrades", 0, 12, true),
     s(70013, "Kai's friends only", "skyrunner_k", 11, 12, false),
     s(70014, "", null, 2, 8, false),
+    ...bought.map((b) => s(b.vipServerId, "", b.ownerName, 0, 12, true)),
   ];
   return { servers, nextCursor: null, joinRestricted: a.username === "studio_nova" };
 }
@@ -579,6 +632,10 @@ async function runBatch(b: BulkProgress, favouriteId: number | null, fpsCap: num
       b.note = "No server had room for everyone, so the rest follow the first account.";
     }
   }
+  // Spreading: each account to a different server with a spare seat.
+  const spread = !["off", "pickFirst", "followFirst"].includes(b.sameServer) && target.kind === "place"
+    ? fakeServers(target.placeId).filter((s) => s.playing + 2 <= s.maxPlayers).map((s) => s.id)
+    : null;
   let prev: Instance | null = null;
   for (const item of b.items) {
     if (prev) {
@@ -601,7 +658,9 @@ async function runBatch(b: BulkProgress, favouriteId: number | null, fpsCap: num
       continue;
     }
     retakeLock();
-    const i = track(a.id, 14000 + Math.floor(Math.random() * 9000), target, placeOfTarget(target), a.username === "studio_nova", 0, fpsCap);
+    const job = spread?.shift();
+    const own: LaunchTarget = job && target.kind === "place" ? { kind: "server", placeId: target.placeId, jobId: job } : target;
+    const i = track(a.id, 14000 + Math.floor(Math.random() * 9000), own, placeOfTarget(own), a.username === "studio_nova", 0, fpsCap);
     item.instanceId = i.id;
     item.stage = { kind: "starting" };
     bulkChanged();
@@ -730,6 +789,7 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       const p = args.patch;
       if (/["'&|<>^]/.test(p.launchArgs ?? "")) return fail("invalid", "Launch arguments can't contain that character.");
       if (p.fpsCap && p.fpsCap < 5) return fail("invalid", "The FPS cap must be 0 (off) or 5 to 360.");
+      if (p.main) for (const o of accounts) o.main = false;
       Object.assign(a, p, p.color === undefined ? {} : { color: p.color || null }, p.launchArgs === undefined ? {} : { launchArgs: p.launchArgs.trim() || null }, p.fpsCap === undefined ? {} : { fpsCap: p.fpsCap || null });
       changed();
       return structuredClone(a);
@@ -756,11 +816,26 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       changed();
       return structuredClone(accounts);
     }
+    case "accounts_befriend": {
+      const n = accounts.filter((a) => args.ids.includes(a.id) && a.status === "valid").length;
+      await sleep(400);
+      return { added: (n * (n - 1)) / 2, already: 0, failed: 0, challenged: [] };
+    }
     case "account_reveal_cookie":
       await reauth(args.password);
       return FAKE_COOKIE;
     case "account_copy_cookie":
       await reauth(args.password);
+      return null;
+    case "accounts_export_cookies": {
+      await reauth(args.password);
+      const n = accounts.filter((a) => !args.accountIds || args.accountIds.includes(a.id)).length;
+      await sleep(300);
+      return { path: "C:\\Users\\you\\AppData\\Roaming\\RoALT\\exports\\RoALT-cookies-20261104-211500.txt", count: n, skipped: 0, deletesAt: Date.now() + 600_000 };
+    }
+    case "cookie_export_delete":
+      return 1;
+    case "cookie_export_reveal":
       return null;
 
     case "account_info": {
@@ -841,6 +916,69 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
         if (f) f.sortOrder = i;
       });
       return null;
+    case "ahk_status":
+      return { path: settings.ahkPath || (preview.get("ahk") === "0" ? null : "C:\\Program Files\\AutoHotkey\\v2\\AutoHotkey64.exe") };
+    case "macros_list":
+      return structuredClone(macros);
+    case "macro_save": {
+      const { id, name, body, hotkey, runOnLaunch } = args.input as MacroInput;
+      const n = name.trim();
+      if (!n || n.length > 60) return fail("invalid", "Macro names need 1 to 60 characters.");
+      if (macros.some((m) => m.id !== id && m.name.toLowerCase() === n.toLowerCase())) return fail("invalid", `A macro called "${n}" already exists.`);
+      const key = hotkey.trim();
+      const clash = macros.find((m) => m.id !== id && key && m.hotkey.toLowerCase() === key.toLowerCase());
+      if (clash) return fail("invalid", `${key} is already the hotkey of ${clash.name}.`);
+      const old = macros.find((m) => m.id === id);
+      const m: Macro = old
+        ? Object.assign(old, { name: n, body, hotkey: key, runOnLaunch, trusted: true, updatedAt: Date.now() })
+        : { id: Math.max(0, ...macros.map((x) => x.id)) + 1, name: n, body, hotkey: key, runOnLaunch, trusted: true, createdAt: Date.now(), updatedAt: Date.now() };
+      if (!old) macros.push(m);
+      return structuredClone(m);
+    }
+    case "macro_remove":
+      stopMacroRuns((r) => r.macroId === args.id);
+      macros = macros.filter((m) => m.id !== args.id);
+      return null;
+    case "macro_trust": {
+      const m = macros.find((x) => x.id === args.id);
+      if (!m) return fail("notFound", "Not found.");
+      m.trusted = true;
+      return structuredClone(m);
+    }
+    case "macros_import": {
+      const out = (args.paths as string[]).map((p): Macro => {
+        const base = (p.split(/[\\/]/).pop() ?? "Macro").replace(/\.[^.]*$/, "") || "Macro";
+        let name = base;
+        for (let n = 2; macros.some((m) => m.name.toLowerCase() === name.toLowerCase()); n++) name = `${base} (${n})`;
+        const m: Macro = { id: Math.max(0, ...macros.map((x) => x.id)) + 1, name, body: "; imported\nLoop {\n  Send \"{Space}\"\n  Sleep 30000\n}\n", trusted: false, hotkey: "", runOnLaunch: false, createdAt: Date.now(), updatedAt: Date.now() };
+        macros.push(m);
+        return m;
+      });
+      return structuredClone(out);
+    }
+    case "macro_export":
+      return null;
+    case "macro_run": {
+      const m = macros.find((x) => x.id === args.id);
+      if (!m) return fail("notFound", "Not found.");
+      if (!m.trusted) return fail("invalid", `Review ${m.name} on the Macros page before it runs.`);
+      for (const id of args.instanceIds as string[]) {
+        if (!instances.some((i) => i.id === id && i.state === "inGame")) return fail("invalid", "That client isn't in a game.");
+        if (macroRuns.some((r) => r.instanceId === id)) return fail("invalid", "That client is already running a macro. Stop it first.");
+      }
+      for (const id of args.instanceIds as string[]) macroRuns.push({ instanceId: id, macroId: m.id, name: m.name, startedAt: Date.now() });
+      runsChanged();
+      return structuredClone(macroRuns);
+    }
+    case "macro_stop":
+      stopMacroRuns((r) => r.instanceId === args.instanceId);
+      return null;
+    case "macros_stop_all":
+      stopMacroRuns(() => true);
+      return null;
+    case "macro_runs":
+      return structuredClone(macroRuns);
+
     case "join_candidates": {
       await sleep(500);
       if (!find(args.accountId)) return fail("notFound", "Not found.");
@@ -891,6 +1029,51 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       if (args.placeId === 1) return fail("notFound", "Not found.");
       return privatePage(args.placeId, a);
     }
+    case "private_server_get": {
+      await sleep(400);
+      const s = ownedVip(args.accountId, args.vipServerId);
+      return s instanceof Promise ? s : structuredClone(s);
+    }
+    case "private_server_update": {
+      await sleep(500);
+      const s = ownedVip(args.accountId, args.vipServerId);
+      if (s instanceof Promise) return s;
+      const p: PrivateServerPatch = args.patch;
+      if (p.name != null && !p.name.trim()) return fail("invalid", NO_NAME);
+      if (p.name != null) s.name = p.name.trim();
+      if (p.active != null) s.active = p.active;
+      if (p.friendsAllowed != null) s.friendsAllowed = p.friendsAllowed;
+      const allowed = new Set(s.allowedUsers.map((u) => u.userId));
+      for (const userId of p.usersToAdd ?? []) {
+        const known = accounts.find((x) => x.userId === userId);
+        if (known && !allowed.has(userId)) s.allowedUsers.push({ userId, username: known.username, displayName: known.displayName });
+      }
+      s.allowedUsers = s.allowedUsers.filter((u) => !p.usersToRemove?.includes(u.userId));
+      return structuredClone(s);
+    }
+    case "private_server_renew": {
+      await sleep(500);
+      const s = ownedVip(args.accountId, args.vipServerId);
+      if (s instanceof Promise) return s;
+      s.renews = args.on;
+      return structuredClone(s);
+    }
+    case "private_server_buy": {
+      await sleep(800);
+      const b: PrivateServerBuy = args.buy;
+      const a = find(b.accountId);
+      if (!a) return fail("notFound", "Not found.");
+      if (a.status !== "valid") return fail("cookieInvalid", EXPIRED);
+      if (!b.name.trim()) return fail("invalid", NO_NAME);
+      // The real API refuses a wrong price and charges nothing; the mock's servers cost 100.
+      if (b.expectedPrice !== 100) return fail("invalid", "Roblox refused the purchase and charged nothing: check the price on the game's page.");
+      if (boughtKeys.has(b.idempotencyKey)) return null;
+      boughtKeys.add(b.idempotencyKey);
+      const vipServerId = 80000 + bought.length;
+      vipFor(vipServerId, b.name.trim(), a.username).settings.renews = true;
+      bought.push({ vipServerId, ownerName: a.username });
+      return null;
+    }
 
     case "groups_list":
       return structuredClone(groups);
@@ -918,6 +1101,9 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       return { added: 2, updated: args.onConflict === "replace" ? 7 : 0, skipped: args.onConflict === "skip" ? 7 : 0, failed: 0 };
 
     case "instances_list":
+      // ?instances=slow (Home's loading state) or =fail (its error state).
+      if (preview.get("instances") === "slow") await sleep(2500);
+      if (preview.get("instances") === "fail") return fail("internal", "Couldn't read the running clients.");
       return structuredClone(instances);
     case "instance_close":
       await sleep(600);
@@ -973,6 +1159,12 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       instancesChanged();
       return args.on ? (args.size ?? [settings.microWidth, settings.microHeight]) : [800, 600];
     }
+    case "layout_preview_stop":
+      return null;
+    case "layout_preview":
+      // A browser has no screen to draw on; the real preview opens a window over the monitor.
+      if (settings.windowLayout === "off") return fail("invalid", "Pick Fit or Tiny to see where the windows go.");
+      return null;
     case "instances_tile": {
       const shown = instances.filter((i) => i.state !== "exited" && i.state !== "starting" && !ghosts.has(i.id));
       if (args.micro) shown.forEach((i) => { i.micro = true; });
@@ -1017,6 +1209,7 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       return null;
     }
     case "bandwidth_status":
+      if (preview.get("bandwidth") === "error") return fail("internal", "Windows didn't say which QoS policies are set.");
       return { kbps: settings.bandwidthKbps, active: settings.bandwidthKbps > 0 && bandwidthActive };
     case "bandwidth_apply":
       await sleep(1500);
@@ -1092,6 +1285,24 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       if (!webhook) return fail("invalid", "Set a webhook first.");
       if (webhook.token.includes("deleted")) return fail("invalid", "Discord refused the webhook; it may have been deleted. Paste a new one.");
       return null;
+    case "news": {
+      await sleep(700);
+      const at = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
+      const release = (v: string, hours: number, notes: string) => ({ id: `roalt:${v}`, source: "roalt", title: `RoALT ${v}`, summary: notes, url: `https://github.com/inspectsoftware/RoALT/releases/tag/v${v}`, published: at(hours), version: v });
+      const forum = (id: number, title: string, hours: number, summary: string) => ({ id: `devforum:${id}`, source: "devforum", title, summary, url: `https://devforum.roblox.com/t/topic/${id}`, published: at(hours), version: null });
+      const month = new Date().toISOString().slice(0, 7);
+      return {
+        items: [
+          release(NEXT_VERSION, 3, "## New\n- **A redesigned app**: the island, client cards, Home tabs and a searchable Settings.\n- **Macros**: run AutoHotkey v2 scripts on every client.\n- Export cookies from Accounts.\n- Private servers: change their settings, or buy one.\n\n## Fixed\n- Tooltips no longer jump to the corner of the window.\n- Switching to the side layout no longer flashes the tab strip.\n- The Performance icon sits centred.\n\nNo Authenticode signature yet."),
+          forum(9001, "Studio MCP Server Updates: Open Cloud Access in Your MCP Client", 5, "Key Takeaways MCP now has full access to Open Cloud; connected agents can help you manage your game beyond building…"),
+          forum(9002, "PlayerCharacterDestroyBehavior Will Be Default on November 11", 9, "Hi Creators, What’s Changing We introduced PlayerCharacterDestroyBehavior as an opt-in property almost three years ago…"),
+          forum(9003, "Release Notes for 745", 200, ""),
+          release(APP_VERSION, 72, "## Fixes\n- **Anti-AFK now really keeps clients online.**"),
+          { id: `newsroom:${month}/the-hollow`, source: "newsroom", title: "The Hollow: New Platform-Wide Survival Event for Halloween", summary: "", url: "https://about.roblox.com/newsroom", published: month, version: null },
+        ],
+        failed: [],
+      };
+    }
     case "self_update_status":
       return { current: APP_VERSION, available: appUpdate };
     case "self_update_check":
@@ -1161,6 +1372,9 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       return null;
     case "background_get":
       return background;
+    case "browser_data_reset":
+      await sleep(300);
+      return true;
     case "logs_clean":
       await sleep(400);
       return { files: 7, bytes: 183_500_800 };
@@ -1176,7 +1390,7 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
     case "shutdown_status":
       return shutdownAt;
     case "network_status":
-      return { public: false };
+      return { public: publicNetwork };
     case "data_dir_move":
       await sleep(1200);
       if (batch && !batch.done) return fail("invalid", MOVE_BUSY);
@@ -1214,10 +1428,32 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       const r = perfParse(cmd === "performance_parse" ? args.text : lastProfile ?? perfProfile(15));
       return typeof r === "string" ? fail("invalid", r) : r;
     }
+    case "performance_benchmark": {
+      // A canned Tight result (the real one takes ~22 s); planning for 13 clients fails.
+      await sleep(2000);
+      if (args.target === 13) return fail("internal", "Windows stopped answering about the clients' memory. Try again.");
+      const n = args.target ?? 5;
+      return {
+        bench: { cores: 8, ramMb: 16_384, clients: 5, background: 4, perMb: 1400, peakPrivateMb: 1900, perCores: 0.6, freeCores: 1.2, underLimits: false, otherMb: 3000, otherCores: 0.6, gpuPeak: 42, caps: "unknown", memRestarts: 0, longCrashes: 0 },
+        advice: {
+          n, tier: "tight", ramRatio: 0.61, cpuRatio: 0.45, room: 7,
+          suggestions: [
+            { id: "fpsCap", params: { fps: 20 }, profile: { fpsCap: 20 } },
+            { id: "minimizeOnLaunch", params: { n }, profile: { minimizeOnLaunch: true } },
+            { id: "muteOnLaunch", params: { n }, profile: { muteOnLaunch: true } },
+            { id: "adaptive", params: { cap: 25 }, profile: { adaptive: { enabled: true, background: { cpuCap: 25, eco: true, trimEveryMin: null, affinity: null } } } },
+            { id: "trimEveryMin", params: { min: 30 }, profile: { trimEveryMin: 30 } },
+            { id: "previewFps", params: { fps: 15 }, profile: { previewFps: 15 } },
+          ],
+        },
+      };
+    }
 
     case "plugin:dialog|save":
       return `C:\\Users\\you\\Documents\\${args.options?.defaultPath ?? "backup.roalt"}`;
     case "plugin:dialog|open":
+      // Several files: two scripts, as Macros' Import asks for.
+      if (args.options?.multiple) return ["C:\\Users\\you\\Documents\\Farm route.ahk", "C:\\Users\\you\\Documents\\Auto click.ahk"];
       return args.options?.directory ? "D:\\RoALT data" : "C:\\Users\\you\\Documents\\RoALT-backup-2026-10-01.roalt";
     case "plugin:window|is_maximized":
       return false;
@@ -1226,6 +1462,43 @@ async function handle(cmd: string, args: Args): Promise<unknown> {
       if (!/^plugin:(window|opener|clipboard-manager)\|/.test(cmd)) console.warn("[mock ipc] unhandled", cmd);
       return null;
   }
+}
+
+// Preview switches, for states that are slow or awkward to reach by hand:
+//   ?locked=1  vault locked at start      ?public=1   on a Public network with the guard on
+//   ?norecovery=1  no recovery code set
+//   ?theme=light|dark|system  ?lang=ar  ?accent=c6f432  ?layout=side
+//   ?accounts=200  that many more accounts (long-list checks)
+//   ?scenario=busy  three clients start, then a batch of three ("AFK 1" fails in it)
+//   ?ahk=0  AutoHotkey isn't installed (until Browse… picks one)
+//   ?bandwidth=lapsed  a limit Windows has dropped (it restarted)   ?bandwidth=error  its status can't be read
+//   ?instances=slow  Home's client list comes late   ?instances=fail  it can't be read
+//   (?splash=1 replays the splash: Splash.tsx; ?rm=1 reduces motion: ui/motion/reduced.ts)
+const preview = new URLSearchParams(location.search);
+let publicNetwork = false;
+if (preview.has("locked")) vault.locked = true;
+if (preview.has("norecovery")) vault.recovery = "";
+if (preview.has("public")) {
+  publicNetwork = true;
+  settings.allowPublicNetworks = false;
+}
+const themeArg = preview.get("theme");
+if (themeArg === "light" || themeArg === "dark" || themeArg === "system") settings.theme = themeArg;
+if (preview.get("lang")) settings.language = preview.get("lang")!;
+const accentArg = preview.get("accent")?.replace(/^#/, "");
+if (accentArg && /^[0-9a-f]{6}$/i.test(accentArg)) settings.accent = `#${accentArg.toLowerCase()}`;
+if (preview.get("layout") === "side") settings.tabLayout = "side";
+if (preview.get("bandwidth") === "lapsed") settings.bandwidthKbps = 2500;
+const extra = Math.min(5000, Number(preview.get("accounts")) || 0);
+for (let n = 0; n < extra; n++) {
+  const id = accounts.length + 1;
+  accounts.push({ ...accounts[1], id, userId: 7_000_000_000 + n, username: `bulk_alt_${n + 1}`, displayName: `Bulk ${n + 1}`, alias: "", sortOrder: id, main: false, favourite: false, fpsCap: null, groupIds: n % 3 ? [3] : [] });
+}
+if (preview.get("scenario") === "busy") {
+  strangerRunning = false;
+  lockHeld = true;
+  [1, 2, 7].forEach((id, n) => setTimeout(() => track(id, 9000 + n, { kind: "place", placeId: 1818, launchData: null }, 1818, id === 7), 200 + n * 180));
+  setTimeout(() => void startBatch({ accountIds: [3, 5, 8], target: { kind: "place", placeId: 1818, launchData: null }, delayMs: 6000, sameServer: "off", favouriteId: null, fpsCap: null }), 1600);
 }
 
 mockWindows("main");

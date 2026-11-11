@@ -22,7 +22,7 @@ use crate::error::AppError;
 use crate::launcher::bulk::{jittered, name_of};
 use crate::model::{AccountStatus, AccountSummary, CrashKind, Instance, InstanceState, Settings};
 
-/// Rejoins take turns: launches go one at a time (DESIGN §6), each after its own delay.
+/// Rejoins take turns: launches go one at a time, each after its own delay.
 static TURN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// The crash breaker's memory: when each account was last relaunched, oldest first. Changed
@@ -216,6 +216,7 @@ async fn attempt(app: &AppHandle, s: &App, r: &Rejoin, user_id: Option<i64>, kil
         if hold.is_some() {
             return hold;
         }
+        crate::launcher::update::publish(app);
         let check = crate::launcher::launch_check(s, r.account_id, &r.target).await;
         if over(*closed) {
             return None;
@@ -228,7 +229,7 @@ async fn attempt(app: &AppHandle, s: &App, r: &Rejoin, user_id: Option<i64>, kil
         }
     }
     let _turn = TURN.lock().await;
-    // Until the launch is done, batches and single launches wait (DESIGN §6: one at a time).
+    // Until the launch is done, batches and single launches wait (one at a time).
     // A Roblox install waits out first: after `busy` is set, one starting now sees this rejoin.
     let wait_until = Instant::now() + crate::launcher::update::INSTALL_TIMEOUT;
     let busy = loop {
@@ -500,7 +501,7 @@ mod tests {
 
     #[test]
     fn only_what_can_pass_by_itself_is_tried_again() {
-        let passing = [AppError::Network("x".into()), AppError::RateLimited(5), AppError::Roblox("HTTP 503".into()), AppError::Roblox("no ticket".into()), AppError::Locked, AppError::Wait("x".into())];
+        let passing = [AppError::Network("x".into()), AppError::RateLimited(5), AppError::Roblox("HTTP 503".into()), AppError::Roblox("no ticket".into()), AppError::Locked, AppError::Wait("x".into()), AppError::Busy("x".into())];
         for e in passing {
             assert!(e.temporary(), "{e}");
         }

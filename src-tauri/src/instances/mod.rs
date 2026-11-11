@@ -9,6 +9,12 @@ pub mod afk;
 pub mod afk;
 
 #[cfg(windows)]
+mod audio;
+#[cfg(not(windows))]
+#[path = "audio_linux.rs"]
+mod audio;
+
+#[cfg(windows)]
 mod autopsy;
 #[cfg(not(windows))]
 #[path = "autopsy_linux.rs"]
@@ -66,4 +72,6 @@ pub mod window;
 mod tracker;
 
 pub mod rejoin;
-pub use tracker::{Tracker, Transition, auth_failed, challenged, closed, hung, unexpected, wrong_account};
+pub use tracker::{Tracker, Transition, auth_failed, challenged, closed, hung, layout_batch_done, unexpected, wrong_account};
+#[cfg(windows)]
+pub use tracker::frame_size;

@@ -1,0 +1,33 @@
+/* A background image under see-through surfaces (src/app/theme.ts SEE_THROUGH thins the surface
+   tokens; --bg-dim covers the picture). Text on the bare picture gets a halo; what floats, a small
+   blur. Nothing blurs over the Home grid (its toolbars stay opaque). */
+@layer components {
+  :root[data-bg] body {
+    background: linear-gradient(var(--bg-dim), var(--bg-dim)), var(--bg-image) center / cover no-repeat fixed;
+  }
+  :root[data-bg] {
+    --fg-3: var(--fg-2);
+  }
+  :root[data-bg] :is(.titlebar, .stage) {
+    text-shadow: 0 1px 3px rgb(0 0 0 / 0.8);
+  }
+  :root[data-bg][data-theme="light"] :is(.titlebar, .stage) {
+    text-shadow: 0 1px 3px rgb(255 255 255 / 0.85);
+  }
+  :root[data-bg] :is(.panel, .well, .btn, .field, .island, .rail, .seg-group, .chip, [popover], dialog, .toast) {
+    text-shadow: none;
+  }
+  :root[data-bg] :is(.titlebar .caption-btn, .titlebar .wc, .stage summary) svg {
+    filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.8));
+  }
+  :root[data-bg][data-theme="light"] :is(.titlebar .caption-btn, .titlebar .wc, .stage summary) svg {
+    filter: drop-shadow(0 1px 2px rgb(255 255 255 / 0.85));
+  }
+  /* Not while Home shows live pictures: a blur over them redraws with every frame they get. */
+  :root[data-bg]:not(:has(.home-pic)) :is([popover]:not([data-passive]), dialog, .toast) {
+    backdrop-filter: blur(16px) saturate(1.2);
+  }
+  :root[data-bg] .island {
+    backdrop-filter: blur(12px) saturate(1.2);
+  }
+}

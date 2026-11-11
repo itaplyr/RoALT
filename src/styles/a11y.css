@@ -1,0 +1,94 @@
+/* Windows contrast themes drop shadows and author colours, which is how most states show here. */
+@layer a11y {
+  @media (forced-colors: active) {
+    .island,
+    .pill-toolbar,
+    .dlg,
+    .menu,
+    .island-sheet,
+    .toast,
+    .tooltip,
+    .panel,
+    .rail {
+      border: 1px solid CanvasText;
+    }
+    .island-drops,
+    .lq-drop,
+    .lq-ink,
+    .seg-thumb,
+    .tab-thumb {
+      display: none;
+    }
+    /* Adjust none: else the browser puts its own Canvas plate behind the text. */
+    .island-item[aria-current="page"],
+    .island-child[aria-current="page"],
+    .island-capsule[aria-expanded="true"],
+    .seg[aria-pressed="true"],
+    .seg[aria-checked="true"],
+    [role="tab"][aria-selected="true"],
+    .chip[aria-pressed="true"],
+    .chip[data-on],
+    .rail-item[aria-current="page"],
+    .pick[aria-pressed="true"],
+    .num-done,
+    .btn-primary {
+      forced-color-adjust: none;
+      background: Highlight;
+      color: HighlightText;
+      border-color: Highlight;
+    }
+    .island-item[aria-current="page"] *,
+    .chip[aria-pressed="true"] *,
+    .chip[data-on] *,
+    .rail-item[aria-current="page"] * {
+      color: HighlightText;
+    }
+    .tick {
+      forced-color-adjust: none;
+      color: transparent;
+      background: Canvas;
+      box-shadow: inset 0 0 0 1px CanvasText;
+    }
+    [aria-pressed="true"] > .tick,
+    [aria-pressed="true"] > * > .tick {
+      background: Highlight;
+      color: HighlightText;
+    }
+    .switch {
+      border: 1px solid CanvasText;
+    }
+    .switch[aria-checked="true"] {
+      forced-color-adjust: none;
+      background: Highlight;
+    }
+    .switch[aria-checked="true"]::after {
+      background: HighlightText;
+    }
+    .swatch,
+    .led,
+    .status-mark {
+      forced-color-adjust: none;
+    }
+    .btn[aria-pressed="true"] {
+      border: 2px solid Highlight;
+    }
+    .btn:disabled,
+    .btn[aria-disabled="true"],
+    .menu-item:disabled {
+      color: GrayText;
+    }
+    /* Menus show focus by fill and an inset shadow, both of which forced colours drop. */
+    .menu-item:focus-visible {
+      outline: 2px solid Highlight;
+      outline-offset: -2px;
+    }
+    .radio:checked::after,
+    .meter > span,
+    .step-done {
+      background: Highlight;
+    }
+    .step-fail {
+      background: CanvasText;
+    }
+  }
+}

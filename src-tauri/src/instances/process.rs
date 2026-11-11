@@ -12,8 +12,8 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Threading::{
-    GetProcessTimes, OpenProcess, PROCESS_ACCESS_RIGHTS, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
-    PROCESS_TERMINATE, TerminateProcess, WaitForSingleObject,
+    GetProcessTimes, OpenProcess, PROCESS_ACCESS_RIGHTS, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, QueryFullProcessImageNameW, TerminateProcess, WaitForSingleObject,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GW_OWNER, GetForegroundWindow, GetWindow, GetWindowThreadProcessId, IsHungAppWindow, IsIconic, IsWindowVisible,
@@ -55,9 +55,10 @@ pub fn profiles_by_user() -> Option<std::collections::HashSet<i64>> {
     None
 }
 
-/// Whether Roblox's own installer runs: it updates the client, then starts it again.
+/// Whether Roblox's own installer (or its launcher, which can update too) runs: it updates the
+/// client, then starts it again.
 pub fn installer_running() -> bool {
-    !named(INSTALLER_EXE).is_empty()
+    !named(INSTALLER_EXE).is_empty() || !named("RobloxPlayerLauncher.exe").is_empty()
 }
 
 /// Running processes whose executable is `exe`.
@@ -96,6 +97,16 @@ pub fn start_time(pid: u32) -> Option<u64> {
     started(*open(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE)?)
 }
 
+/// The executable a running process was started from; None if it is gone or can't be read.
+pub fn exe_path(pid: u32) -> Option<std::path::PathBuf> {
+    let h = open(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
+    let mut buf = [0u16; 1024];
+    let mut len = buf.len() as u32;
+    // SAFETY: `h` is a live handle with PROCESS_QUERY_LIMITED_INFORMATION; `buf` holds `len` u16s.
+    unsafe { QueryFullProcessImageNameW(*h, PROCESS_NAME_WIN32, windows::core::PWSTR(buf.as_mut_ptr()), &mut len) }.ok()?;
+    Some(String::from_utf16_lossy(&buf[..len as usize]).into())
+}
+
 /// `start_time` said None, yet this is a Roblox client that hasn't exited: Windows still lists
 /// it (no handle needed) and it isn't signalled. Anything else with its pid doesn't count.
 pub fn unreadable_client(pid: u32) -> bool {
@@ -103,25 +114,25 @@ pub fn unreadable_client(pid: u32) -> bool {
     if open(pid, PROCESS_SYNCHRONIZE).is_some_and(|h| unsafe { WaitForSingleObject(*h, 0) } == WAIT_OBJECT_0) {
         return false;
     }
-    listed_as(pid, CLIENT_EXE)
+    exe_name(pid).is_some_and(|n| n.eq_ignore_ascii_case(CLIENT_EXE))
 }
 
-/// Whether the process list has `pid` running `exe`.
-fn listed_as(pid: u32, exe: &str) -> bool {
+/// The executable name the process list has for `pid` (no handle needed); None if not listed.
+pub fn exe_name(pid: u32) -> Option<String> {
     // SAFETY: as in `named`.
     unsafe {
-        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return false };
-        let snap = Owned::new(snap);
+        let snap = Owned::new(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()?);
         let mut e = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
         let mut more = Process32FirstW(*snap, &mut e).is_ok();
         while more {
             if e.th32ProcessID == pid {
-                return is_named(&e.szExeFile, exe);
+                let len = e.szExeFile.iter().position(|&c| c == 0).unwrap_or(e.szExeFile.len());
+                return Some(String::from_utf16_lossy(&e.szExeFile[..len]));
             }
             more = Process32NextW(*snap, &mut e).is_ok();
         }
     }
-    false
+    None
 }
 
 /// Asks the client to close: WM_CLOSE to its top-level windows, again after ~400 ms (Roblox may
