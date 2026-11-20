@@ -1,21 +1,29 @@
-//! Finding and starting Roblox on Linux through Cordial.
+//! Finding and starting Roblox on Linux through Mocktail or Cordial.
 //!
-//! Cordial supports one profile per account and several clients at once. RoALT launches the
-//! loader (`cordial-run`) directly with `--profile roalt_<user id>` and `--join-url`, which is
-//! what the Cordial shell itself does after the user picks a profile. That works with Cordial
-//! 0.21 (whose shell has no `--profile` command-line option) and with newer shells. If the
-//! direct loader/build isn't available, it falls back to Cordial's shell or Flatpak Cordial.
-//! It deliberately does not fall back to Sober.
+//! Mocktail is used when it is installed: RoALT points it at its own data/auth roots with
+//! `MOCKTAIL_*`, seeds the account's `roblox.cookie`, and passes the join link with
+//! `--launch-uri`. Mocktail takes one client at a time — its lock is keyed by uid and
+//! executable, not by data root, and a second launch forwards its URI to the running process —
+//! so a second launch is refused rather than silently joining the wrong account.
+//!
+//! Cordial remains the fallback and is the only launcher here with several profiles at once
+//! and a preview/devctl socket. RoALT launches its loader (`cordial-run`) directly with
+//! `--profile roalt_<user id>` and `--join-url`, which is what the Cordial shell itself does
+//! after the user picks a profile. That works with Cordial 0.21 (whose shell has no `--profile`
+//! command-line option) and with newer shells. If the direct loader/build isn't available, it
+//! falls back to Cordial's shell or Flatpak Cordial. It deliberately does not fall back to Sober.
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::error::{AppError, Result};
 use crate::vault::Secret;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LauncherKind {
+    Mocktail,
     Cordial,
     FlatpakCordial,
     Sober,
@@ -43,8 +51,23 @@ pub struct ClientExe {
 }
 
 const CORDIAL_ID: &str = "io.github.luohua97.Cordial";
-/// Only reachable through an explicit `ROALT_LAUNCHER`; the automatic finder stays Cordial-only.
+/// Only reachable through an explicit `ROALT_LAUNCHER`; the automatic finder picks Mocktail or
+/// Cordial, never Sober.
 const SOBER_ID: &str = "org.vinegarhq.Sober";
+
+/// Set by `launcher::launch` from the user's multi-instance setting. With it, Mocktail runs
+/// one copied launcher and one engine-data root per account instead of its unsupported shared
+/// instance; without it, the one-client guard stays.
+static MOCKTAIL_MULTI: AtomicBool = AtomicBool::new(false);
+
+/// Whether the next Mocktail launch may use the per-account isolated-copy path.
+pub fn set_mocktail_multi(on: bool) {
+    MOCKTAIL_MULTI.store(on, Ordering::Relaxed);
+}
+
+fn mocktail_multi() -> bool {
+    MOCKTAIL_MULTI.load(Ordering::Relaxed)
+}
 
 pub fn find() -> Result<ClientExe> {
     if let Some(path) = std::env::var_os("ROALT_LAUNCHER") {
@@ -53,8 +76,14 @@ pub fn find() -> Result<ClientExe> {
         let profiles = supports_profiles(&path, kind);
         return Ok(ClientExe { path, bootstrapper: true, kind, profiles, direct: None });
     }
-    // Preferred: bypass the shell and give the loader the profile directly. The shell's
-    // profile picker is what produced "Roblox link waiting" and put every account on the
+    // Trial launcher: Mocktail when it is installed. It owns its Roblox build and takes one
+    // client at a time; Cordial, which supports several profiles, stays the fallback.
+    if let Some(path) = mocktail_binary() {
+        log::info!("launcher: Mocktail at {}", path.display());
+        return Ok(ClientExe { path, bootstrapper: true, kind: LauncherKind::Mocktail, profiles: false, direct: None });
+    }
+    // Preferred Cordial path: bypass the shell and give the loader the profile directly. The
+    // shell's profile picker is what produced "Roblox link waiting" and put every account on the
     // same profile. ROALT_CORDIAL_RUN points at a self-built engine.
     if let Some(loader) = cordial_loader() {
         if let Some(build) = latest_build(&loader) {
@@ -107,6 +136,15 @@ fn supports_profiles(path: &Path, kind: LauncherKind) -> bool {
         .stderr(Stdio::null())
         .output()
         .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("--profile"))
+}
+
+/// Mocktail's executable: `PATH`, then the per-user bin folder a desktop launch often loses,
+/// then the usual system location. `ROALT_LAUNCHER` overrides this in `find`.
+fn mocktail_binary() -> Option<PathBuf> {
+    let path = in_path("mocktail")
+        .or_else(|| env_home().map(|h| h.join(".local").join("bin").join("mocktail")))
+        .unwrap_or_else(|| PathBuf::from("/usr/bin/mocktail"));
+    path.is_file().then_some(path)
 }
 
 /// The Cordial loader: the explicit override, PATH, or the usual per-user bin folders.
@@ -191,8 +229,93 @@ pub fn profile_dir(user_id: i64) -> Option<PathBuf> {
 }
 
 /// Cordial's development-control socket in this account's profile.
+///
+/// Preview is Cordial-only: a Mocktail client has no dev-control socket. A profile RoALT only
+/// created for an account (`ensure_profile`), or one that never had a Cordial launch, has no
+/// cookie store yet, so this is `None` and the preview stays "no window" instead of waiting for
+/// a socket that will never appear. Cordial's own launch seeds `cookies` before the client
+/// starts, so a running Cordial client keeps its socket.
 pub fn devctl_socket(user_id: i64) -> Option<PathBuf> {
-    profile_dir(user_id).map(|dir| dir.join("devctl.sock"))
+    profile_dir(user_id)
+        .filter(|dir| dir.is_dir() && dir.join("cookies").is_file())
+        .map(|dir| dir.join("devctl.sock"))
+}
+
+/// RoALT's Mocktail store: `$XDG_DATA_HOME/roalt/mocktail` (or `~/.local/share/roalt/mocktail`).
+///
+/// It is shared by every account; only `auth/<user id>` is per account. Mocktail's own lock is
+/// per uid and executable rather than per data root, so this sharing costs nothing extra.
+fn mocktail_root() -> PathBuf {
+    crate::default_dir().join("mocktail")
+}
+
+/// This account's Mocktail auth root, where Mocktail keeps `roblox.cookie`.
+fn mocktail_auth_dir(user_id: i64) -> PathBuf {
+    mocktail_root().join("auth").join(user_id.to_string())
+}
+
+/// Creates a directory only this user can read; Mocktail refuses an auth root that others can.
+fn private_dir(path: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+/// A per-account copy of Mocktail. Its executable path is what Mocktail hashes for the
+/// single-instance lock, so copies are what let several clients coexist. The copy is refreshed
+/// when the installed binary changes and is created 0755.
+fn mocktail_copy(source: &Path, user_id: i64) -> Result<PathBuf> {
+    let bin = mocktail_root().join("bin");
+    private_dir(&bin).map_err(|e| {
+        AppError::Internal(tr!("Could not create Mocktail's data folder: {why}", why = e))
+    })?;
+    let dest = bin.join(format!("mocktail-{user_id}"));
+    let same = std::fs::metadata(source)
+        .ok()
+        .zip(std::fs::metadata(&dest).ok())
+        .is_some_and(|(a, b)| a.len() == b.len() && a.modified().ok() == b.modified().ok());
+    if !same {
+        let tmp = bin.join(format!("mocktail-{user_id}.new"));
+        std::fs::copy(source, &tmp).map_err(|e| {
+            AppError::Internal(tr!("Could not copy Mocktail for multi-instance: {why}", why = e))
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| AppError::Internal(e.to_string()))?;
+        }
+        std::fs::rename(&tmp, &dest).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            AppError::Internal(tr!("Could not copy Mocktail for multi-instance: {why}", why = e))
+        })?;
+    }
+    Ok(dest)
+}
+
+/// Seeds this account's `roblox.cookie`. Mocktail wants exactly `.ROBLOSECURITY=<value>` with no
+/// newline and a private mode; anything else is rejected. The value is never logged.
+fn write_mocktail_cookie(auth: &Path, cookie: &Secret) -> Result<()> {
+    let path = auth.join("roblox.cookie");
+    let tmp = auth.join("roblox.cookie.roalt");
+    let body = format!(".ROBLOSECURITY={}", cookie.expose());
+    let write = || -> std::io::Result<()> {
+        std::fs::write(&tmp, body.as_bytes())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+        }
+        std::fs::rename(&tmp, &path)
+    };
+    write().map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        AppError::Internal(tr!("Could not write Mocktail's session cookie: {why}", why = e))
+    })
 }
 
 /// Creates this account's Cordial profile (0700) so a launch has somewhere to sign in and
@@ -289,19 +412,31 @@ fn write_cookies(user_id: i64, cookie: &Secret) -> Result<()> {
     })
 }
 
-/// Remove the plaintext Cordial session and identity once no client is using the profile.
-/// RoALT's encrypted vault still has the account; the next launch seeds the profile again.
+/// Remove the plaintext Cordial session and identity once no client is using the profile,
+/// and this account's Mocktail cookie. RoALT's encrypted vault still has the account; the next
+/// launch seeds the profile again.
 pub fn remove_profile_secrets(user_id: i64) {
-    let Some(root) = profiles_root() else { return };
-    let dir = root.join(profile_name(user_id));
-    for name in ["cookies", "identity", "cookies.roalt", "identity.roalt"] {
-        match std::fs::remove_file(dir.join(name)) {
-            Ok(()) => log::info!("removed Cordial profile secret {name} for {user_id}"),
+    if let Some(root) = profiles_root() {
+        let dir = root.join(profile_name(user_id));
+        for name in ["cookies", "identity", "cookies.roalt", "identity.roalt"] {
+            match std::fs::remove_file(dir.join(name)) {
+                Ok(()) => log::info!("removed Cordial profile secret {name} for {user_id}"),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => log::warn!(
+                    "could not remove Cordial profile {} for {user_id}: {e}",
+                    name
+                ),
+            }
+        }
+    }
+    // Mocktail's cookie is the same live session in a different file. It is only kept while the
+    // client runs, so a later launch seeds it from the vault again.
+    let auth = mocktail_auth_dir(user_id);
+    for name in ["roblox.cookie", "roblox.cookie.roalt"] {
+        match std::fs::remove_file(auth.join(name)) {
+            Ok(()) => log::info!("removed Mocktail session {name} for {user_id}"),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => log::warn!(
-                "could not remove Cordial profile {} for {user_id}: {e}",
-                name
-            ),
+            Err(e) => log::warn!("could not remove Mocktail session {name} for {user_id}: {e}"),
         }
     }
 }
@@ -457,7 +592,9 @@ fn cordial_throttle() -> Option<&'static str> {
 
 fn kind_for(path: &Path) -> LauncherKind {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_ascii_lowercase();
-    if name.contains("cordial") {
+    if name.contains("mocktail") {
+        LauncherKind::Mocktail
+    } else if name.contains("cordial") {
         LauncherKind::Cordial
     } else if name.contains("sober") {
         LauncherKind::Sober
@@ -543,6 +680,90 @@ fn clear_webview_env(cmd: &mut Command) {
         cmd.env_remove("LIBGL_ALWAYS_SOFTWARE");
         cmd.env_remove("ROALT_DESKTOP_LIBGL");
     }
+}
+
+/// Starts Mocktail with RoALT's own roots, the join link and, when asked, `--headless`. The FPS
+/// cap goes through `MOCKTAIL_FRAME_RATE_LIMIT`; RoALT's Cordial flags, Cage, the preview socket
+/// and the Windows launch arguments have no Mocktail equivalent and are not passed.
+#[allow(clippy::too_many_arguments)]
+fn start_mocktail(
+    exe: &ClientExe,
+    uri: &Secret,
+    user_id: i64,
+    cookie: &Secret,
+    browser_tracker_id: i64,
+    headless: bool,
+    keep_running_on_close: bool,
+    fps_cap: u32,
+) -> Result<(u32, u64)> {
+    // Mocktail's lock is per uid and executable, not per data root, and a second launch forwards
+    // its URI to the first process. With multi-instance off, refuse rather than let Mocktail
+    // reshape this launch. With it on, a per-account copy gets its own executable hash and lock;
+    // each copy also gets its own Android data/cache roots below.
+    let multi = mocktail_multi();
+    if !multi && crate::instances::process::mocktail_running() {
+        return Err(AppError::Invalid(tr!(
+            "Mocktail supports one Roblox client at a time. Close the running client first."
+        )));
+    }
+    let root = mocktail_root();
+    let auth = mocktail_auth_dir(user_id);
+    let instance = root.join("instances").join(user_id.to_string());
+    let (cache, state, android_data, android_files, android_cache, android_external) = if multi {
+        (
+            instance.join("cache"),
+            instance.join("state"),
+            instance.join("android/data"),
+            instance.join("android/files"),
+            instance.join("android/cache"),
+            instance.join("android/external"),
+        )
+    } else {
+        (root.join("cache"), root.join("state"), PathBuf::new(), PathBuf::new(), PathBuf::new(), PathBuf::new())
+    };
+    let dirs = if multi {
+        vec![&root, &auth, &instance, &cache, &state, &android_data, &android_files, &android_cache, &android_external]
+    } else {
+        vec![&root, &auth, &cache, &state]
+    };
+    for dir in dirs {
+        private_dir(dir).map_err(|e| {
+            AppError::Internal(tr!("Could not create Mocktail's data folder: {why}", why = e))
+        })?;
+    }
+    write_mocktail_cookie(&auth, cookie)?;
+    if keep_running_on_close {
+        log::info!("Mocktail has no keep-running-on-close switch; the setting is not applied");
+    }
+    let launcher = if multi { mocktail_copy(&exe.path, user_id)? } else { exe.path.clone() };
+    let mut cmd = Command::new(&launcher);
+    cmd.env("MOCKTAIL_DATA_ROOT", &root)
+        .env("MOCKTAIL_AUTH_ROOT", &auth)
+        .env("MOCKTAIL_CACHE_ROOT", &cache)
+        .env("MOCKTAIL_STATE_ROOT", &state);
+    if multi {
+        cmd.env("MOCKTAIL_ANDROID_DATA_DIR", &android_data)
+            .env("MOCKTAIL_ANDROID_FILES_DIR", &android_files)
+            .env("MOCKTAIL_ANDROID_CACHE_DIR", &android_cache)
+            .env("MOCKTAIL_ANDROID_EXTERNAL_BASE_DIR", &android_external)
+            .env("MOCKTAIL_ANDROID_EXTERNAL_DIR", android_external.join("files"));
+    }
+    if headless {
+        cmd.arg("--headless");
+    }
+    if fps_cap > 0 {
+        cmd.env("MOCKTAIL_FRAME_RATE_LIMIT", fps_cap.to_string());
+    }
+    // A roblox-player: or roblox: link, the same one the browser's Play button opens.
+    cmd.arg("--launch-uri").arg(uri.expose());
+    clear_webview_env(&mut cmd);
+    let (log, _log_path) = match client_log(browser_tracker_id) {
+        Some((file, path)) => (Some(file), Some(path)),
+        None => (None, None),
+    };
+    let (pid, started) = spawn_tracked(cmd, log)?;
+    log::info!("Mocktail launch for account {user_id} (pid {pid}, headless: {headless})");
+    Ok((pid, started))
 }
 
 /// Starts the game with the URI as its argument. Returns the PID of the launcher process and its
@@ -693,6 +914,20 @@ pub fn start(
         LauncherKind::Handler => {
             cmd.arg(uri.expose());
         }
+        // Mocktail gets its own roots and link argument, never the Cordial-only environment
+        // applied below.
+        LauncherKind::Mocktail => {
+            return start_mocktail(
+                exe,
+                uri,
+                user_id,
+                cookie,
+                browser_tracker_id,
+                headless,
+                keep_running_on_close,
+                fps_cap,
+            );
+        }
     }
     let cordshell = matches!(exe.kind, LauncherKind::Cordial | LauncherKind::FlatpakCordial);
     if cordshell {
@@ -762,7 +997,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_mocktail_cookie_is_the_bare_cookie_with_a_private_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("roalt-mocktail-{}", uuid::Uuid::new_v4()));
+        private_dir(&dir).unwrap();
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        write_mocktail_cookie(&dir, &Secret::new("COOKIEVALUE")).unwrap();
+        let path = dir.join("roblox.cookie");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), ".ROBLOSECURITY=COOKIEVALUE");
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        // A second launch replaces it, with no temporary file left behind.
+        write_mocktail_cookie(&dir, &Secret::new("SECOND")).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), ".ROBLOSECURITY=SECOND");
+        assert!(!dir.join("roblox.cookie.roalt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn knows_the_launcher_from_its_name() {
+        assert_eq!(kind_for(Path::new("/usr/bin/mocktail")), LauncherKind::Mocktail);
+        assert_eq!(kind_for(Path::new("/home/you/.local/bin/mocktail")), LauncherKind::Mocktail);
         assert_eq!(kind_for(Path::new("/usr/bin/cordial")), LauncherKind::Cordial);
         assert_eq!(kind_for(Path::new("/usr/bin/sober")), LauncherKind::Sober);
         assert_eq!(kind_for(Path::new("flatpak")), LauncherKind::FlatpakCordial);

@@ -6,7 +6,7 @@ import { t, tx } from "../../i18n";
 import { Skeleton } from "../../ui/Bits";
 import { Button, IconButton } from "../../ui/Button";
 import { Switch } from "../../ui/controls";
-import { ConfirmDialog, Dialog, DialogBody, DialogFooter } from "../../ui/Dialog";
+import { ConfirmDialog, Dialog } from "../../ui/Dialog";
 import { Field, Input } from "../../ui/Field";
 import { Icon } from "../../ui/Icon";
 import { Collapse, riseIn, useFlip, useFreshItems } from "../../ui/motion";
@@ -139,7 +139,6 @@ export function FavouritesRow({ accounts, active, onPick }: {
         anchor={`--fav-${menuFor?.id ?? 0}`}
         role="menu"
         label={menuFor?.name}
-        onToggle={(open) => open && menu()?.querySelector<HTMLElement>("[role=menuitem]:not(:disabled)")?.focus()}
       >
         <MenuItem
           icon="pencil"
@@ -230,7 +229,7 @@ export function FavouriteDialog({ open, onClose, accounts, initial, resolve, onS
   return (
     <Dialog open={open} onClose={() => !busy && onClose()} title={initial.id ? t("launch.editFavourite") : t("launch.saveAsFavourite")} width={460}>
       <form onSubmit={(e) => void submit(e)}>
-        <DialogBody className="flex flex-col gap-4">
+        <div className="dlg-body flex flex-col gap-4">
           <Field label={t("launch.fav.name")} error={nameError}>
             {(f) => (
               <Input
@@ -259,13 +258,13 @@ export function FavouriteDialog({ open, onClose, accounts, initial, resolve, onS
           <Collapse open={!!error}>
             <p role="alert" className="alert">{error}</p>
           </Collapse>
-        </DialogBody>
-        <DialogFooter>
+        </div>
+        <div className="dlg-foot">
           <Button onClick={onClose} disabled={busy}>{t("common.cancel")}</Button>
           <Button type="submit" variant="primary" busy={busy} icon="star">
             {initial.id ? t("common.save") : t("launch.fav.saveFavourite")}
           </Button>
-        </DialogFooter>
+        </div>
       </form>
     </Dialog>
   );

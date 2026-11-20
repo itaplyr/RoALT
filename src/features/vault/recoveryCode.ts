@@ -1,4 +1,5 @@
 import { createElement, useEffect, useSyncExternalStore } from "react";
+import { signal } from "../../ui/signal";
 import { RecoveryCodeDialog } from "./RecoveryCodeDialog";
 
 // The newest recovery code, until the user says it is saved. It lives apart from whatever made it:
@@ -6,12 +7,7 @@ import { RecoveryCodeDialog } from "./RecoveryCodeDialog";
 // after the unlock, and never while locked.
 let code: string | null = null;
 let claims = 0;
-const subs = new Set<() => void>();
-const changed = () => subs.forEach((f) => f());
-const subscribe = (f: () => void) => {
-  subs.add(f);
-  return () => void subs.delete(f);
-};
+const { subscribe, notify: changed } = signal();
 
 /** Keeps a code the backend just returned. Call it straight away, before anything can unmount. */
 export function publishRecoveryCode(next: string) {

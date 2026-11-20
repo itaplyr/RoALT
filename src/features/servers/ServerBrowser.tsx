@@ -15,6 +15,7 @@ import { MenuLabel, MenuRadioItem, MenuSeparator, Popover, useAnchor } from "../
 import { friendly } from "../../ui/Toast";
 import { fmtNum, t, tx, type Key } from "../../i18n";
 import { accountName } from "../accounts/shared";
+import { useGameDetails } from "../browse/GameDetails";
 import { useNow } from "../launch/Running";
 import { BuyPrivateServerDialog } from "./BuyPrivateServerDialog";
 import { PrivateServerDialog } from "./PrivateServerDialog";
@@ -82,6 +83,7 @@ export function ServerBrowser({ accounts, asker, place, setPlace, onChoice, vari
   const [nudges, setNudges] = useState(0);
   const [manage, setManage] = useState<{ server: PrivateServer; owner: AccountSummary } | null>(null);
   const [buying, setBuying] = useState(false);
+  const details = useGameDetails();
   // Another game from outside (Play re-seeding its drawer) starts over: a server picked in one game
   // must not travel to the next.
   const [shown, setShown] = useState(place);
@@ -294,7 +296,8 @@ export function ServerBrowser({ accounts, asker, place, setPlace, onChoice, vari
         <div className="srv-head">
           <FadeIn key={g?.placeId ?? (waiting ? "wait" : "none")} className="flex-[1_1_320px] min-w-0">
             {g ? (
-              <GameHead game={g} drawer={drawer} />
+              // Play's drawer has none: no drawer opens over a drawer.
+              <GameHead game={g} drawer={drawer} onDetails={drawer ? undefined : () => details.open(g.placeId)} />
             ) : (
               <>
                 {waiting && <GameHeadGhost drawer={drawer} />}
@@ -463,6 +466,7 @@ export function ServerBrowser({ accounts, asker, place, setPlace, onChoice, vari
           onBought={privChanged}
         />
       )}
+      {!drawer && details.dialog}
     </>
   );
 }
@@ -516,7 +520,6 @@ function Sorts({ value, locked, reasonId, fastestFor, onPick }: {
         anchor={anchor.name}
         role="menu"
         label={t("servers.sortServers")}
-        onToggle={(open) => open && document.getElementById(menu)?.querySelector<HTMLElement>("[aria-checked=true]")?.focus()}
       >
         {ORDERS.map((o) => (
           <MenuRadioItem
@@ -547,7 +550,7 @@ function Updated({ at }: { at: number }) {
   return <>{s < 60 ? t("servers.updatedSec", { s }) : t("servers.updatedMin", { m: Math.floor(s / 60) })}</>;
 }
 
-function GameHead({ game: g, drawer }: { game: GameInfo; drawer: boolean }) {
+function GameHead({ game: g, drawer, onDetails }: { game: GameInfo; drawer: boolean; onDetails?: () => void }) {
   const Name = drawer ? "h3" : "h1";
   return (
     <div className="flex items-center gap-4 min-w-0">
@@ -570,6 +573,11 @@ function GameHead({ game: g, drawer }: { game: GameInfo; drawer: boolean }) {
             "servers.playing",
             { count: g.playing, num: <span className="mono">{fmtNum(g.playing)}</span> },
             { dim: (s) => <span className="text-fg-3">{s}</span> },
+          )}
+          {onDetails && (
+            <Button size="sm" variant="ghost" icon="info" onClick={onDetails}>
+              {t("game.details")}
+            </Button>
           )}
         </span>
       </div>

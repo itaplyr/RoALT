@@ -1,5 +1,6 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type AccountPatch, type AccountSummary, type Instance } from "../../api";
+import { browseAs } from "../../app/navigation";
 import { useUpdateAccount } from "../../data";
 import { t } from "../../i18n";
 import { ContextMenu, MenuCheckItem, MenuItem, MenuLabel, MenuSeparator } from "../../ui/Popover";
@@ -52,7 +53,7 @@ export function AccountMenu({ at, account: a, selection, live, canLaunch, onClos
             !many && canLaunch(a.id) && <MenuItem icon="play" onSelect={() => onLaunch([a.id])}>{t("common.playEllipsis")}</MenuItem>
           )}
           {!many && <MenuItem icon="refresh" onSelect={() => onValidate([a.id])}>{t("accounts.menu.validate")}</MenuItem>}
-          <MenuItem icon="signin" onSelect={() => api.accountOpenSession(a.id).catch(toastError)}>{t("accounts.menu.openSession")}</MenuItem>
+          <MenuItem icon="globe" onSelect={() => browseAs(a.id)}>{t("accounts.menu.openSession")}</MenuItem>
           <MenuItem icon="external" onSelect={() => openUrl(`https://www.roblox.com/users/${a.userId}/profile`).catch(toastError)}>{t("accounts.menu.openProfile")}</MenuItem>
           <MenuItem icon="copy" onSelect={() => clip(a.username, t("accounts.menu.usernameCopied"))}>{t("accounts.menu.copyUsername")}</MenuItem>
           <MenuItem icon="copy" onSelect={() => clip(String(a.userId), t("accounts.menu.userIdCopied"))}>{t("accounts.menu.copyUserId")}</MenuItem>

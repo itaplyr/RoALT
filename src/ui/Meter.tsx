@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import { motion } from "motion/react";
+import { t } from "../i18n";
 import { Num } from "./motion/Num";
 import { SPRING } from "./motion/tokens";
 import { TONE_COLOR, type Tone } from "./Status";
@@ -53,7 +54,7 @@ export function Dial({ value, label, text, tone = "neutral", size = 64, stroke =
           transition={SPRING.size}
         />
       </svg>
-      <Num value={value} format={text ?? ((n) => `${Math.round(n)}%`)} className="relative text-[13px] font-semibold" />
+      <Num value={value} format={text ?? ((n) => t("settings.percent", { n: Math.round(n) }))} className="relative text-[13px] font-semibold" />
     </span>
   );
 }

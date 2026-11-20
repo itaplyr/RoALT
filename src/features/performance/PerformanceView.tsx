@@ -3,8 +3,9 @@ import { useRef, useState } from "react";
 import { motion } from "motion/react";
 import type { Profile } from "../../api";
 import type { Limits } from "../../bindings/Limits";
-import { useAccounts, useSettings } from "../../data";
+import { useAccounts, useSetSettings, useSettings } from "../../data";
 import { fmtNum, t, type Key } from "../../i18n";
+import { Button } from "../../ui/Button";
 import { NumberField, Segmented, Switch } from "../../ui/controls";
 import { Icon } from "../../ui/Icon";
 import { Collapse, Morph, SPRING, Swap, TWEEN } from "../../ui/motion";
@@ -15,9 +16,11 @@ import { useRow } from "../settings/kit/rowError";
 import { Renderers, SettingRow, type RowRenderers } from "../settings/kit/SettingRow";
 import { SettingSection } from "../settings/kit/SettingSection";
 import { HeadlessResolutionRow } from "../settings/LinuxRows";
+import { MocktailNotice } from "../settings/MocktailNotice";
 import { PERFORMANCE_ENTRIES } from "./entries";
 import { benchApplied, ForThisPc } from "./ForThisPc";
 import { FpsRow } from "./FpsControl";
+import { FlagsDialog } from "./FlagsDialog";
 import { FACTS_SHOWN, isApplied, named, ownCaps, PRESETS, type Preset } from "./presets";
 import { ReviewDialog } from "./ReviewDialog";
 import { ShareRow } from "./ShareRow";
@@ -80,6 +83,46 @@ function BackgroundLimits() {
   );
 }
 
+/** Custom FFlags: for every account or each its own; the global ones are edited here. */
+function CustomFlagsRow() {
+  return (
+    <SettingRow id="customFlags">
+      <CustomFlagsControl />
+    </SettingRow>
+  );
+}
+
+function CustomFlagsControl() {
+  const { ctx, write, describedBy } = useRow();
+  const setSettings = useSetSettings({ quiet: true });
+  const [editing, setEditing] = useState(false);
+  const global = ctx.s.customFlagsScope === "global";
+  const count = Object.keys(ctx.s.customFlags).length;
+  return (
+    <span className="flex flex-wrap items-center justify-end gap-2">
+      <Segmented
+        label={t("flags.scope")}
+        value={ctx.s.customFlagsScope}
+        options={[{ value: "global" as const, label: t("flags.global") }, { value: "account" as const, label: t("flags.perAccount") }]}
+        onChange={(customFlagsScope) => void write({ customFlagsScope })}
+      />
+      {global && (
+        <Button size="md" icon="pencil" onClick={() => setEditing(true)} aria-describedby={describedBy}>
+          {count ? t("flags.count", { count }) : t("flags.edit")}
+        </Button>
+      )}
+      <FlagsDialog
+        open={editing}
+        onClose={() => setEditing(false)}
+        title={t("flags.title")}
+        flags={ctx.s.customFlags}
+        // Through the API, not `write`: a refusal belongs in the dialog, not the row.
+        onSave={(customFlags) => setSettings.mutateAsync({ customFlags })}
+      />
+    </span>
+  );
+}
+
 function PreviewFpsRow() {
   const [fps, setFps] = usePreviewFps();
   return (
@@ -103,10 +146,13 @@ const RENDERERS: RowRenderers = {
   ),
   adaptiveBg: () => <SettingRow id="adaptiveBg" below={<BackgroundLimits />} />,
   previewFps: PreviewFpsRow,
+  // Custom FFlags are backend-agnostic; the bandwidth row stays Windows-only and unrendered here.
+  customFlags: CustomFlagsRow,
 };
 
-/** Rows whose backend is Windows-only: no QoS policy and no Core Audio session muting here. */
-const WINDOWS_ONLY = new Set(["bandwidth", "mute"]);
+/** Rows whose backend is Windows-only: there is no QoS policy here. Session muting is not one of
+ * them: the Linux fork mutes a client's sink-input through `pactl` (`instances/audio_linux.rs`). */
+const WINDOWS_ONLY = new Set(["bandwidth"]);
 
 /** The groups of rows in screen order; each lists its entries' top rows (entries.ts order). */
 const GROUPS = (["performance.fineTune", "performance.section.cpuMemory", "performance.section.roalt", "performance.section.network"] as const)
@@ -207,7 +253,14 @@ export function PerformanceView() {
         <Renderers value={RENDERERS}>
           {GROUPS.map((g) => (
             <SettingSection key={g.group} label={g.group} ids={g.ids}>
-              {g.group === "performance.section.roalt" && <HeadlessResolutionRow settings={settings} />}
+              {g.group === "performance.section.roalt" && (
+                <>
+                  <div className="set-row">
+                    <MocktailNotice />
+                  </div>
+                  <HeadlessResolutionRow settings={settings} />
+                </>
+              )}
             </SettingSection>
           ))}
         </Renderers>

@@ -7,7 +7,7 @@ import tailwindcss from "@tailwindcss/vite";
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   clearScreen: false,
-  server: { port: 1420, strictPort: true, watch: { ignored: ["**/src-tauri/**"] } },
+  server: { host: "127.0.0.1", port: 1420, strictPort: true, watch: { ignored: ["**/src-tauri/**"] } },
   build: { target: "es2022" },
   // One version, from package.json, for the About row and the footer.
   define: { "import.meta.env.APP_VERSION": JSON.stringify(JSON.parse(readFileSync("package.json", "utf8")).version) },

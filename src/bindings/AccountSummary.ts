@@ -38,4 +38,8 @@ fullQuality: boolean,
  * The user's own account (at most one): listed first, left out of select-all while
  * `Settings.protect_main`, and confirmed before removal or showing its cookie.
  */
-main: boolean, };
+main: boolean, 
+/**
+ * Its own FFlags (`launcher::flags`), used while `Settings.custom_flags_scope` is Account.
+ */
+customFlags: { [key in string]: string }, };

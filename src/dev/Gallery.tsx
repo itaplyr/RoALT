@@ -1,12 +1,12 @@
 // Dev-only: every primitive in its states, the island on a fake model, and a live contrast table
 // (?gallery). Toggles for theme, accent, RTL and reduced motion. Never in a production build.
 import { useEffect, useState, type ReactNode } from "react";
-import { accentTokens, contrast } from "../app/theme";
+import { applyAccent, contrast } from "../app/theme";
 import { Button, IconButton } from "../ui/Button";
 import { Chip, Disclosure, Kbd, Skeleton } from "../ui/Bits";
 import { OffOrNumberField, NumberField, Segmented, Switch, TextField } from "../ui/controls";
 import { ConfirmDialog, Dialog, DialogSteps } from "../ui/Dialog";
-import { Checkbox, Input, Radio, Select } from "../ui/Field";
+import { Checkbox, Input, Select } from "../ui/Field";
 import { Island } from "../ui/island/Island";
 import type { IslandModel } from "../ui/island/model";
 import { Dial, Meter } from "../ui/Meter";
@@ -89,14 +89,8 @@ export function Gallery() {
     root.dataset.theme = theme;
     root.dir = rtl ? "rtl" : "ltr";
     root.toggleAttribute("data-rm", rm);
-    if (accent) {
-      const a = accentTokens(accent, theme);
-      root.dataset.accent = "";
-      root.style.setProperty("--user-accent", a.fill);
-      root.style.setProperty("--user-on-accent", a.ink);
-      root.style.setProperty("--user-accent-text", a.text);
-      root.style.setProperty("--user-accent-ring", a.ring);
-    } else delete root.dataset.accent;
+    if (accent) applyAccent(accent, theme);
+    else delete root.dataset.accent;
     setTick((x) => x + 1);
   }, [theme, accent, rtl, rm]);
 
@@ -136,7 +130,7 @@ export function Gallery() {
 
       <Section title="Island">
         <div className="grid place-items-center py-2" style={{ containerType: "inline-size" }}>
-          <Island model={model} inflate={false} />
+          <Island model={model} />
         </div>
       </Section>
 
@@ -175,9 +169,6 @@ export function Gallery() {
           </div>
           <div className="flex flex-wrap gap-4">
             <Checkbox label="Checkbox" checked onChange={() => {}} />
-            <Checkbox label="Mixed" checked={false} indeterminate onChange={() => {}} />
-            <Radio label="Radio" name="r" value="1" checked onChange={() => {}} />
-            <Radio label="Other" name="r" value="2" checked={false} onChange={() => {}} />
           </div>
         </Section>
 

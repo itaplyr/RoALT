@@ -76,15 +76,6 @@
     opacity: 0.35;
   }
 }
-@keyframes flash-row {
-  0%,
-  100% {
-    background-color: transparent;
-  }
-  30% {
-    background-color: color-mix(in srgb, var(--accent-text) 14%, transparent);
-  }
-}
 
 /* "backwards" only: a finished rise must not pin anything (drag-to-reorder sets transform inline). */
 .enter {
@@ -131,13 +122,6 @@
 }
 :root[dir="rtl"] .drain {
   transform-origin: right;
-}
-.flash {
-  animation: flash-row 0.9s var(--ease-out);
-}
-/* Press feedback with the individual property, so it never fights motion's transform. */
-.press:active {
-  scale: var(--press-scale);
 }
 
 /* Numbers, IDs and links read left to right in every language. */
@@ -257,7 +241,10 @@ textarea.mono {
   width: 0;
   opacity: 0;
   pointer-events: none;
-  will-change: transform, width;
+}
+/* Only the island's drops keep a layer: they glide under the goo filter. A thumb at rest needs none. */
+.island-drops > .lq-drop {
+  will-change: transform;
 }
 
 /* ---- Reactive surfaces (ui/motion/reactive sets the attributes and variables) ---- */
@@ -399,8 +386,11 @@ textarea.mono {
   content: "";
   position: absolute;
   z-index: -1;
-  left: var(--mx, 50%);
-  top: var(--my, 50%);
+  /* Moved by translate, not left/top: no layout or repaint on each pointer frame. Centred until the
+     pointer moves (a card appearing under it, a wheel scroll). */
+  left: 50%;
+  top: 50%;
+  translate: var(--mx, 0px) var(--my, 0px);
   width: 360px;
   height: 360px;
   margin: -180px 0 0 -180px;
@@ -412,6 +402,7 @@ textarea.mono {
 }
 .home-card:hover::after {
   opacity: 1;
+  will-change: translate;
 }
 
 /* Reduced motion (html[data-rm], from Settings › Motion or ?rm=1 in dev): no travel, no scale, no
@@ -478,6 +469,10 @@ textarea.mono {
 :root[data-rm] .btn-primary,
 :root[data-rm] .btn-play {
   translate: none;
+}
+/* The card light is travel: it does not follow the pointer (reactive skips it). */
+:root[data-rm] .home-card::after {
+  display: none;
 }
 :root[data-rm] .chip::before {
   transition-duration: 120ms;

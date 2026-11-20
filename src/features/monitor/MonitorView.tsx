@@ -1,7 +1,7 @@
 import "./monitor.css";
 import { useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type ReactNode, type RefObject } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { asError, type AccountSummary, type ClientMetrics, type Instance, type InstanceState } from "../../api";
+import { asError, type AccountSummary, type ClientMetrics, type Instance } from "../../api";
 import { requestNavigation } from "../../app/navigation";
 import { useInstances, useMetrics } from "../../data";
 import { fmtNum, t, type Key } from "../../i18n";
@@ -9,23 +9,20 @@ import { Skeleton } from "../../ui/Bits";
 import { Button } from "../../ui/Button";
 import { Icon } from "../../ui/Icon";
 import { Collapse, DUR, EASE_CSS, Num, prefersReducedMotion, RISE, riseIn, SPRING, STAGGER, TWEEN } from "../../ui/motion";
-import { StatusPill, type Tone } from "../../ui/Status";
+import { StatusPill } from "../../ui/Status";
 import { friendly } from "../../ui/Toast";
 import { accountName, Avatar } from "../accounts/shared";
 import { LimitsDialog } from "../dashboard/LimitsDialog";
-import { isRunning, STATES, uptime, useNow } from "../launch/Running";
+import { isRunning, STATE_TONE, STATES, uptime, useNow } from "../launch/Running";
+import { mb, NONE, one, pct } from "./format";
 
 /** Samples kept per line: two minutes at one every 2 s, longer when reading them is slow (`metrics`). */
 const KEEP = 60;
-const NONE = "—";
 
 type Series = { cpu: number[]; mem: number[] };
 type Col = "cpu" | "memory" | "commit" | "gpu" | "gpuMem" | "read" | "write" | "up" | "restarts";
 type Sort = { col: Col; dir: "desc" | "asc" } | null;
 
-const one = (n: number) => fmtNum(n, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-export const mb = (n: number) => (n >= 1024 ? t("monitor.gb", { n: one(n / 1024) }) : t("monitor.mb", { n: fmtNum(Math.round(n)) }));
-export const pct = (n: number | null) => (n === null ? NONE : t("monitor.pct", { n: n < 10 ? one(n) : fmtNum(Math.round(n)) }));
 function rate(bps: number | null) {
   if (bps === null) return NONE;
   if (bps >= 1024 * 1024) return t("monitor.mbps", { n: one(bps / 1024 / 1024) });
@@ -36,9 +33,6 @@ const mbOr = (n: number | null) => (n === null ? NONE : mb(n));
 const whole = (n: number) => fmtNum(Math.round(n));
 const push = (list: number[], v: number) => [...list, v].slice(-KEEP);
 const nameOf = (i: Instance, a?: AccountSummary) => (a ? accountName(a) : t("monitor.accountId", { id: i.accountId }));
-
-/** A state's hue as a status tone; STATES has its words. */
-const TONE: Record<InstanceState, Tone> = { starting: "neutral", joining: "info", inGame: "ok", disconnected: "attention", exited: "neutral" };
 
 /** What each column sorts by. Unknown (no sample yet, or Windows doesn't say) goes last either way. */
 const SORT_BY: Record<Col, (i: Instance, m?: ClientMetrics) => number | null | undefined> = {
@@ -188,7 +182,7 @@ function LivePill({ running, beat }: { running: Instance[]; beat: number }) {
   }, [beat]);
   // Worst first: furthest from in game.
   const worst = (["disconnected", "starting", "joining"] as const).find((s) => running.some((i) => i.state === s));
-  const tone = TONE[worst ?? "inGame"];
+  const tone = STATE_TONE[worst ?? "inGame"];
   return (
     <motion.span
       ref={ref}
@@ -321,7 +315,7 @@ function ClientTable({ running, byInst, hist, accounts, onLimits }: {
                 </td>
                 <td>
                   <span className="mon-state" data-tip={i.note ?? undefined}>
-                    <StatusPill tone={TONE[i.state]} label={STATES[i.state][0]} detail={i.note ?? undefined} />
+                    <StatusPill tone={STATE_TONE[i.state]}label={STATES[i.state][0]} detail={i.note ?? undefined} />
                   </span>
                 </td>
                 <td className="mon-num">{cell(m && pct(m.cpuPct))}</td>
@@ -360,10 +354,12 @@ export function MonitorView({ accounts }: { accounts: AccountSummary[] }) {
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const byInst = new Map((metrics.data ?? []).map((m) => [m.instanceId, m]));
 
-  // One point per new sample; clients that ended drop out.
+  // One point per new sample; clients that ended drop out. Set during render, not in an effect,
+  // so a sample costs one commit, not two. `seen` starts empty so cached data adds its point too.
   const { data } = metrics;
-  useEffect(() => {
-    if (!data) return;
+  const [seen, setSeen] = useState<ClientMetrics[]>();
+  if (data && data !== seen) {
+    setSeen(data);
     setHist((old) => {
       const per = new Map<string, Series>();
       for (const m of data) {
@@ -375,7 +371,7 @@ export function MonitorView({ accounts }: { accounts: AccountSummary[] }) {
       if (!data.length) return { per, totals: { cpu: [], mem: [] } };
       return { per, totals: { cpu: push(old.totals.cpu, cpu), mem: push(old.totals.mem, mem) } };
     });
-  }, [data]);
+  }
 
   const view = instances.error ? "error" : !instances.data ? "loading" : running.length ? "live" : "empty";
   const limited = running.find((i) => i.id === limitsFor);

@@ -1,8 +1,11 @@
 import { useState, type ReactNode } from "react";
-import type { AccountStatus, AccountSummary, Presence, PresenceKind } from "../../api";
-import { useHeadshot } from "../../data";
-import { fmtDate, t, type Key } from "../../i18n";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { api, type AccountStatus, type AccountSummary, type Presence, type PresenceKind } from "../../api";
+import { qk, setAccounts, useHeadshot } from "../../data";
+import { fmtDate, t, tx, type Key } from "../../i18n";
+import { ConfirmDialog } from "../../ui/Dialog";
 import { TONE_COLOR, type Shape, type Tone } from "../../ui/Status";
+import { toast } from "../../ui/Toast";
 
 /** The "MAIN" tag beside the user's own account: identity, not status, so no hue. */
 export function MainBadge() {
@@ -17,6 +20,62 @@ export function MainBadge() {
 export const SWATCHES = ["#C6F432", "#7AB0FF", "#5FE0C8", "#FFA05C", "#B49CFF", "#FF8FC7", "#ECEEF1", "#5E6672"];
 
 export const accountName = (a: AccountSummary) => a.alias || a.displayName || a.username;
+
+/** Removing accounts: a confirm, then a second, explicit one when the MAIN is among them. Render
+ * `dialogs`. `onRemoved` runs with the ids once they are gone, before the dialogs close. */
+export function useRemoveAccounts(accounts: AccountSummary[], onRemoved?: (ids: number[]) => void) {
+  const qc = useQueryClient();
+  const [ids, setIds] = useState<number[]>([]);
+  const [step, setStep] = useState<"ask" | "main" | null>(null);
+  const remove = useMutation({
+    mutationFn: (ids: number[]) => api.accountsRemove(ids),
+    onSuccess: (_, ids) => {
+      onRemoved?.(ids);
+      setAccounts(qc, (list) => list.filter((a) => !ids.includes(a.id)));
+      // Ids can be reused by the next account added: drop what belonged to these.
+      for (const id of ids) qc.removeQueries({ queryKey: qk.info(id) });
+      setStep(null);
+      toast(t("accounts.toast.removed", { count: ids.length }));
+    },
+  });
+  const main = accounts.find((a) => a.main && ids.includes(a.id));
+  const one = ids.length === 1 ? accounts.find((a) => a.id === ids[0]) : undefined;
+  const dialogs = (
+    <>
+      <ConfirmDialog
+        open={step === "ask"}
+        onClose={() => setStep(null)}
+        // The MAIN goes only after a second, explicit confirm.
+        onConfirm={() => (main ? setStep("main") : remove.mutate(ids))}
+        busy={remove.isPending}
+        title={t("accounts.removeTitle", { count: ids.length })}
+        text={
+          <>
+            {ids.length === 1
+              ? tx("accounts.removeOneText", { name: <span className="text-fg font-medium">{one ? accountName(one) : t("accounts.thisAccount")}</span> })
+              : t("accounts.removeManyText", { count: ids.length })}
+            {main && <p className="alert mt-2">{t("accounts.removeMainWarning", { name: `@${main.username}` })}</p>}
+          </>
+        }
+        confirmLabel={t("common.remove")}
+      />
+      <ConfirmDialog
+        open={step === "main"}
+        onClose={() => setStep(null)}
+        onConfirm={() => remove.mutate(ids)}
+        busy={remove.isPending}
+        title={t("accounts.removeMainTitle")}
+        text={t("accounts.removeMainConfirm", { name: `@${main?.username ?? ""}` })}
+        confirmLabel={t("common.remove")}
+      />
+    </>
+  );
+  const ask = (next: number[]) => {
+    setIds(next);
+    setStep("ask");
+  };
+  return { ask, dialogs, open: step !== null };
+}
 
 export function initials(a: AccountSummary) {
   return accountName(a).replace(/[^\p{L}\p{N}]/gu, "").slice(0, 2).toUpperCase() || "?";

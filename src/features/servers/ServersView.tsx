@@ -12,6 +12,7 @@ import { accountName } from "../accounts/shared";
 import { AccountPicker } from "../launch/AccountPicker";
 import { LaunchButton } from "../launch/LaunchButton";
 import { launchBlocked, launchOne, launchSame } from "../launch/launchQueue";
+import { useMoveConfirm } from "../launch/MoveDialog";
 import { MultiNotice } from "../launch/MultiNotice";
 import { isLive, isRunning } from "../launch/Running";
 import { ServerBrowser, type ServerChoice } from "./ServerBrowser";
@@ -38,20 +39,20 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace }: {
   const has = new Set(picked);
   const live = new Set(instances.filter(isLive).map((i) => i.accountId));
   const valid = accounts.filter((a) => a.status === "valid");
-  // In list order, which is also the batch's.
+  // In list order, which is also the batch's. A playing account is only ever picked on its own
+  // (AccountPicker): joining moves its client, asked first.
   const mine = valid.filter((a) => has.has(a.id));
-  // A playing account isn't sent: the backend refuses a second client.
-  const chosen = mine.filter((a) => !live.has(a.id));
-  const n = chosen.length;
+  const move = useMoveConfirm();
+  const n = mine.length;
   // Who asks Roblox (the signed-in sorts, private servers, the access check). A pick that started
   // playing stays it, so a join doesn't reload the list under the user.
   const asker = mine.find((a) => a.id === asId) ?? mine[0];
   const askerName = asker ? accountName(asker) : "";
   const noJoin = t("servers.noJoin", { name: askerName });
   // Sent besides the asker: Roblox checked none of them.
-  const others = chosen.some((a) => a.id !== asker?.id);
+  const others = mine.some((a) => a.id !== asker?.id);
   // With multi-instance off, one more client ends the one that runs.
-  const replaces = n === 1 && instances.some((i) => isRunning(i) && i.accountId !== chosen[0].id);
+  const replaces = n === 1 && instances.some((i) => isRunning(i) && i.accountId !== mine[0].id);
   // The private list told the asker it can't join, and only the asker goes.
   const refused = restricted && n > 0 && !others;
   const pub = publicBlock(network, settings);
@@ -62,7 +63,7 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace }: {
     pub ??
     (batch && !batch.done ? t("launch.batchRunning") : null) ??
     // The button's label already says the first missing pick.
-    (!target ? (n ? null : t("servers.pickServerFirst")) : refused ? noJoin : n ? null : mine.length ? t("play.allPlaying") : null);
+    (!target ? (n ? null : t("servers.pickServerFirst")) : refused ? noJoin : null);
   // Shown by the multi-instance notice or the no-valid-account line; pressing the button says it too.
   const noted = reason ? null : (multiBlock ?? (valid.length ? null : t("servers.noValidAccount")));
   const warnings = [
@@ -74,8 +75,10 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace }: {
 
   const join = () => {
     if (!target) return;
-    if (n > 1) void launchSame(chosen, target);
-    else if (n) void launchOne(chosen[0], target);
+    const one = mine[0];
+    if (n > 1) void launchSame(mine, target);
+    else if (one && move.liveOf(one)) move.ask(one, (from) => void launchOne(one, target, undefined, from));
+    else if (one) void launchOne(one, target);
   };
 
   return (
@@ -127,6 +130,7 @@ export function ServersView({ accounts, picked, setPicked, place, setPlace }: {
           </div>
         </section>
       </div>
+      {move.dialog}
     </main>
   );
 }
@@ -150,8 +154,6 @@ function AsMenu({ accounts, asker, live, onPick }: { accounts: AccountSummary[];
         placement="above-start"
         role="menu"
         label={hint}
-        // The pick in force takes the focus, so arrows (menuKeys) start from it.
-        onToggle={(open) => open && document.getElementById(menu)?.querySelector<HTMLElement>("[aria-checked=true]")?.focus()}
       >
         {accounts.map((a) => (
           <MenuRadioItem key={a.id} checked={a.id === asker.id} onSelect={() => (onPick(a.id), document.getElementById(menu)?.hidePopover())}>

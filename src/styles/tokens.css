@@ -110,22 +110,6 @@
     --drop-radius: 32px;
     --press-scale: 0.95;
     --press-deep: 0.9; /* island tiles and icon circles press deeper */
-
-    /* Legacy names, so views not yet redesigned keep working on the new tokens. */
-    --frame: var(--ground);
-    --bg: var(--ground);
-    --panel: var(--surface-1);
-    --raised: var(--surface-2);
-    --text: var(--fg);
-    --dim: var(--fg-2);
-    --grey: var(--fg-3);
-    --blue: var(--info);
-    --orange: var(--attention);
-    --line-strong: var(--edge);
-    --hair: var(--line);
-    --on: var(--accent);
-    --on-ink: var(--on-accent);
-    --ease: var(--ease-out);
   }
 
   :root[data-theme="light"] {

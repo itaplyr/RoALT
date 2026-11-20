@@ -23,8 +23,7 @@ use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JOB_OBJECT_CPU_RATE_CONTROL, JOB_OBJECT_CPU_RATE_CONTROL_ENABLE,
     JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP, JOBOBJECT_CPU_RATE_CONTROL_INFORMATION, JOBOBJECT_CPU_RATE_CONTROL_INFORMATION_0,
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectCpuRateControlInformation, JobObjectExtendedLimitInformation,
-    SetInformationJobObject,
+    JobObjectCpuRateControlInformation, SetInformationJobObject,
 };
 use windows::Win32::System::ProcessStatus::K32EmptyWorkingSet;
 use windows::Win32::System::Threading::{
@@ -81,23 +80,8 @@ fn memory_line(r: &super::metrics::Reading) -> String {
 
 /// Our own job object; never a handle to the client.
 pub(crate) struct Job(Owned<HANDLE>);
-// SAFETY: a job handle may be used from any thread; it is only used under the Limiter's lock
-// (or, for `kill_on_close`, the macro runner's).
+// SAFETY: a job handle may be used from any thread; it is only used under the Limiter's lock.
 unsafe impl Send for Job {}
-
-/// A job that kills `child`, and whatever it starts, when the job is dropped or RoALT dies.
-pub(crate) fn kill_on_close(child: &std::process::Child) -> Result<Job> {
-    use std::os::windows::io::AsRawHandle;
-    let job = new_job()?;
-    let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    // SAFETY: `info` is a local of the size passed.
-    unsafe { SetInformationJobObject(*job.0, JobObjectExtendedLimitInformation, (&raw const info).cast(), size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32) }
-        .map_err(|e| AppError::Internal(e.message()))?;
-    // SAFETY: the child's handle is live while `child` is borrowed; the job only adds it.
-    unsafe { AssignProcessToJobObject(*job.0, HANDLE(child.as_raw_handle())) }.map_err(|e| AppError::Internal(e.message()))?;
-    Ok(job)
-}
 
 /// What has been applied to one instance's current process.
 struct Applied {
@@ -675,19 +659,6 @@ mod tests {
         assert!(l.applied.lock().unwrap().is_empty());
         child.kill().unwrap();
         child.wait().unwrap();
-    }
-
-    #[test]
-    fn dropping_a_kill_on_close_job_ends_its_process() {
-        let (mut child, _, _) = ping();
-        let job = kill_on_close(&child).unwrap();
-        assert!(child.try_wait().unwrap().is_none());
-        drop(job);
-        let end = Instant::now() + Duration::from_secs(5);
-        while child.try_wait().unwrap().is_none() {
-            assert!(Instant::now() < end, "ping still runs after its job closed");
-            std::thread::sleep(Duration::from_millis(50));
-        }
     }
 
     fn system() -> u64 {

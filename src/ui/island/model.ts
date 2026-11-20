@@ -9,7 +9,7 @@ export type IslandLeaf = {
   shortcut?: string;
   /** A quiet count beside the label while current ("Accounts 12"). */
   count?: number;
-  /** Something that needs a look (running macros): a small badge on the tile. */
+  /** Something that needs a look: a small badge on the tile. */
   badge?: number;
   current: boolean;
   onSelect: () => void;

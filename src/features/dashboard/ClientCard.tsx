@@ -12,10 +12,9 @@ import { StatusPill, type Tone } from "../../ui/Status";
 import { toastError } from "../../ui/Toast";
 import { accountName, Avatar } from "../accounts/shared";
 import { launchOne, useLaunchStep } from "../launch/launchQueue";
-import { STATES, uptime } from "../launch/Running";
-import { mb, pct } from "../monitor/MonitorView";
+import { STATE_TONE, STATES, uptime } from "../launch/Running";
+import { mb, pct } from "../monitor/format";
 import type { MenuAt } from "./ClientMenu";
-import { STATE_TONE } from "./homeLayout";
 import type { PreviewFps } from "./previewFps";
 import type { useGridDrag } from "./useGridDrag";
 import { useThumbnail } from "./useThumbnail";
@@ -46,7 +45,7 @@ function GameName({ placeId }: { placeId: number | null }) {
 /** What differs on this client from what Performance gives every client: what was set on it, its
  * account's choices and the FPS cap its launch or account asked for. What Performance itself applies
  * is counted in one tag, `inherited`, whose tip lists it. */
-function tagsOf(i: Instance, a: AccountSummary | undefined, afkOn: boolean, defaultFps: number, macro: string | undefined) {
+function tagsOf(i: Instance, a: AccountSummary | undefined, afkOn: boolean, defaultFps: number) {
   const own = i.limits;
   const on = i.appliedLimits;
   const tags: Tag[] = [];
@@ -59,7 +58,6 @@ function tagsOf(i: Instance, a: AccountSummary | undefined, afkOn: boolean, defa
   if (own.affinity !== null) tags.push({ label: capitalized(t("launch.limits.coresItem")) });
   if (afkOn && !i.antiAfk) tags.push({ label: `${t("dashboard.antiAfk")} · ${t("common.off")}` });
   if (i.micro) tags.push({ label: t("dashboard.micro") });
-  if (macro) tags.push({ label: t("dashboard.macro"), tip: t("macros.busy", { name: macro }) });
   if (i.fpsCap) tags.push({ label: t("dashboard.fpsCap", { fps: i.fpsCap }), tip: t("dashboard.launchFpsCap") });
   else if (a?.fpsCap) tags.push({ label: t("dashboard.fpsCap", { fps: a.fpsCap }), tip: t("dashboard.accountFpsCap") });
   const inherited = [
@@ -160,7 +158,7 @@ function SizeHandle({ name, detailed, tab, onSize, onSizing }: { name: string; d
  * when something needs a look, and with `detailed` who, where, how long, what differs from the
  * defaults, what it uses and its keys; compact cards show their keys on hover or focus. The card is
  * one Tab stop: what is inside takes the Tab key only while the focus is in the card. */
-export function ClientCard({ inst: i, account: a, detailed, width, menuOpen, onSize, onSizing, grip, onMenu, closing, afkOn, defaultFps, fps, macro, now }: {
+export function ClientCard({ inst: i, account: a, detailed, width, menuOpen, onSize, onSizing, grip, onMenu, closing, afkOn, defaultFps, fps, now }: {
   inst: Instance;
   account: AccountSummary | undefined;
   detailed: boolean;
@@ -176,8 +174,6 @@ export function ClientCard({ inst: i, account: a, detailed, width, menuOpen, onS
   /** Performance's FPS cap. */
   defaultFps: number;
   fps: PreviewFps;
-  /** The name of the macro it runs. */
-  macro: string | undefined;
   now: number;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -204,7 +200,7 @@ export function ClientCard({ inst: i, account: a, detailed, width, menuOpen, onS
     : painted && pictureNote ? { tone: "neutral", label: pictureNote, tip: hidden ? t("dashboard.lastPictureHint") : undefined }
     : ageS !== null ? { tone: "neutral", label: t("dashboard.pictureAge", { s: ageS }), tip: t("dashboard.pictureAgeHint") }
     : null;
-  const tags = detailed ? tagsOf(i, a, afkOn, defaultFps, macro) : [];
+  const tags = detailed ? tagsOf(i, a, afkOn, defaultFps) : [];
   const show = () => api.instanceShow(i.id, "focus").catch(toastError);
   const minimize = () => api.instanceShow(i.id, hidden ? "restore" : "minimize").catch(toastError);
   const menuFrom = (e: MouseEvent<HTMLElement>) => {

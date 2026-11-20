@@ -1,16 +1,12 @@
-import "./settings.css";
 import { AnimatePresence, motion } from "motion/react";
 import type { Settings } from "../../api";
-import { useNetwork } from "../../data";
+import { publicBlock, useNetwork } from "../../data";
 import { Icon } from "../../ui/Icon";
 import { RISE, SPRING, TWEEN } from "../../ui/motion";
 import { t } from "../../i18n";
 
 /** Whether launching is blocked here: a Public network with the guard on (`network`). */
-export function usePublicBlock(settings: Settings | undefined) {
-  const onPublic = useNetwork().data?.public;
-  return !!onPublic && settings?.allowPublicNetworks === false;
-}
+export const usePublicBlock = (settings: Settings | undefined) => publicBlock(useNetwork().data, settings) !== null;
 
 /** While the vault is locked (no island), the public-network block as a slim pill under the title
  * bar. It drops in from where the island would be, and lifts away faster. */

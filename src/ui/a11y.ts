@@ -1,23 +1,20 @@
 import { createElement, useSyncExternalStore, type KeyboardEvent } from "react";
 import { isRtl } from "../i18n";
+import { signal } from "./signal";
 
 // Screen-reader announcements from anywhere (a batch finished, a reorder): one polite and one
 // assertive live region, rendered once by <Announcer/>.
 let polite = "";
 let assertive = "";
 let tick = 0;
-const subs = new Set<() => void>();
-const subscribe = (f: () => void) => {
-  subs.add(f);
-  return () => void subs.delete(f);
-};
+const { subscribe, notify } = signal();
 
 export function announce(text: string, mode: "polite" | "assertive" = "polite") {
   // A zero-width suffix that flips, so the same words announced twice are read twice.
   const mark = ++tick % 2 ? "​" : "";
   if (mode === "assertive") assertive = text + mark;
   else polite = text + mark;
-  subs.forEach((f) => f());
+  notify();
 }
 
 export function Announcer() {

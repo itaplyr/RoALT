@@ -108,7 +108,7 @@ function Tiles({ accounts, picked, onPicked, label, onAdd, onAccounts, className
   const all = pool.filter((id) => id !== mainId);
   const allPicked = all.length > 0 && all.every((id) => has.has(id));
   const mainLeft = allPicked && mainId !== null && pool.includes(mainId) && !has.has(mainId);
-  const count = accounts.filter((a) => can(a) && has.has(a.id)).length;
+  const count = accounts.filter((a) => a.status === "valid" && has.has(a.id)).length;
 
   // A pick that is playing goes with this one, or it would come back by itself when its client ends.
   const add = (ids: number[]) => onPicked([...new Set([...picked.filter((id) => !live.has(id)), ...ids])]);
@@ -118,6 +118,11 @@ function Tiles({ accounts, picked, onPicked, label, onAdd, onAccounts, className
   };
   const clear = () => onPicked(picked.filter((id) => !shown.some((a) => a.id === id)));
   const toggle = (a: AccountSummary, range: boolean) => {
+    // A playing account is picked on its own: launching it moves its client (useMoveConfirm).
+    if (a.status === "valid" && live.has(a.id)) {
+      anchor.current = null;
+      return onPicked(has.has(a.id) ? picked.filter((id) => id !== a.id) : [a.id]);
+    }
     if (!can(a)) return;
     const from = range && anchor.current !== null ? shown.findIndex((x) => x.id === anchor.current) : -1;
     const to = shown.indexOf(a);
@@ -243,8 +248,8 @@ function Tiles({ accounts, picked, onPicked, label, onAdd, onAccounts, className
             <Tile
               key={a.id}
               account={a}
-              on={can(a) && has.has(a.id)}
-              can={can(a)}
+              on={a.status === "valid" && has.has(a.id)}
+              can={a.status === "valid"}
               live={live.has(a.id)}
               focusable={a.id === focusable}
               presence={presence?.get(a.id)}
@@ -284,11 +289,11 @@ function Chips({ accounts, picked, onPicked, label }: Picks) {
               type="button"
               data-tile
               className="chip chip-sm launch-chip"
-              aria-pressed={!playing && has.has(a.id)}
-              aria-disabled={playing || undefined}
+              aria-pressed={has.has(a.id)}
               tabIndex={a.id === focusable ? 0 : -1}
               onFocus={() => setFocusId(a.id)}
-              onClick={() => !playing && onPicked(has.has(a.id) ? picked.filter((id) => id !== a.id) : [...picked.filter((id) => !live.has(id)), a.id])}
+              // A playing account is picked on its own: launching it moves its client (useMoveConfirm).
+              onClick={() => onPicked(has.has(a.id) ? picked.filter((id) => id !== a.id) : playing ? [a.id] : [...picked.filter((id) => !live.has(id)), a.id])}
             >
               <span aria-hidden="true" className="w-2 h-2 rounded-full flex-none" style={{ background: avatarColor(a) }} />
               <span className="truncate">{accountName(a)}</span>

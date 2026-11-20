@@ -1,5 +1,5 @@
 // Every setting RoALT has, as data: where its row lives, its words, its control and when it shows.
-// Settings renders from it, and one search covers Settings, Performance, Discord and Macros, plus
+// Settings renders from it, and one search covers Settings, Performance and Discord, plus
 // links to per-account, per-launch and per-client settings in other views.
 import { LANGUAGES, t, type Key } from "../../i18n";
 import { motionPreference } from "../../ui/motion";
@@ -7,11 +7,10 @@ import type { View } from "../../app/navigation";
 import type { AntiAfk, DiscordEvents, Settings, VaultStatus } from "../../api";
 import type { MemThrottle } from "../../bindings/MemThrottle";
 import type { RenderFlags } from "../../bindings/RenderFlags";
-import type { AreaDef, SettingsArea } from "./areas";
+import { AREAS, type AreaDef, type SettingsArea } from "./areas";
 import { SHORTCUTS } from "./shortcuts";
 import { PERFORMANCE_ENTRIES } from "../performance/entries";
 import { DISCORD_ENTRIES } from "../discord/entries";
-import { MACROS_ENTRIES } from "../macros/entries";
 
 export type { AreaDef, SettingsArea };
 
@@ -19,7 +18,7 @@ export type { AreaDef, SettingsArea };
 export type Place =
   | { view: "settings"; area: SettingsArea; group?: Key }
   | { view: "performance"; group: Key }
-  | { view: "discord" | "macros"; group?: Key }
+  | { view: "discord"; group?: Key }
   | { view: Extract<View, "accounts" | "launch" | "dashboard">; link: true };
 
 /** What conditions and changing lines read. `background`: a background image is set. */
@@ -81,7 +80,7 @@ export type Entry = {
   /** Where search and jumps go while `when` is false (else the parent). */
   fallback?: string;
   /** Queries a successful write makes stale. */
-  invalidates?: readonly ("multi" | "ahk")[];
+  invalidates?: readonly ("multi" | "values")[];
   /** ASCII search words (fps, afk, qos): never shown, never translated. */
   aliases?: readonly string[];
 };
@@ -175,6 +174,7 @@ const SETTINGS_ENTRIES: readonly Entry[] = [
     control: { kind: "segmented", label: "settings.autoLockLabel", mono: true, options: [0, 5, 15, 30, 60].map((n) => ({ value: n, label: n ? { key: "settings.minutes", params: { n } } : "common.off" })) },
   },
   { id: "clipboard", place: security, label: "settings.clipboard", field: "clipboardClearSeconds", control: { kind: "number", min: 5, max: 300, unit: "settings.unit.seconds", short: "settings.unit.s" }, aliases: ["copy", "cookie"] },
+  { id: "lockPurchases", place: security, label: "settings.lockPurchases", hint: "settings.lockPurchasesShort", more: "settings.lockPurchasesHint", field: "lockPurchases", control: SWITCH, aliases: ["robux", "buy", "spend", "purchase", "premium", "money"] },
   { id: "publicNetworks", place: security, label: "settings.public", hint: "settings.publicShort", more: "settings.publicHint", field: "allowPublicNetworks", control: CUSTOM, aliases: ["wifi", "network", "cafe", "hotel"] },
 
   { id: "dataFolder", place: data, label: "settings.dataFolder", control: ACTION, aliases: ["folder", "path", "appdata", "logs", "move"] },
@@ -184,6 +184,11 @@ const SETTINGS_ENTRIES: readonly Entry[] = [
   { id: "browserData", place: data, label: "settings.browserData", hint: "settings.browserDataShort", more: "settings.browserDataHint", control: ACTION, aliases: ["captcha", "webview", "reset"] },
 
   { id: "selfUpdate", place: about, label: "settings.selfUpdate", more: "settings.selfUpdateHint", field: "selfUpdate", control: CUSTOM, aliases: ["update", "github", "version"] },
+  { id: "onlineCount", place: about, label: "settings.onlineCount", more: "settings.onlineCountHint", field: "onlineCount", control: SWITCH, aliases: ["online", "users", "counter", "telemetry", "privacy"] },
+  {
+    id: "rolimons", place: about, label: "settings.rolimons", hint: "settings.rolimonsShort", more: "settings.rolimonsHint", field: "rolimonsValues",
+    control: SWITCH, invalidates: ["values"], aliases: ["rolimons", "value", "rap", "limiteds", "trading", "privacy"],
+  },
   { id: "version", place: about, label: "settings.openReleases", hint: "settings.aboutShort", more: "settings.aboutHint", control: ACTION, aliases: ["version", "about", "changelog", "privacy"] },
   { id: "support", place: about, label: "app.joinDiscord", control: ACTION, aliases: ["donate", "robux", "community", "help"] },
 ];
@@ -197,6 +202,7 @@ const LINK_ENTRIES: readonly Entry[] = [
   { id: "acct.discordMuted", place: accounts, label: "accounts.detail.muteDiscord", hint: "accounts.detail.muteDiscordHint", control: LINK, aliases: ["alerts", "webhook"] },
   { id: "acct.launchArgs", place: accounts, label: "accounts.detail.launchArgs", control: LINK, aliases: ["args"] },
   { id: "acct.fpsCap", place: accounts, label: "accounts.detail.fpsCap", hint: "accounts.detail.fpsCapHint", control: LINK, aliases: ["fps"] },
+  { id: "acct.customFlags", place: accounts, label: "flags.title", hint: "flags.accountHint", control: LINK, aliases: ["fflags", "fastflags", "flags"] },
   { id: "launch.windowLayout", place: { view: "launch", link: true }, label: "launch.layout", hint: "launch.layoutHint", field: "windowLayout", control: LINK, aliases: ["tile", "fit", "tiny"] },
   { id: "launch.fpsCap", place: { view: "launch", link: true }, label: "launch.fpsCap", hint: "launch.fpsHint", control: LINK, aliases: ["fps"] },
   { id: "client.antiAfk", place: { view: "dashboard", link: true }, label: "launch.limits.antiAfkClient", control: LINK, aliases: ["afk"] },
@@ -211,7 +217,7 @@ const KEY_ENTRIES: readonly Entry[] = SHORTCUTS.map((s) => ({
   aliases: ["shortcut", "hotkey", s.combo.toLowerCase()],
 }));
 
-export const ENTRIES: readonly Entry[] = [...SETTINGS_ENTRIES, ...PERFORMANCE_ENTRIES, ...DISCORD_ENTRIES, ...MACROS_ENTRIES, ...LINK_ENTRIES, ...KEY_ENTRIES];
+export const ENTRIES: readonly Entry[] = [...SETTINGS_ENTRIES, ...PERFORMANCE_ENTRIES, ...DISCORD_ENTRIES, ...LINK_ENTRIES, ...KEY_ENTRIES];
 
 const BY_ID = new Map(ENTRIES.map((e) => [e.id, e]));
 const KIDS = new Map<string, Entry[]>();
@@ -238,4 +244,14 @@ if (import.meta.env.DEV) {
   if (BY_ID.size !== ENTRIES.length) console.warn("settings registry: two entries share an id");
   for (const e of ENTRIES)
     for (const ref of [e.parent, e.fallback]) if (ref && !BY_ID.has(ref)) console.warn(`settings registry: "${e.id}" points at "${ref}", which isn't an entry`);
+  // Here, not in areas.ts: the shell imports AREAS, and must not pull the registry in with it.
+  for (const a of AREAS)
+    for (const id of a.groups.flatMap((g) => g.ids)) {
+      const e = BY_ID.get(id);
+      if (e?.place.view !== "settings" || e.place.area !== a.id) console.warn(`settings: AREAS lists "${id}" in ${a.id}, but the registry ${e ? "places it elsewhere" : "has no such entry"}`);
+    }
+  // The other way: a row placed on a screen that doesn't draw it (one with a parent shows inside it).
+  const listed = new Set(AREAS.flatMap((a) => a.groups.flatMap((g) => g.ids)));
+  for (const e of ENTRIES)
+    if (e.place.view === "settings" && !e.parent && !listed.has(e.id)) console.warn(`settings: "${e.id}" is placed in ${e.place.area}, but AREAS doesn't list it`);
 }

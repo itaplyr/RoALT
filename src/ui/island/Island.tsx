@@ -16,12 +16,12 @@ let inflated = false;
  * opens in place as an inset pill (✕, then its children); picking a child folds it back and the
  * group's tile turns into the child. `live` capsules (launch progress, running clients) sit at the
  * end. One Tab stop: arrows move, Alt and the arrows reorder, Esc folds an open group. */
-export function Island({ model, live, inflate = true }: { model: IslandModel; live?: ReactNode; inflate?: boolean }) {
+export function Island({ model, live }: { model: IslandModel; live?: ReactNode }) {
   const [open, setOpen] = useState<string | null>(null);
   const nav = useRef<HTMLElement>(null);
   const row = useRef<HTMLDivElement>(null);
   const reduced = useReducedMotionFlag();
-  const [first] = useState(() => inflate && !inflated);
+  const [first] = useState(() => !inflated);
 
   // A new place on screen folds any open group, as does a press outside the island.
   const current = [...model.main, ...model.groups.flatMap((g) => g.children)].find((l) => l.current)?.id;

@@ -14,9 +14,10 @@
 //!    its server is read from its tracked instance (`Instance.job_id`, up to 90 s), else from
 //!    its own presence (its own cookie, `game_id`); the rest are sent there. Not found → the
 //!    rest launch with the target as given, with a note.
-//!    Spreading (`OwnPrivate`, `RandomPublic`, `Closest`): one page of the place's public
-//!    servers (`BestLatency` for `Closest`, else Recommended and shuffled), each with room for
-//!    one more and a spare seat (`spread_servers`). Each account, once before its launch, gets
+//!    Spreading (`OwnPrivate`, `RandomPublic`, `Closest`, `MostFull`, `MostEmpty`): one page of
+//!    the place's public servers (`BestLatency` for `Closest`, by player count for `MostFull` and
+//!    `MostEmpty`, else Recommended and shuffled), each with room for one more and a spare seat
+//!    (`spread_list`). Each account, once before its launch, gets
 //!    a private server it owns (`OwnPrivate`: its first page of private servers, its cookie),
 //!    else the next public server, else the target as given (with a note).
 //! 2. Per account: stage `Ticket`, then `commands::launch_tracked` (the favourite is touched
@@ -629,10 +630,14 @@ impl Run {
     async fn spread(&self, req: &BulkRequest) -> Option<Spread> {
         let (place_id, cookie) = self.resolve_place(req).await?;
         let s = self.app.state::<App>();
-        let closest = req.same_server == SameServer::Closest;
-        let order = if closest { ServerOrder::BestLatency } else { ServerOrder::Recommended };
+        let order = match req.same_server {
+            SameServer::Closest => ServerOrder::BestLatency,
+            SameServer::MostFull => ServerOrder::OccupancyDesc,
+            SameServer::MostEmpty => ServerOrder::OccupancyAsc,
+            _ => ServerOrder::Recommended,
+        };
         let public = match server_page(&s.api, self.accounts[0].id, &cookie, place_id, order).await {
-            Ok(list) => spread_servers(&list, !closest),
+            Ok(list) => spread_list(list, req.same_server),
             Err(e) => {
                 self.note(tr!("The server list couldn't be read ({why}), so accounts were matched by Roblox on their own.", why = e.message()));
                 VecDeque::new()
@@ -792,9 +797,19 @@ async fn pick_server(
     Ok(choose_server(&server_page(api, account_id, cookie, place_id, ServerOrder::Recommended).await?, n))
 }
 
+/// The emptiest public server with room for one more that isn't `current`: where a moved client
+/// hops to (`commands::instance_move`). Order-free, so a page in any order gives the same pick.
+pub fn smallest_other(servers: &[GameServer], current: &str) -> Option<String> {
+    servers
+        .iter()
+        .filter(|s| is_uuid(&s.id) && !s.id.eq_ignore_ascii_case(current) && s.playing >= 0 && s.playing < s.max_players)
+        .min_by_key(|s| s.playing)
+        .map(|s| s.id.clone())
+}
+
 /// One page of the place's servers in `order`, full ones left out; the fullest first if Roblox
 /// refuses `order` for this account.
-async fn server_page(
+pub(crate) async fn server_page(
     api: &crate::roblox_api::Client,
     account_id: i64,
     cookie: &Secret,
@@ -813,6 +828,18 @@ async fn server_page(
 struct Spread {
     place_id: i64,
     public: VecDeque<String>,
+}
+
+/// The public servers a spreading batch in `mode` hands out (pure): by player count for Most
+/// full and Most empty (also when Roblox refused that order and sent the fullest first), shuffled
+/// for Random and Own private, as listed for Closest.
+pub fn spread_list(mut servers: Vec<GameServer>, mode: SameServer) -> VecDeque<String> {
+    match mode {
+        SameServer::MostFull => servers.sort_by_key(|s| std::cmp::Reverse(s.playing)),
+        SameServer::MostEmpty => servers.sort_by_key(|s| s.playing),
+        _ => {}
+    }
+    spread_servers(&servers, matches!(mode, SameServer::RandomPublic | SameServer::OwnPrivate))
 }
 
 /// Public servers for a spreading batch, one per account: GUID ids with room for one more and a
@@ -1033,6 +1060,17 @@ mod tests {
     }
 
     #[test]
+    fn smallest_other_skips_the_current_and_full_ones() {
+        let (a, b, c, d) = (guid(1), guid(2), guid(3), guid(4));
+        // a is the current one (emptiest), b is full, "x" isn't a GUID: c (5) beats d (12).
+        let list = [server(&d, 12, 20), server(&a, 1, 20), server(&b, 20, 20), server("x", 0, 20), server(&c, 5, 20)];
+        assert_eq!(smallest_other(&list, &a), Some(c.clone()));
+        assert_eq!(smallest_other(&list, &a.to_uppercase()), Some(c), "job ids compare without case");
+        assert_eq!(smallest_other(&[server(&a, 1, 20), server(&b, 20, 20)], &a), None);
+        assert_eq!(smallest_other(&[], &a), None);
+    }
+
+    #[test]
     fn spread_servers_hands_out_each_server_with_room_once() {
         let (a, b, c, d) = (guid(1), guid(2), guid(3), guid(4));
         let list = [
@@ -1050,6 +1088,16 @@ mod tests {
         shuffled.sort();
         assert_eq!(shuffled, kept, "shuffled, the same servers");
         assert!(spread_servers(&[], true).is_empty());
+    }
+
+    #[test]
+    fn spread_list_orders_by_player_count() {
+        let (a, b, c, d) = (guid(1), guid(2), guid(3), guid(4));
+        // Out of order, as a refused sort's fallback page would be; d (19/20) has no spare seat.
+        let list = vec![server(&b, 10, 20), server(&a, 2, 20), server(&d, 19, 20), server(&c, 15, 20)];
+        assert_eq!(spread_list(list.clone(), SameServer::MostEmpty), [a.clone(), b.clone(), c.clone()]);
+        assert_eq!(spread_list(list.clone(), SameServer::MostFull), [c.clone(), b.clone(), a.clone()]);
+        assert_eq!(spread_list(list, SameServer::Closest), [b, a, c], "Closest keeps the list's order");
     }
 
     #[test]
@@ -1358,6 +1406,7 @@ mod tests {
             discord_muted: false,
             full_quality: false,
             main: false,
+            custom_flags: Default::default(),
             fps_cap: None,
 
         };

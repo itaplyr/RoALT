@@ -24,20 +24,6 @@ pub struct BackupPayload {
     pub groups: Vec<BackupGroup>,
     #[serde(default)]
     pub favourites: Vec<BackupFavourite>,
-    /// Absent in backups from before macros; restored ones start untrusted.
-    #[serde(default)]
-    pub macros: Vec<BackupMacro>,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BackupMacro {
-    pub name: String,
-    pub body: String,
-    #[serde(default)]
-    pub hotkey: String,
-    #[serde(default)]
-    pub run_on_launch: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -76,6 +62,9 @@ pub struct BackupAccount {
     pub full_quality: bool,
     #[serde(default)]
     pub main: bool,
+    // Absent in backups from before custom FFlags: the account's own flags stay then.
+    #[serde(default)]
+    pub custom_flags: Option<std::collections::BTreeMap<String, String>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -183,7 +172,6 @@ mod tests {
     fn sample() -> BackupPayload {
         BackupPayload {
             favourites: Vec::new(),
-            macros: vec![BackupMacro { name: "Farm".into(), body: "Send 'w'\n".into(), hotkey: "Ctrl+F1".into(), run_on_launch: true }],
             version: 1,
             exported_at: 1_700_000_000,
             accounts: vec![BackupAccount {
@@ -203,9 +191,18 @@ mod tests {
                 fps_cap: Some(30),
                 full_quality: true,
                 main: true,
+                custom_flags: Some([("FFlagDebugSkyGray".into(), "True".into())].into()),
             }],
             groups: vec![BackupGroup { name: "Mains".into(), color: None, sort_order: 0 }],
         }
+    }
+
+    #[test]
+    fn older_backups_have_no_custom_flags() {
+        let mut v = serde_json::to_value(&sample().accounts[0]).unwrap();
+        v.as_object_mut().unwrap().remove("customFlags");
+        let a: BackupAccount = serde_json::from_value(v).unwrap();
+        assert!(a.custom_flags.is_none(), "None keeps the account's own flags on import");
     }
 
     #[test]
@@ -222,18 +219,15 @@ mod tests {
         assert_eq!((back.version, back.exported_at), (1, 1_700_000_000));
         assert_eq!(back.accounts[0].cookie.as_str(), "fake-cookie");
         assert_eq!(back.accounts[0].groups, ["Mains"]);
+        assert_eq!(back.accounts[0].custom_flags.as_ref().unwrap()["FFlagDebugSkyGray"], "True");
         assert_eq!(back.groups[0].name, "Mains");
-        let m = &back.macros[0];
-        assert_eq!((m.name.as_str(), m.body.as_str(), m.hotkey.as_str(), m.run_on_launch), ("Farm", "Send 'w'\n", "Ctrl+F1", true));
         assert!(matches!(wrong, Err(AppError::WrongPassword)));
     }
 
     #[test]
-    fn a_backup_from_before_macros_still_reads() {
-        let old: BackupPayload = serde_json::from_str(r#"{"version":1,"exportedAt":5,"accounts":[],"groups":[],"favourites":[]}"#).unwrap();
-        assert!(old.macros.is_empty());
-        let m: BackupMacro = serde_json::from_str(r#"{"name":"x","body":""}"#).unwrap();
-        assert!(m.hotkey.is_empty() && !m.run_on_launch);
+    fn a_backup_with_the_removed_macros_still_reads() {
+        let old: BackupPayload = serde_json::from_str(r#"{"version":1,"exportedAt":5,"accounts":[],"groups":[],"favourites":[],"macros":[{"name":"x","body":"Send 'w'"}]}"#).unwrap();
+        assert_eq!(old.exported_at, 5);
     }
 
     #[test]

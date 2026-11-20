@@ -1,6 +1,7 @@
 // TanStack Query wiring: one cache, keys, and the hooks the views share.
+import { useCallback } from "react";
 import { MutationCache, QueryClient, queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type AccountPatch, type AccountPresence, type AccountSummary, type Group, type Settings, type SettingsPatch } from "./api";
+import { api, type AccountPatch, type AccountPresence, type AccountSummary, type Group, type Headshot, type Settings, type SettingsPatch } from "./api";
 import { toastError } from "./ui/Toast";
 import { t } from "./i18n";
 
@@ -24,6 +25,12 @@ export const qk = {
   discord: ["discord"],
   bulk: ["bulk"],
   game: (placeId: number | null) => ["game", placeId],
+  gameStats: (universeId: number) => ["gameStats", universeId],
+  player: (userId: number) => ["player", userId],
+  // By viewer too: who may see an inventory depends on who asks (a friend may).
+  playerValue: (accountId: number, userId: number) => ["playerValue", accountId, userId],
+  values: ["value"],
+  value: (id: number) => ["value", id],
   servers: ["servers"],
   privateServers: ["privateServers"],
   client: ["client"],
@@ -32,10 +39,8 @@ export const qk = {
   shutdown: ["shutdown"],
   background: ["background"],
   network: ["network"],
-  ahk: ["ahk"],
-  macros: ["macros"],
-  macroRuns: ["macroRuns"],
   news: ["news"],
+  online: ["online"],
 } as const;
 
 export const queryClient = new QueryClient({
@@ -88,12 +93,13 @@ export function publicBlock(network: { public: boolean } | undefined, settings: 
   return t("app.publicBlocked");
 }
 
-export const useMacros = () => useQuery({ queryKey: qk.macros, queryFn: api.macrosList });
-/** What runs now; macros://runs replaces it. */
-export const useMacroRuns = () => useQuery({ queryKey: qk.macroRuns, queryFn: api.macroRuns });
-
 /** Home's News: fetched at start, then every 30 minutes while RoALT runs. */
 export const useNews = () => useQuery({ queryKey: qk.news, queryFn: api.news, staleTime: 30 * 60_000, refetchInterval: 30 * 60_000 });
+
+/** How many people use RoALT now, and their accounts playing: pinged every 2 minutes while `enabled` (Settings' onlineCount),
+ * also hidden or in the tray, since the ping is what counts this run. */
+export const useOnline = (enabled: boolean) =>
+  useQuery({ queryKey: qk.online, queryFn: api.onlinePing, enabled, staleTime: 2 * 60_000, refetchInterval: 2 * 60_000, refetchIntervalInBackground: true });
 
 /** The Roblox client and its versions; roblox://client replaces it. */
 export const useRobloxClient = () => useQuery({ queryKey: qk.client, queryFn: api.robloxClient });
@@ -110,8 +116,24 @@ export const useBulk = () =>
 
 const headshots = queryOptions({ queryKey: qk.headshots, queryFn: () => api.accountsHeadshots(), staleTime: 6 * 3_600_000 });
 /** One shared query; each avatar picks its own URL out of it. */
+// A stable select: react-query reuses its result on re-render, so the find runs only when the list changes.
 export const useHeadshot = (accountId: number) =>
-  useQuery({ ...headshots, select: (list) => list.find((h) => h.accountId === accountId)?.url }).data;
+  useQuery({ ...headshots, select: useCallback((list: Headshot[]) => list.find((h) => h.accountId === accountId)?.url, [accountId]) }).data;
+
+// The one object URL for the picture (window and Settings thumbnail); a new picture revokes the old one.
+let bgUrl: string | null = null;
+/** The background picture as an object URL, null without one; invalidating qk.background reloads it. */
+export const useBackgroundUrl = (enabled = true) =>
+  useQuery({
+    queryKey: qk.background,
+    enabled,
+    queryFn: async () => {
+      const bytes = await api.backgroundGet();
+      if (bgUrl) URL.revokeObjectURL(bgUrl);
+      bgUrl = bytes.byteLength ? URL.createObjectURL(new Blob([bytes])) : null;
+      return bgUrl;
+    },
+  }).data ?? null;
 
 const byAccount = (list: AccountPresence[]) => new Map(list.map((p) => [p.accountId, p.presence]));
 /** Presence of the given (on-screen, valid) accounts, polled once a minute while a caller is
@@ -139,14 +161,21 @@ export const useAccountInfo = (id: number) =>
     refetchIntervalInBackground: false,
   });
 
+/** An account's limiteds as last counted (null: never). Reading never asks Roblox; a count is a
+ * mutation (`api.accountValue(id, true)`) that puts its answer here. */
+export const accountValueQuery = (id: number) => queryOptions({ queryKey: qk.value(id), queryFn: () => api.accountValue(id) });
+export const useAccountValue = (id: number) => useQuery(accountValueQuery(id));
+
 export function setAccounts(qc: ReturnType<typeof useQueryClient>, f: (list: AccountSummary[]) => AccountSummary[]) {
   qc.setQueryData<AccountSummary[]>(qk.accounts, (old) => (old ? f(old) : old));
 }
 
 /** Optimistic account edit; the server's copy replaces it on success. */
-export function useUpdateAccount() {
+/** `quiet`: the caller shows a failure itself, so it doesn't toast. */
+export function useUpdateAccount(opts: { quiet?: boolean } = {}) {
   const qc = useQueryClient();
   return useMutation({
+    meta: opts.quiet ? { quiet: true } : undefined,
     mutationFn: ({ id, patch }: { id: number; patch: AccountPatch }) => api.accountUpdate(id, patch),
     onMutate: ({ id, patch }) =>
       setAccounts(qc, (list) =>
@@ -190,4 +219,4 @@ export function useSaveGroup() {
   });
 }
 
-export const groupColor = (g: Group) => g.color ?? "var(--grey)";
+export const groupColor = (g: Group) => g.color ?? "var(--fg-3)";

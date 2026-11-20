@@ -3,6 +3,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 #[cfg(windows)]
 use tauri::{WebviewUrl, WebviewWindowBuilder};
@@ -13,7 +14,7 @@ use crate::model::*;
 use crate::storage::{AccountMeta, NewAccount};
 use crate::vault::backup::{self, BackupAccount, BackupGroup, BackupPayload};
 use crate::vault::{Secret, cookie_aad};
-use crate::roblox_api::types::{AuthenticatedUser, GameDetails, UserPresence};
+use crate::roblox_api::types::{AuthenticatedUser, GameDetails, Holding, UserPresence};
 use crate::{App, webview};
 
 pub fn now_ms() -> i64 {
@@ -26,7 +27,9 @@ fn accounts_changed(app: &AppHandle) {
 
 // ---------- vault ----------
 
-#[tauri::command]
+// The lists the UI reads on every refresh are async (here and below): a sync command runs on the main
+// thread, and one waiting on the DB lock (a backup, a tracker write) would freeze the window.
+#[tauri::command(async)]
 pub fn vault_status(s: State<'_, App>) -> Result<VaultStatus> {
     Ok(VaultStatus {
         mode: s.vault.mode(),
@@ -142,7 +145,7 @@ pub fn app_activity(s: State<'_, App>) {
 
 // ---------- accounts ----------
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn accounts_list(s: State<'_, App>) -> Result<Vec<AccountSummary>> {
     s.db.accounts()
 }
@@ -184,13 +187,40 @@ pub async fn account_add_cookie(app: AppHandle, s: State<'_, App>, cookie: Strin
     add_account(&app, &s, normalize_cookie(&cookie)?).await
 }
 
+/// Signs in through Roblox's own page. `username` and `password` (a bulk import's `user:pass`
+/// line, both or neither) are filled in for the user, who still presses Log In; never stored.
 #[tauri::command]
-pub async fn account_add_login(app: AppHandle, s: State<'_, App>) -> Result<AccountSummary> {
+pub async fn account_add_login(app: AppHandle, s: State<'_, App>, username: Option<String>, password: Option<String>) -> Result<AccountSummary> {
     if s.vault.is_locked() {
         return Err(AppError::Locked);
     }
-    let cookie = webview::capture_login(&app, &s.data_dir).await?;
+    let fill = match (username, password.map(Secret::new)) {
+        (None, None) => None,
+        (Some(username), Some(password)) => Some(login_fill(username, password)?),
+        _ => return Err(AppError::Invalid(tr!("Give both a username and a password, or neither."))),
+    };
+    let cookie = webview::capture_login(&app, &s.data_dir, fill.as_ref()).await?;
     add_account(&app, &s, cookie).await
+}
+
+/// What a `user:pass` line may fill in: a username, email or phone (1-254 characters, no spaces)
+/// and a password of 1-256 characters.
+fn login_fill(username: String, password: Secret) -> Result<webview::LoginFill> {
+    let name = username.trim();
+    if name.is_empty() || name.chars().count() > 254 || name.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(AppError::Invalid(tr!("That isn't a Roblox username: use 1 to 254 characters without spaces.")));
+    }
+    let len = password.expose().chars().count();
+    if len == 0 || len > 256 {
+        return Err(AppError::Invalid(tr!("The password must be 1 to 256 characters.")));
+    }
+    Ok(webview::LoginFill { username: name.to_owned(), password })
+}
+
+/// Closes the open Roblox sign-in window (a bulk import's Stop); its sign-in ends cancelled.
+#[tauri::command]
+pub fn account_login_cancel(app: AppHandle) {
+    webview::close_login(&app);
 }
 
 /// The start of every .ROBLOSECURITY value.
@@ -376,6 +406,9 @@ pub fn account_update(app: AppHandle, s: State<'_, App>, id: i64, patch: Account
     if let Some(f) = patch.fps_cap {
         check_fps(f)?;
     }
+    if let Some(f) = &patch.custom_flags {
+        crate::launcher::flags::check(f)?;
+    }
     s.db.update_account(id, &patch)?;
     accounts_changed(&app);
     s.db.account(id)
@@ -396,13 +429,14 @@ pub fn accounts_remove(app: AppHandle, s: State<'_, App>, ids: Vec<i64>) -> Resu
     not_too_many(&ids)?;
     s.db.remove_accounts(&ids)?;
     accounts_changed(&app);
-    // An open session window holds its profile: close it, and remove off this thread (waits and
-    // retries for seconds).
+    // Linux: a session window holds its profile; ask it to close so removal can wait for it.
+    #[cfg(not(windows))]
     for id in &ids {
         if let Some(w) = app.get_webview_window(&format!("session-{id}")) {
             let _ = w.close();
         }
     }
+    // Off this thread: Browse, open as one of them, closes first, and removal retries for seconds.
     let dir = s.data_dir.clone();
     std::thread::spawn(move || ids.into_iter().for_each(|id| webview::remove_account_profile(&app, &dir, id)));
     Ok(())
@@ -945,48 +979,34 @@ mod befriend_tests {
     }
 }
 
-/// Opens roblox.com signed in as the account, in its own kept browser profile (so a captcha
-/// solved there stays solved; the cookie itself is not left in it).
-/// When the window closes, the cookie it ended with is checked: if it still signs in as the
-/// same user it is kept (Roblox may have rotated it, or the user signed in again or solved a
-/// challenge there) and the account is marked valid; a sign-out or account switch there is
-/// logged and the stored cookie left as it was.
-#[tauri::command]
-pub async fn account_open_session(app: AppHandle, s: State<'_, App>, id: i64) -> Result<()> {
-    let a = s.db.account(id)?;
-    let cookie = stored_cookie(&s, id)?;
-    let name = if a.alias.is_empty() { a.display_name.clone() } else { a.alias.clone() };
-    let title = format!("{name} (@{}) — Roblox — RoALT", a.username);
-    let (user_id, handle) = (a.user_id, app.clone());
-    webview::open_session(&app, &s.data_dir, id, &title, cookie, move |last| {
-        let Some(last) = last else { return };
-        // Runs on a blocking thread before the window is destroyed: finish before the app
-        // can exit (closing the last window ends it).
-        tauri::async_runtime::block_on(async move {
-            let s = handle.state::<App>();
-            // The row may have been removed (and its id reused) while the window was open.
-            match s.db.account(id) {
-                Ok(a) if a.user_id == user_id => {}
-                Ok(_) | Err(AppError::NotFound) => return,
-                Err(e) => {
-                    log::debug!("session window for account {id}: could not read the account: {e}");
-                    return;
+/// Blocking (never on an async thread): keeps `last`, the cookie a Browse page ended with, when it
+/// still signs in as `user_id` (Roblox may have rotated it, or the user signed in again or solved
+/// a challenge there) and marks the account valid; a sign-out or account switch there is logged
+/// and the stored cookie left as it was.
+pub(crate) fn keep_session_cookie(app: &AppHandle, id: i64, user_id: i64, last: Secret) {
+    tauri::async_runtime::block_on(async move {
+        let s = app.state::<App>();
+        // The row may have been removed (and its id reused) while Browse was open.
+        match s.db.account(id) {
+            Ok(a) if a.user_id == user_id => {}
+            Ok(_) | Err(AppError::NotFound) => return,
+            Err(e) => {
+                log::debug!("Browse for account {id}: could not read the account: {e}");
+                return;
+            }
+        }
+        match s.api.authenticated_user(0, &last).await {
+            Ok((u, rotated)) if u.id == user_id => {
+                s.store_rotated(id, rotated.unwrap_or(last));
+                if let Err(e) = s.db.set_status(id, AccountStatus::Valid, now_ms(), Some(&u.name), Some(&u.display_name)) {
+                    log::warn!("could not mark account {id} valid after Browse: {e}");
                 }
             }
-            match s.api.authenticated_user(0, &last).await {
-                Ok((u, rotated)) if u.id == user_id => {
-                    s.store_rotated(id, rotated.unwrap_or(last));
-                    if let Err(e) = s.db.set_status(id, AccountStatus::Valid, now_ms(), Some(&u.name), Some(&u.display_name)) {
-                        log::warn!("could not mark account {id} valid after its session window: {e}");
-                    }
-                }
-                Ok(_) => log::warn!("session window for account {id} ended signed in as another user; cookie not changed"),
-                Err(e) => log::warn!("session window for account {id} ended with an unusable cookie ({e}); cookie not changed"),
-            }
-            accounts_changed(&handle);
-        });
-    })
-    .await
+            Ok(_) => log::warn!("Browse for account {id} ended signed in as another user; cookie not changed"),
+            Err(e) => log::warn!("Browse for account {id} ended with an unusable cookie ({e}); cookie not changed"),
+        }
+        accounts_changed(app);
+    });
 }
 
 // ---------- launching ----------
@@ -1029,6 +1049,57 @@ pub async fn launch(
 /// Why launches are refused while `roblox_install` runs.
 pub(crate) fn installing() -> String {
     tr!("Roblox is being installed. Launch again once it is done.")
+}
+
+/// Whether the launcher a launch would use is Mocktail now (`launcher::client::find`, the same
+/// choice `launcher::launch` makes). Windows has no Mocktail backend.
+#[cfg(not(windows))]
+fn mocktail_choice() -> bool {
+    crate::launcher::client::find()
+        .is_ok_and(|exe| exe.kind == crate::launcher::client::LauncherKind::Mocktail)
+}
+
+#[cfg(windows)]
+fn mocktail_choice() -> bool {
+    false
+}
+
+/// `mocktail_choice` for the status surface. `find` logs and stats launchers, and the UI asks for
+/// the multi-instance status every few seconds, so the reported choice is settled once per run; a
+/// launch asks `mocktail_choice` again, so one installed mid-run still counts there.
+#[cfg(not(windows))]
+fn mocktail_selected() -> bool {
+    static SELECTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SELECTED.get_or_init(mocktail_choice)
+}
+
+#[cfg(windows)]
+fn mocktail_selected() -> bool {
+    false
+}
+
+/// Whether a Mocktail client is running now (`instances::process::mocktail_running`, which reads
+/// the same `/proc` view the launch backend refuses on). Windows has no Mocktail backend.
+#[cfg(not(windows))]
+fn mocktail_client_running() -> bool {
+    crate::instances::process::mocktail_running()
+}
+
+#[cfg(windows)]
+fn mocktail_client_running() -> bool {
+    false
+}
+
+/// Mocktail runs one Roblox client at a time unless the user has enabled multi-instance: with it
+/// on, every launch gets its own copied launcher and isolated engine-data root. Refused before
+/// the launch cooldown, so a launch that can't happen doesn't hold a slot.
+pub(crate) fn mocktail_launch_guard(multi_instance: bool) -> Result<()> {
+    if !multi_instance && mocktail_choice() && mocktail_client_running() {
+        return Err(AppError::Invalid(tr!(
+            "Mocktail supports one Roblox client at a time. Close the running client first."
+        )));
+    }
+    Ok(())
 }
 
 /// One launch as every caller does it: the launch cooldown (`Bulk::cooldown`: waits until the
@@ -1079,6 +1150,9 @@ pub(crate) async fn launch_tracked(
         crate::launcher::update::publish(app);
     }
     let v = s.db.settings()?;
+    // Mocktail replaces the client it already has instead of starting a second one: refuse now,
+    // before the launch gap is waited out. Multi-instance switches to per-account copies.
+    mocktail_launch_guard(v.multi_instance)?;
     let gap = s.bulk.launch_gap(delay_ms.unwrap_or(v.launch_delay_ms), Instant::now());
     let (wait, slot) = s.bulk.cooldown(gap);
     if !wait.is_zero() {
@@ -1167,6 +1241,17 @@ pub fn self_update_status(s: State<'_, App>) -> AppUpdate {
 #[tauri::command]
 pub async fn news() -> crate::model::News {
     crate::news::fetch().await
+}
+
+/// Pings RoALT's online counter and returns how many people use RoALT now and how many accounts
+/// they're playing (`online`). None, and nothing sent, while `settings.online_count` is off or the
+/// settings can't be read.
+#[tauri::command]
+pub async fn online_ping(s: State<'_, App>) -> Result<Option<crate::online::Online>> {
+    if !s.db.settings().is_ok_and(|v| v.online_count) {
+        return Ok(None);
+    }
+    Ok(crate::online::ping(s.tracker.clients().len()).await)
 }
 
 /// Asks GitHub for a newer RoALT now (Check now), whatever `settings.self_update` says.
@@ -1471,6 +1556,10 @@ pub async fn data_dir_move(app: AppHandle, s: State<'_, App>, path: String) -> R
     }
     // In the copy: the exit handler still writes, but to the old database, the next start deletes.
     s.tracker.persist(&s.db, true);
+    let now = now_ms();
+    if let Err(e) = s.db.add_playtime(&s.tracker.take_playtime(now, true), now) {
+        log::warn!("could not record playtime before the move: {e}");
+    }
     let location = crate::Location { data_dir: target.clone(), moved_from: Some(s.data_dir.clone()) };
     let failed = s.db.copy_to(&target.join(crate::DB_FILE), || crate::write_location(&location).map_err(AppError::from));
     if failed.is_ok() {
@@ -1549,6 +1638,323 @@ pub async fn game_info(s: State<'_, App>, place_id: i64) -> Result<GameInfo> {
         s.db.cache_put(&key, &json, now_ms())?;
     }
     Ok(info)
+}
+
+/// Roblox's Charts lists with their games' icons, for Browse's Popular. Cached for
+/// `settings.cache_minutes` (key `popular`). No cookie.
+#[tauri::command]
+pub async fn games_popular(s: State<'_, App>) -> Result<Vec<GameSort>> {
+    const KEY: &str = "popular";
+    // One per run, as the website keeps one per visit.
+    static SESSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let ttl = s.db.settings()?.cache_minutes as i64 * 60_000;
+    if let Some((json, _)) = s.db.cache_get(KEY, ttl, now_ms())?
+        && let Ok(sorts) = serde_json::from_str::<Vec<GameSort>>(&json).inspect_err(|e| log::debug!("cached popular games unreadable: {e}"))
+    {
+        return Ok(sorts);
+    }
+    let mut sorts = s.api.popular_games(SESSION.get_or_init(|| uuid::Uuid::new_v4().to_string())).await?;
+    let mut ids: Vec<i64> = sorts.iter().flat_map(|s| s.games.iter().map(|g| g.universe_id)).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    // Icons are a nicety: the lists show without them.
+    let (icons, complete) = s.api.game_icons(&ids).await;
+    for g in sorts.iter_mut().flat_map(|s| s.games.iter_mut()) {
+        g.icon_url = icons.get(&g.universe_id).cloned();
+    }
+    // Only a full answer is kept: without lists or some icons, the next visit asks again (as `game_info`).
+    if !sorts.is_empty() && complete {
+        let json = serde_json::to_string(&sorts).map_err(|e| AppError::Internal(e.to_string()))?;
+        s.db.cache_put(KEY, &json, now_ms())?;
+    }
+    Ok(sorts)
+}
+
+/// A game's details panel: its numbers, votes, passes and badges. Cached for
+/// `settings.cache_minutes` (key `gamestats:<universe_id>`), only when every part answered. No
+/// cookie. `NotFound` when Roblox knows no such game.
+#[tauri::command]
+pub async fn game_stats(s: State<'_, App>, universe_id: i64) -> Result<GameStats> {
+    let key = format!("gamestats:{universe_id}");
+    let ttl = s.db.settings()?.cache_minutes as i64 * 60_000;
+    if let Some((json, _)) = s.db.cache_get(&key, ttl, now_ms())?
+        && let Ok(stats) = serde_json::from_str::<GameStats>(&json).inspect_err(|e| log::debug!("cached game stats {universe_id} unreadable: {e}"))
+    {
+        return Ok(stats);
+    }
+    let one = [universe_id];
+    let (game, votes, passes, badges, age, archived, places) = tokio::join!(
+        s.api.games(&one),
+        s.api.game_votes(universe_id),
+        s.api.game_passes(universe_id),
+        s.api.game_badges(universe_id),
+        s.api.age_rating(universe_id),
+        s.api.universe_archived(universe_id),
+        s.api.universe_places(universe_id)
+    );
+    let g = game?.into_iter().find(|g| g.universe_id == universe_id).ok_or(AppError::NotFound)?;
+    let part = |what: &str, e: &AppError| log::info!("game {universe_id}: {what} not loaded: {e}");
+    let votes = votes.inspect_err(|e| part("votes", e)).ok();
+    let passes = passes.inspect_err(|e| part("passes", e)).ok();
+    let badges = badges.inspect_err(|e| part("badges", e)).ok();
+    let age = age.inspect_err(|e| part("age rating", e)).ok();
+    // After the game row: only it says which group made it (7 calls a minute, hence the cache).
+    let group_members = match g.group_id {
+        // Not waited for long: past its 7 a minute the window would hold the whole panel back.
+        Some(id) => match tokio::time::timeout(std::time::Duration::from_secs(3), s.api.group_members(id)).await {
+            Ok(r) => r.inspect_err(|e| part("group", e)).ok().flatten(),
+            Err(_) => None,
+        },
+        None => None,
+    };
+    let complete = votes.as_ref().is_some_and(Option::is_some)
+        && passes.as_ref().is_some_and(|l| l.complete)
+        && badges.as_ref().is_some_and(|l| l.complete)
+        && age.is_some();
+    let votes = votes.flatten();
+    let stats = GameStats {
+        universe_id,
+        playing: g.playing,
+        visits: g.visits,
+        favourites: g.favourites,
+        max_players: g.max_players,
+        created: g.created,
+        updated: g.updated,
+        genre: g.genre,
+        subgenre: g.subgenre,
+        up_votes: votes.map(|v| v.0),
+        down_votes: votes.map(|v| v.1),
+        more_passes: passes.as_ref().is_some_and(|l| l.more),
+        more_badges: badges.as_ref().is_some_and(|l| l.more),
+        passes: passes.map(|l| l.items),
+        badges: badges.map(|l| l.items),
+        age_rating: age.flatten(),
+        avatar_type: g.avatar_type,
+        copying: g.copying,
+        places: places.inspect_err(|e| part("places", e)).ok().filter(|l| !l.more).map(|l| l.items.len() as i64),
+        servers: servers_estimate(g.playing, g.max_players),
+        group_members,
+        archived: archived.inspect_err(|e| part("universe", e)).ok().flatten(),
+    };
+    // A part missing or cut short is asked for again next time (as `games_popular`).
+    if complete {
+        let json = serde_json::to_string(&stats).map_err(|e| AppError::Internal(e.to_string()))?;
+        s.db.cache_put(&key, &json, now_ms())?;
+    }
+    Ok(stats)
+}
+
+/// About how many servers `playing` players fill (rounded up); None when the size is unknown.
+fn servers_estimate(playing: i64, max_players: i32) -> Option<i64> {
+    let size = i64::from(max_players);
+    (size > 0).then(|| (playing.max(0) + size - 1) / size)
+}
+
+/// A player's profile for Browse's player details: who they are, their friends and followers,
+/// groups, Roblox badges and games (no cookie; cached `player:<user_id>` for
+/// `settings.cache_minutes`, only when every part answered), and where they are now, asked each
+/// time as `account_id` (the Browse account: Roblox tells a friend more).
+#[tauri::command]
+pub async fn player_stats(s: State<'_, App>, account_id: i64, user_id: i64) -> Result<PlayerStats> {
+    if user_id <= 0 {
+        return Err(AppError::NotFound);
+    }
+    let cookie = stored_cookie(&s, account_id).inspect_err(|e| log::debug!("player {user_id}: no cookie for presence: {e}")).ok();
+    let presence = async {
+        let c = cookie.as_ref()?;
+        let p = s.api.presence(account_id, c, &[user_id]).await.inspect_err(|e| log::debug!("player {user_id}: presence not loaded: {e}")).ok()?;
+        p.into_iter().find(|p| p.user_id == user_id).map(|p| PlayerPresence {
+            kind: p.user_presence_type,
+            place: p.last_location.filter(|l| p.user_presence_type == 2 && !l.is_empty()),
+        })
+    };
+    let key = format!("player:{user_id}");
+    let ttl = s.db.settings()?.cache_minutes as i64 * 60_000;
+    if let Some((json, _)) = s.db.cache_get(&key, ttl, now_ms())?
+        && let Ok(mut stats) = serde_json::from_str::<PlayerStats>(&json).inspect_err(|e| log::debug!("cached player {user_id} unreadable: {e}"))
+    {
+        stats.presence = presence.await;
+        return Ok(stats);
+    }
+    let one = [user_id];
+    let (user, counts, groups, badges, games, headshot, presence) = tokio::join!(
+        // Anonymous: a profile is public, and the Browse account's cookie may be dead.
+        s.api.user_details(0, None, user_id),
+        s.api.social_counts(user_id),
+        s.api.user_groups(user_id),
+        s.api.roblox_badges(user_id),
+        s.api.user_games(user_id),
+        s.api.headshots(&one),
+        presence
+    );
+    let u = user?;
+    let part = |what: &str, e: &AppError| log::info!("player {user_id}: {what} not loaded: {e}");
+    let counts = counts.inspect_err(|e| part("counts", e)).ok();
+    let groups = groups.inspect_err(|e| part("groups", e)).ok();
+    let badges = badges.inspect_err(|e| part("badges", e)).ok();
+    let games = games.inspect_err(|e| part("games", e)).ok();
+    let headshot_url = headshot.inspect_err(|e| part("headshot", e)).ok().and_then(|mut h| h.remove(&user_id));
+    let complete = counts.is_some() && groups.is_some() && badges.is_some() && games.as_ref().is_some_and(|l| l.complete);
+    let mut stats = PlayerStats {
+        user_id,
+        name: u.name,
+        display_name: u.display_name,
+        verified: u.has_verified_badge,
+        banned: u.is_banned,
+        created: u.created,
+        headshot_url,
+        friends: counts.map(|c| c.friends),
+        followers: counts.map(|c| c.followers),
+        following: counts.map(|c| c.following),
+        presence: None,
+        groups,
+        badges,
+        more_games: games.as_ref().is_some_and(|l| l.more),
+        games: games.map(|l| l.items),
+    };
+    if complete {
+        let json = serde_json::to_string(&stats).map_err(|e| AppError::Internal(e.to_string()))?;
+        s.db.cache_put(&key, &json, now_ms())?;
+    }
+    stats.presence = presence;
+    Ok(stats)
+}
+
+/// A player's limiteds for Browse's player details, read as `account_id` (the Browse account):
+/// the count kept from less than `settings.cache_minutes` ago, else (or with `refresh`) a new one,
+/// as `account_value` counts (same key `value:<user_id>`: one of your own accounts shares it).
+/// A hidden inventory is `private`, and nothing is kept.
+#[tauri::command]
+pub async fn player_value(app: AppHandle, s: State<'_, App>, account_id: i64, user_id: i64, refresh: bool) -> Result<PlayerValue> {
+    if user_id <= 0 {
+        return Err(AppError::NotFound);
+    }
+    let ttl = s.db.settings()?.cache_minutes as i64 * 60_000;
+    let fresh = if refresh { None } else { kept_holdings(&s, user_id, ttl)? };
+    let counted = fresh.is_none();
+    let held = match fresh {
+        Some(h) => h,
+        None => {
+            let cookie = stored_cookie(&s, account_id)?;
+            // Opening a profile never queues behind another count (Count again does).
+            match count_limiteds(&s, account_id, &cookie, user_id, refresh, || true).await {
+                Ok(Some(h)) => h,
+                Ok(None) => match kept_holdings(&s, user_id, i64::MAX / 2)? {
+                    Some(h) => h,
+                    None => return Ok(PlayerValue { private: false, busy: true, value: None }),
+                },
+                Err(e) if crate::roblox_api::is_private_inventory(&e) => return Ok(PlayerValue { private: true, busy: false, value: None }),
+                Err(e) => {
+                    record_cookie_error(&app, &s, account_id, &e)?;
+                    return Err(e);
+                }
+            }
+        }
+    };
+    let rolimons = if s.db.settings()?.rolimons_values { crate::rolimons::items(&s.db, now_ms(), counted).await } else { None };
+    Ok(PlayerValue { private: false, busy: false, value: Some(value_of(&held, rolimons.as_deref())) })
+}
+
+/// What `account_value` keeps per account (key `value:<user_id>`): what it holds, not what it's
+/// worth, so Rolimons values come and go with their setting without a recount.
+#[derive(Serialize, Deserialize)]
+struct Holdings {
+    fetched_at: i64,
+    /// Stopped at the page cap: more copies than were read.
+    partial: bool,
+    items: Vec<Holding>,
+}
+
+/// One count at a time, whichever view starts it: Roblox throttles inventory hard.
+static COUNTING: std::sync::LazyLock<tokio::sync::Mutex<()>> = std::sync::LazyLock::new(Default::default);
+
+/// The count kept for `user_id`, if younger than `max_age` ms.
+fn kept_holdings(s: &App, user_id: i64, max_age: i64) -> Result<Option<Holdings>> {
+    let Some((json, _)) = s.db.cache_get(&format!("value:{user_id}"), max_age, now_ms())? else { return Ok(None) };
+    Ok(serde_json::from_str(&json).inspect_err(|e| log::debug!("kept limiteds of user {user_id} unreadable: {e}")).ok())
+}
+
+/// Counts `user_id`'s limiteds now as `account_id` (its cookie; one count at a time: `wait` for
+/// one running, else None). One cut short by Roblox gives way to the count kept before it; else
+/// the new one is kept when `keep()` still says so (a cut-short one too, when it's all there is:
+/// marked partial).
+async fn count_limiteds(s: &App, account_id: i64, cookie: &Secret, user_id: i64, wait: bool, keep: impl Fn() -> bool) -> Result<Option<Holdings>> {
+    let _one = if wait {
+        COUNTING.lock().await
+    } else {
+        match COUNTING.try_lock() {
+            Ok(g) => g,
+            Err(_) => return Ok(None),
+        }
+    };
+    let list = s.api.collectibles(account_id, cookie, user_id).await?;
+    if !list.complete
+        && let Some(old) = kept_holdings(s, user_id, i64::MAX / 2)?
+    {
+        log::info!("user {user_id}: count cut short, the last one stays");
+        return Ok(Some(old));
+    }
+    let held = Holdings { fetched_at: now_ms(), partial: list.more, items: list.items };
+    if keep() {
+        let json = serde_json::to_string(&held).map_err(|e| AppError::Internal(e.to_string()))?;
+        s.db.cache_put(&format!("value:{user_id}"), &json, held.fetched_at)?;
+    }
+    Ok(Some(held))
+}
+
+/// The account's limiteds as last counted (None: never), or, with `refresh`, counted now: its
+/// whole inventory read with its own cookie, a page a second (`Client::collectibles`), one count
+/// at a time. One cut short by Roblox gives way to the count kept before it (its own `fetched_at`
+/// says it's older), or, with none, is kept and shown as partial. With `settings.rolimons_values` on, Rolimons' values are added (their list is
+/// downloaded only by a count). Without `refresh` nothing is sent anywhere.
+#[tauri::command]
+pub async fn account_value(app: AppHandle, s: State<'_, App>, id: i64, refresh: bool) -> Result<Option<AccountValue>> {
+    let a = s.db.account(id)?;
+    let held = if refresh {
+        let cookie = stored_cookie(&s, id)?;
+        // Not kept if the account was removed while it was counted: nothing of it comes back.
+        let still_here = || s.db.account(id).is_ok_and(|now| now.user_id == a.user_id);
+        match count_limiteds(&s, id, &cookie, a.user_id, true, still_here).await {
+            Ok(Some(h)) => h,
+            // Never: a count that waits always counts.
+            Ok(None) => return Ok(None),
+            Err(e) => {
+                record_cookie_error(&app, &s, id, &e)?;
+                return Err(e);
+            }
+        }
+    } else {
+        let Some(h) = kept_holdings(&s, a.user_id, i64::MAX / 2)? else { return Ok(None) };
+        h
+    };
+    let rolimons = if s.db.settings()?.rolimons_values { crate::rolimons::items(&s.db, now_ms(), refresh).await } else { None };
+    Ok(Some(value_of(&held, rolimons.as_deref())))
+}
+
+/// Limiteds shown at most (`AccountValue::top`).
+const TOP_ITEMS: usize = 10;
+
+/// What `held` is worth (pure): RAP of every copy and, with Rolimons' list, each copy at its value
+/// (its RAP when Rolimons doesn't value it), and the most valuable items.
+fn value_of(held: &Holdings, rolimons: Option<&crate::rolimons::Items>) -> AccountValue {
+    let mut items: Vec<LimitedItem> = held
+        .items
+        .iter()
+        .map(|h| LimitedItem {
+            asset_id: h.asset_id,
+            name: h.name.clone(),
+            copies: h.copies,
+            rap: h.rap,
+            rolimons: rolimons.and_then(|r| r.get(&h.asset_id)).cloned(),
+        })
+        .collect();
+    let worth = |i: &LimitedItem| i.rolimons.as_ref().and_then(|r| r.value).unwrap_or(i.rap);
+    let total = |each: &dyn Fn(&LimitedItem) -> i64| items.iter().map(|i| each(i).saturating_mul(i64::from(i.copies))).fold(0i64, i64::saturating_add);
+    let (rap, value) = (total(&|i| i.rap), rolimons.map(|_| total(&worth)));
+    let count = items.iter().map(|i| i.copies).fold(0u32, u32::saturating_add);
+    items.sort_by(|a, b| worth(b).cmp(&worth(a)).then(b.copies.cmp(&a.copies)).then_with(|| a.name.cmp(&b.name)));
+    items.truncate(TOP_ITEMS);
+    AccountValue { count, rap, value, top: items, partial: held.partial, fetched_at: held.fetched_at }
 }
 
 fn game_info_of(place_id: i64, g: GameDetails, icon_url: Option<String>) -> GameInfo {
@@ -1686,6 +2092,10 @@ pub async fn private_server_renew(
     price: i64,
 ) -> Result<PrivateServerSettings> {
     unlocked(&s)?;
+    // Renewing spends every month; turning it off is always allowed.
+    if on && s.db.settings()?.lock_purchases {
+        return Err(AppError::Invalid(tr!("Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.")));
+    }
     let cookie = stored_cookie(&s, account_id)?;
     let r = async {
         s.api.vip_server_subscription(account_id, &cookie, vip_server_id, on, price).await?;
@@ -1699,6 +2109,9 @@ pub async fn private_server_renew(
 #[tauri::command]
 pub async fn private_server_buy(app: AppHandle, s: State<'_, App>, buy: PrivateServerBuy) -> Result<()> {
     unlocked(&s)?;
+    if s.db.settings()?.lock_purchases {
+        return Err(AppError::Invalid(tr!("Purchases are locked. Turn off Lock purchases in Settings, under Security, to buy this.")));
+    }
     let id = buy.account_id;
     let cookie = stored_cookie(&s, id)?;
     let r = s.api.vip_server_buy(id, &cookie, buy.universe_id, &buy.name, buy.expected_price, &buy.idempotency_key).await;
@@ -1754,8 +2167,13 @@ pub async fn instance_close(s: State<'_, App>, id: String, force: bool) -> Resul
     r
 }
 
-/// Deletes the plaintext Cordial cookie/identity for an account once its profile has no live
-/// Cordial process. The encrypted vault remains the source for the next launch.
+/// Deletes an account's plaintext session once none of its clients is live: Cordial's profile
+/// cookie/identity and Mocktail's per-account `roblox.cookie`, both removed by
+/// `launcher::client::remove_profile_secrets` (the path logic stays in the launcher lane). The
+/// encrypted vault remains the source for the next launch.
+///
+/// `process::profiles_by_user` knows both backends: a running Mocktail is read from its
+/// `MOCKTAIL_AUTH_ROOT`, so an account whose client is still up keeps its plaintext session.
 pub(crate) fn remove_secrets_if_stopped(s: &App, account_id: i64) {
     let Some(user_id) = s.db.account(account_id).ok().map(|a| a.user_id) else {
         return;
@@ -1776,6 +2194,70 @@ pub(crate) fn remove_all_stopped_secrets(s: &App) {
         for a in accounts {
             remove_secrets_if_stopped(s, a.id);
         }
+    }
+}
+
+/// Moves a playing account's client to `target` (asked first in the UI): its client is closed, then
+/// the account launches again. Into the same game it was in (no particular server), it hops to the
+/// smallest other public server (`bulk::smallest_other`), or as Roblox matches it when there is
+/// none; into the very server it is in, refused. The launch is checked before anything is closed,
+/// so a refused one keeps the client. `fps_cap`: this launch's own, else the old client's.
+#[tauri::command]
+pub async fn instance_move(
+    app: AppHandle,
+    s: State<'_, App>,
+    id: String,
+    target: LaunchTarget,
+    favourite_id: Option<i64>,
+    fps_cap: Option<u32>,
+) -> Result<LaunchInfo> {
+    let fps_cap = launch_fps(fps_cap)?;
+    let _single = s.bulk.begin_single_launch()?;
+    let kills = s.bulk.kills();
+    let inst = s.tracker.get(&id).ok_or(AppError::NotFound)?;
+    if let Some(why) = crate::network::blocked(&s) {
+        return Err(AppError::Wait(why));
+    }
+    let target = hop_target(&s, &inst, target).await?;
+    if let Some(why) = crate::launcher::update::update_hold(&s, 1).await {
+        return Err(AppError::Wait(why));
+    }
+    crate::launcher::launch_check(&s, inst.account_id, &target).await?;
+    s.tracker.end_relaunch(&id);
+    if let Some(pid) = s.tracker.mark_closing(&id) {
+        if let Err(e) = close_all(vec![pid], false, grace(&s)).await?.pop().unwrap_or(Ok(())) {
+            s.tracker.clear_closing(&id);
+            return Err(e);
+        }
+        // Still live in the tracker until its next poll ends it, and a launch then is refused.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while s.tracker.get(&id).is_some_and(|i| i.state != InstanceState::Exited) && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+    // Kill all pressed while the old client closed: no new one.
+    if s.bulk.kills() != kills {
+        return Err(AppError::Invalid(tr!("Launch cancelled by Stop all.")));
+    }
+    log::info!("moving account {} from instance {id}", inst.account_id);
+    Ok(launch_tracked(&app, &s, inst.account_id, target, favourite_id, None, fps_cap.or(inst.fps_cap), false, None).await?.0)
+}
+
+/// Where `instance_move` sends `inst`: the smallest other public server when `target` is the game
+/// it is in; the target itself otherwise (and when the client hasn't reached a server yet).
+async fn hop_target(s: &App, inst: &Instance, target: LaunchTarget) -> Result<LaunchTarget> {
+    let (Some(place), Some(job)) = (inst.place_id, inst.job_id.as_deref()) else { return Ok(target) };
+    let cookie = crate::launcher::account_cookie(s, inst.account_id)?;
+    let (join, _) = crate::launcher::resolve(&s.api, inst.account_id, &cookie, &target).await?;
+    match join {
+        crate::launcher::Join::Job { job_id, .. } if job_id.eq_ignore_ascii_case(job) => {
+            Err(AppError::Invalid(tr!("This account is already in that server.")))
+        }
+        crate::launcher::Join::Game { place_id, launch_data: None } if place_id == place => {
+            let servers = crate::launcher::bulk::server_page(&s.api, inst.account_id, &cookie, place, crate::model::ServerOrder::OccupancyAsc).await?;
+            Ok(crate::launcher::bulk::smallest_other(&servers, job).map_or(target, |job_id| LaunchTarget::Server { place_id, job_id }))
+        }
+        _ => Ok(target),
     }
 }
 
@@ -2344,6 +2826,18 @@ pub fn instances_clear_ended(app: AppHandle, s: State<'_, App>) {
     instances_changed(&app);
 }
 
+/// The multi-instance status as it really is. Mocktail starts one Roblox client at a time, so its
+/// backend never reports multi-client as active, whatever the setting says. Windows and Cordial
+/// keep the lock's own answer.
+fn multi_status(s: &App, v: &Settings) -> MultiInstanceStatus {
+    let mut status = s.multi.status(v.multi_instance, v.protect_shared_login);
+    if mocktail_selected() && !v.multi_instance {
+        status.active = false;
+        status.blocked_by.clear();
+    }
+    status
+}
+
 /// Off the main thread: while the lock is wanted but not held, the status may read the system's
 /// handle table (`Multi::status`), and the UI asks every 5 s.
 #[tauri::command]
@@ -2352,7 +2846,7 @@ pub async fn multi_instance_status(app: AppHandle) -> Result<MultiInstanceStatus
         let s = app.state::<App>();
         let v = s.db.settings()?;
         retake_multi(&s, &v);
-        Ok(s.multi.status(v.multi_instance, v.protect_shared_login))
+        Ok(multi_status(&s, &v))
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?
@@ -2392,7 +2886,7 @@ pub async fn multi_instance_set(app: AppHandle, enabled: bool) -> Result<MultiIn
         } else {
             s.multi.disable();
         }
-        Ok(s.multi.status(v.multi_instance, v.protect_shared_login))
+        Ok(multi_status(&s, &v))
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?
@@ -2410,7 +2904,7 @@ pub async fn multi_instance_take_over(app: AppHandle) -> Result<MultiInstanceSta
         }
         s.multi.take_over()?;
         protect_running(&s, &v);
-        Ok(s.multi.status(v.multi_instance, v.protect_shared_login))
+        Ok(multi_status(&s, &v))
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?
@@ -2462,14 +2956,13 @@ pub fn set_panic_hotkey(app: &AppHandle, old: &str, key: &str) -> Result<()> {
     Ok(())
 }
 
-/// A hotkey as Windows takes it (panic and macro hotkeys).
+/// A hotkey as Windows takes it (the panic hotkey).
 pub(crate) fn parse_hotkey(k: &str) -> Result<tauri_plugin_global_shortcut::Shortcut> {
     k.parse().map_err(|_| AppError::Invalid(tr!("\"{k}\" isn't a key combination, like Ctrl+Shift+F12.", k = k.chars().take(32).collect::<String>())))
 }
 
 pub(crate) async fn kill_all(s: &App) -> Result<MultiInstanceStatus> {
     log::info!("kill all Roblox");
-    s.macros.stop_all();
     s.bulk.kill();
     s.tracker.mark_all_closing();
     // First, so that the list of clients taken next has anything they just started.
@@ -2504,7 +2997,7 @@ async fn close_roblox(s: &App, force: bool, keep_closing: bool) -> Result<MultiI
     }
     let v = s.db.settings()?;
     retake_multi(s, &v);
-    Ok(s.multi.status(v.multi_instance, v.protect_shared_login))
+    Ok(multi_status(s, &v))
 }
 
 /// Clients that crashed, were disconnected or hung, newest first (the last 200).
@@ -2512,7 +3005,7 @@ async fn close_roblox(s: &App, force: bool, keep_closing: bool) -> Result<MultiI
 fn diagnostics_sources(s: &App) -> Result<crate::diagnostics::Sources> {
     let v = s.db.settings()?;
     // Whether the lock is held and, when it isn't, why: what multi-instance reports turn on.
-    let multi = s.multi.status(v.multi_instance, v.protect_shared_login);
+    let multi = multi_status(s, &v);
     let lock = multi.message.map(|m| format!(" ({m}; blocked by {:?})", multi.blocked_by)).unwrap_or_default();
     #[cfg(windows)]
     let head = {
@@ -2575,12 +3068,12 @@ pub async fn diagnostics_save(s: State<'_, App>, path: String) -> Result<()> {
     crate::vault::backup::write_atomic(Path::new(&path), text.as_bytes())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn server_history(s: State<'_, App>, account_id: i64) -> Result<Vec<crate::model::ServerVisit>> {
     s.db.servers(account_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn crashes_list(s: State<'_, App>) -> Result<Vec<Crash>> {
     s.db.crashes()
 }
@@ -2616,7 +3109,7 @@ pub(crate) fn favourite_of(s: &App, row: crate::storage::FavouriteRow) -> Result
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn favourites_list(s: State<'_, App>) -> Result<Vec<Favourite>> {
     s.db.favourites()?.into_iter().map(|r| favourite_of(&s, r)).collect()
 }
@@ -2720,29 +3213,38 @@ pub async fn join_candidates(app: AppHandle, s: State<'_, App>, account_id: i64)
     Ok(out)
 }
 
-/// Locks the vault; open session windows close first (they hold a live roblox.com session). Their
-/// close stores the cookie Roblox may have rotated in them, which needs the vault unlocked: with any
-/// open, the lock waits for them (at most ~5 s, off the main thread their closes run on).
-/// Safe on the main thread: with no session window it locks at once, else in the background.
+/// Every account's time in each place, the most played first (Browse's Playtime).
+#[tauri::command(async)]
+pub fn playtime_list(s: State<'_, App>) -> Result<Vec<PlaytimeRow>> {
+    s.db.playtime()
+}
+
+/// Locks the vault; Browse closes first (it holds a live roblox.com session). Its close stores the
+/// cookie Roblox may have rotated there, which needs the vault unlocked. Always in the background:
+/// Browse may be opening at that very moment, and its close can't run on the main thread or a
+/// runtime worker.
 pub fn lock_vault(app: &AppHandle) {
-    if !app.webview_windows().keys().any(|l| l.starts_with("session-")) && !crate::webview::browsing(app) {
-        return lock_vault_now(app);
-    }
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || lock_vault_now(&app));
 }
 
-/// `lock_vault`, blocking until locked (never on the main thread while a session window is open).
+/// `lock_vault`, blocking until locked (never on the main thread or a runtime worker). The vault
+/// locks before Browse can open again: a `browse_open` waiting meanwhile then finds it locked.
 fn lock_vault_now(app: &AppHandle) {
-    for (label, w) in app.webview_windows() {
-        if label.starts_with("session-")
-            && let Err(e) = w.close()
-        {
-            log::warn!("could not close session window {label} on lock: {e}");
+    // Linux: session windows hold a live roblox.com session. Close them and let their close store
+    // the cookie Roblox may have rotated (needs the vault unlocked) before locking.
+    #[cfg(not(windows))]
+    {
+        for (label, w) in app.webview_windows() {
+            if label.starts_with("session-")
+                && let Err(e) = w.close()
+            {
+                log::warn!("could not close session window {label} on lock: {e}");
+            }
         }
+        crate::webview::wait_sessions_closed(app);
     }
-    crate::webview::wait_sessions_closed(app);
-    app.state::<App>().vault.lock();
+    crate::browse::close_then(app, || app.state::<App>().vault.lock());
     let _ = app.emit("vault://locked", ());
     crate::tray::refresh(app);
 }
@@ -2770,7 +3272,7 @@ pub async fn discord_test(s: State<'_, App>) -> Result<()> {
 
 // ---------- groups ----------
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn groups_list(s: State<'_, App>) -> Result<Vec<Group>> {
     s.db.groups()
 }
@@ -2789,105 +3291,6 @@ pub fn group_remove(app: AppHandle, s: State<'_, App>, id: i64) -> Result<()> {
     s.db.remove_group(id)?;
     accounts_changed(&app);
     Ok(())
-}
-
-// ---------- macros ----------
-
-/// Where AutoHotkey v2 is (Settings' own pick first); None: not installed.
-#[tauri::command]
-pub fn ahk_status(s: State<'_, App>) -> Result<AhkStatus> {
-    Ok(AhkStatus { path: crate::macros::find_ahk(&s.db.settings()?.ahk_path).map(|p| p.display().to_string()) })
-}
-
-/// Every macro by name, with its source.
-#[tauri::command]
-pub fn macros_list(s: State<'_, App>) -> Result<Vec<Macro>> {
-    s.db.macros()
-}
-
-/// Create or edit from the editor: a new macro is trusted, an edited one keeps its trust (only
-/// the review trusts an imported one). A new or changed hotkey must be free.
-#[tauri::command]
-pub fn macro_save(app: AppHandle, s: State<'_, App>, mut input: MacroInput) -> Result<Macro> {
-    unlocked(&s)?;
-    input.hotkey = input.hotkey.trim().to_owned();
-    crate::macros::check_text(&input.body)?;
-    let macros = s.db.macros()?;
-    crate::macros::check_hotkey(&input.hotkey, input.id, &macros, &s.db.settings()?.panic_hotkey)?;
-    // An unchanged key isn't tried again: one another app took before RoALT started would block every edit.
-    let key = |k: &str| k.parse::<tauri_plugin_global_shortcut::Shortcut>().ok();
-    if !macros.iter().any(|m| Some(m.id) == input.id && key(&m.hotkey) == key(&input.hotkey)) {
-        crate::macros::can_register(&app, &input.hotkey)?;
-    }
-    let id = s.db.save_macro(&input, input.id.is_none())?;
-    crate::macros::sync_hotkeys(&app);
-    s.db.macro_by_id(id)
-}
-
-/// Stops it where it runs, then deletes it.
-#[tauri::command]
-pub fn macro_remove(app: AppHandle, s: State<'_, App>, id: i64) -> Result<()> {
-    unlocked(&s)?;
-    s.macros.stop_macro(id);
-    s.db.remove_macro(id)?;
-    crate::macros::sync_hotkeys(&app);
-    Ok(())
-}
-
-/// The user reviewed its whole source: it may run from now on.
-#[tauri::command]
-pub fn macro_trust(app: AppHandle, s: State<'_, App>, id: i64) -> Result<Macro> {
-    unlocked(&s)?;
-    s.db.trust_macro(id)?;
-    crate::macros::sync_hotkeys(&app);
-    s.db.macro_by_id(id)
-}
-
-/// `.ahk`/`.txt` files, each a new untrusted macro named after its file; nothing runs. Stops at
-/// the first file that can't be read (the ones before it stay imported).
-#[tauri::command]
-pub async fn macros_import(s: State<'_, App>, paths: Vec<String>) -> Result<Vec<Macro>> {
-    unlocked(&s)?;
-    let mut out = Vec::new();
-    for p in &paths {
-        let (name, body) = crate::macros::read_file(Path::new(p))?;
-        out.push(s.db.macro_by_id(s.db.import_macro(&name, &body)?)?);
-    }
-    Ok(out)
-}
-
-/// One macro as a `.ahk` file (UTF-8 with a BOM, as AutoHotkey reads it).
-#[tauri::command]
-pub async fn macro_export(s: State<'_, App>, id: i64, path: String) -> Result<()> {
-    let m = s.db.macro_by_id(id)?;
-    let mut bytes = b"\xEF\xBB\xBF".to_vec();
-    bytes.extend_from_slice(m.body.as_bytes());
-    crate::vault::backup::write_atomic(Path::new(&path), &bytes)
-}
-
-/// Starts macro `id` on these clients, one AutoHotkey each; macros://runs follows.
-#[tauri::command]
-pub async fn macro_run(app: AppHandle, s: State<'_, App>, id: i64, instance_ids: Vec<String>) -> Result<Vec<MacroRun>> {
-    crate::macros::run(&app, &s, id, &instance_ids)?;
-    Ok(s.macros.list())
-}
-
-/// Stops the macro on this client; macros://runs follows once AutoHotkey has ended.
-#[tauri::command]
-pub fn macro_stop(s: State<'_, App>, instance_id: String) {
-    s.macros.stop(&instance_id);
-}
-
-/// Stops every running macro.
-#[tauri::command]
-pub fn macros_stop_all(s: State<'_, App>) {
-    s.macros.stop_all();
-}
-
-/// What runs now, oldest first.
-#[tauri::command]
-pub fn macro_runs(s: State<'_, App>) -> Vec<MacroRun> {
-    s.macros.list()
 }
 
 // ---------- backup ----------
@@ -2933,6 +3336,7 @@ pub async fn backup_export(
             fps_cap: a.fps_cap,
             full_quality: a.full_quality,
             main: a.main,
+            custom_flags: Some(a.custom_flags),
         });
     }
     // By user id: ids don't survive a move to another PC.
@@ -2949,7 +3353,6 @@ pub async fn backup_export(
         accounts,
         groups: groups.iter().map(|g| BackupGroup { name: g.name.clone(), color: g.color.clone(), sort_order: g.sort_order }).collect(),
         favourites,
-        macros: s.db.macros()?.into_iter().map(|m| backup::BackupMacro { name: m.name, body: m.body, hotkey: m.hotkey, run_on_launch: m.run_on_launch }).collect(),
     };
     backup::write(Path::new(&path), &password, &payload)?;
     Ok(count)
@@ -2961,8 +3364,7 @@ fn check_backup(p: &backup::BackupPayload) -> Result<()> {
     let wrong = p.version != 1
         || p.accounts.iter().any(|a| a.user_id <= 0 || bad(&a.username) || bad(&a.display_name))
         || p.groups.iter().any(|g| bad(&g.name))
-        || p.favourites.iter().any(|f| f.name.is_empty() || bad(&f.name))
-        || p.macros.iter().any(|m| m.name.trim().is_empty() || m.name.trim().chars().count() > crate::storage::MAX_MACRO_NAME || crate::storage::check_macro_body(&m.body).is_err());
+        || p.favourites.iter().any(|f| f.name.is_empty() || bad(&f.name));
     if wrong {
         return Err(AppError::Invalid(tr!("This isn't a RoALT backup.")));
     }
@@ -2972,6 +3374,9 @@ fn check_backup(p: &backup::BackupPayload) -> Result<()> {
         }
         if let Some(fps) = a.fps_cap {
             check_fps(fps)?;
+        }
+        if let Some(f) = &a.custom_flags {
+            crate::launcher::flags::check(f)?;
         }
     }
     p.accounts.iter().try_for_each(|a| crate::storage::check_meta(&AccountMeta { alias: a.alias.clone(), notes: a.notes.clone(), color: a.color.clone(), favourite: a.favourite }))
@@ -3034,6 +3439,7 @@ pub async fn backup_import(app: AppHandle, s: State<'_, App>, path: String, pass
                 discord_muted: Some(a.discord_muted),
                 fps_cap: Some(a.fps_cap.unwrap_or(0)),
                 full_quality: Some(a.full_quality),
+                custom_flags: a.custom_flags.clone(),
                 ..Default::default()
             })?;
         }
@@ -3051,24 +3457,6 @@ pub async fn backup_import(app: AppHandle, s: State<'_, App>, path: String, pass
         let blob = s.vault.encrypt(FAVOURITE_AAD, &json)?;
         s.db.save_favourite(None, &f.name, &blob, &ids, f.in_tray)?;
     }
-    // Macros this PC doesn't have yet, by name: untrusted until reviewed, and their hotkey only
-    // when it is free here.
-    let panic = s.db.settings()?.panic_hotkey;
-    for m in &payload.macros {
-        let have = s.db.macros()?;
-        if have.iter().any(|h| h.name.to_lowercase() == m.name.trim().to_lowercase()) {
-            continue;
-        }
-        if let Err(e) = crate::macros::check_text(&m.body) {
-            log::warn!("restore: macro {:?} left out: {e}", m.name);
-            continue;
-        }
-        let hotkey = if crate::macros::check_hotkey(m.hotkey.trim(), None, &have, &panic).is_ok() { m.hotkey.trim().to_owned() } else { String::new() };
-        s.db.save_macro(&MacroInput { id: None, name: m.name.clone(), body: m.body.clone(), hotkey, run_on_launch: m.run_on_launch }, false)?;
-    }
-    if !payload.macros.is_empty() {
-        crate::macros::sync_hotkeys(&app);
-    }
     crate::tray::refresh(&app);
     accounts_changed(&app);
     Ok(report)
@@ -3076,7 +3464,7 @@ pub async fn backup_import(app: AppHandle, s: State<'_, App>, path: String, pass
 
 // ---------- settings ----------
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn settings_get(s: State<'_, App>) -> Result<Settings> {
     s.db.settings()
 }
@@ -3316,6 +3704,12 @@ pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> 
         crate::launcher::launch_args(&a)?;
         v.launch_args = a.trim().to_owned();
     }
+    if let Some(f) = patch.custom_flags {
+        crate::launcher::flags::check(&f)?;
+        v.custom_flags = f;
+    }
+    if let Some(c) = patch.custom_flags_scope { v.custom_flags_scope = c }
+    if let Some(l) = patch.lock_purchases { v.lock_purchases = l }
     if let Some(l) = patch.tab_layout { v.tab_layout = l }
     if let Some(c) = patch.close_to_tray { v.close_to_tray = c }
     if let Some(s) = patch.skip_splash { v.skip_splash = s }
@@ -3336,19 +3730,12 @@ pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> 
         d.ping = crate::discord::parse_ping(&d.ping)?;
         v.discord = d;
     }
-    if let Some(p) = patch.ahk_path {
-        let p = p.trim();
-        let path = Path::new(p);
-        if !(p.is_empty() || (path.is_absolute() && path.is_file() && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe")))) {
-            return Err(AppError::Invalid(tr!("Pick AutoHotkey64.exe, the AutoHotkey v2 program.")));
-        }
-        v.ahk_path = p.to_owned();
-    }
-    if let Some(a) = patch.macro_autorun { v.macro_autorun = a }
     if let Some(a) = patch.auto_update { v.auto_update = a }
     let self_update = patch.self_update.filter(|&u| u != v.self_update);
     if let Some(u) = self_update { v.self_update = u }
     if let Some(p) = patch.discord_presence { v.discord_presence = p }
+    if let Some(o) = patch.online_count { v.online_count = o }
+    if let Some(r) = patch.rolimons_values { v.rolimons_values = r }
     if let Some(c) = patch.clean_logs { v.clean_logs = c }
     if let Some(d) = patch.launch_delay_ms {
         if !(2_000..=60_000).contains(&d) {
@@ -3372,7 +3759,6 @@ pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> 
     let had = v.panic_hotkey.clone();
     if let Some(k) = patch.panic_hotkey {
         let k = k.trim();
-        crate::macros::check_hotkey(k, None, &s.db.macros()?, "")?;
         set_panic_hotkey(&app, &had, k)?;
         v.panic_hotkey = k.to_owned();
     }
@@ -3389,6 +3775,8 @@ pub fn settings_set(app: AppHandle, s: State<'_, App>, patch: SettingsPatch) -> 
         log::warn!("could not roll back the panic hotkey after a failed save: {e}");
     }
     rest?;
+    // Once saved: a refused change never loosens the lock Browse is under.
+    crate::browse::set_lock(v.lock_purchases);
     if patch.language.is_some() {
         crate::i18n::set(&v.language);
         crate::tray::refresh(&app);
@@ -3428,6 +3816,44 @@ mod tests {
     }
 
     use super::{GameDetails, GameInfo, find_cookies, game_info_of, is_image, normalize_cookie, ram_accounts, shutdown_secs};
+
+    #[test]
+    fn servers_estimate_rounds_up_and_needs_a_size() {
+        use super::servers_estimate;
+        assert_eq!(servers_estimate(0, 12), Some(0));
+        assert_eq!(servers_estimate(1, 12), Some(1));
+        assert_eq!(servers_estimate(24, 12), Some(2));
+        assert_eq!(servers_estimate(25, 12), Some(3));
+        assert_eq!(servers_estimate(25, 0), None);
+        assert_eq!(servers_estimate(-3, 12), Some(0));
+    }
+
+    #[test]
+    fn value_of_adds_copies_and_falls_back_to_rap() {
+        use super::{Holdings, TOP_ITEMS, value_of};
+        use crate::model::RolimonsItem;
+        use crate::roblox_api::types::Holding;
+        let hold = |asset_id, copies, rap| Holding { asset_id, name: format!("item {asset_id}"), copies, rap };
+        let held = Holdings { fetched_at: 5, partial: false, items: vec![hold(1, 2, 100), hold(2, 1, 1_000), hold(3, 1, 50)] };
+
+        let v = value_of(&held, None);
+        assert_eq!((v.count, v.rap, v.value, v.fetched_at, v.partial), (4, 1_250, None, 5, false), "RAP of every copy; no value without Rolimons");
+        assert_eq!(v.top.iter().map(|i| i.asset_id).collect::<Vec<_>>(), [2, 1, 3], "by worth each");
+
+        let roli = |value| RolimonsItem { value, demand: Some(2), trend: None, projected: false, hyped: false, rare: false, acronym: None };
+        // Item 1 valued above its RAP, item 2 not valued (its RAP counts), item 3 unknown to Rolimons.
+        let list = std::collections::HashMap::from([(1, roli(Some(900))), (2, roli(None))]);
+        let v = value_of(&held, Some(&list));
+        assert_eq!(v.value, Some(2 * 900 + 1_000 + 50));
+        assert_eq!(v.rap, 1_250, "RAP stays Roblox's");
+        assert_eq!(v.top.iter().map(|i| i.asset_id).collect::<Vec<_>>(), [2, 1, 3]);
+        assert!(v.top[2].rolimons.is_none() && v.top[1].rolimons.as_ref().is_some_and(|r| r.value == Some(900)));
+
+        let many = Holdings { fetched_at: 0, partial: true, items: (1..=15).map(|i| hold(i, 1, i * 10)).collect() };
+        let v = value_of(&many, None);
+        assert_eq!((v.top.len(), v.top[0].asset_id, v.count, v.partial), (TOP_ITEMS, 15, 15, true));
+        assert!(!crate::model::Settings::default().rolimons_values, "Rolimons is off until turned on");
+    }
 
     #[test]
     fn knows_images_by_their_bytes() {
@@ -3502,6 +3928,7 @@ nothing here
             visits: 65079604670,
             max_players: 12,
             private_servers: true,
+            ..Default::default()
         };
         let info = game_info_of(7449423635, g, Some("https://tr.rbxcdn.com/i".into()));
         let want = GameInfo {

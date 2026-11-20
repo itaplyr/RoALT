@@ -20,7 +20,8 @@ import { LaunchButton } from "./LaunchButton";
 import { launchBlocked, launchOne, launchSame, launchStep, sessionFps, useLaunchActivity, useSessionFps } from "./launchQueue";
 import { LaunchProgress } from "./LaunchProgress";
 import { MultiNotice } from "./MultiNotice";
-import { isLive, isRunning } from "./Running";
+import { useMoveConfirm } from "./MoveDialog";
+import { isRunning } from "./Running";
 import { ServerDrawer } from "./ServerDrawer";
 import { TargetField } from "./TargetField";
 import { draftFor, draftForUser, readDraft, resolveTarget, type Draft } from "./target";
@@ -128,19 +129,18 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
   const foot = useRef<HTMLDivElement>(null);
   const wide = useWide(root);
 
-  // An account with a client on its way or in a game can't start another.
   const instances = useInstances().data ?? [];
-  const liveAccounts = new Set(instances.filter(isLive).map((i) => i.accountId));
-  // In list order, which is also the bulk launch order.
-  const chosen = accounts.filter((a) => a.status === "valid" && !liveAccounts.has(a.id) && picked.includes(a.id));
+  // In list order, which is also the bulk launch order. A playing account is only ever picked on its
+  // own (AccountPicker): launching it moves its client, asked first.
+  const has = new Set(picked);
+  const chosen = accounts.filter((a) => a.status === "valid" && has.has(a.id));
   const account = chosen[0] ?? null;
+  const move = useMoveConfirm();
   // Who asks Roblox (friends to join, the signed-in sorts, private servers): the first one picked, else any signed in.
   const asker = account ?? accounts.find((a) => a.status === "valid") ?? null;
   const bulk = chosen.length > 1;
   // With multi-instance off, one more client ends the one that runs.
   const replaces = !bulk && !!account && instances.some((i) => isRunning(i) && i.accountId !== account.id);
-  // Picked accounts that are all playing already: that's what the button can't do.
-  const allPlaying = !chosen.length && accounts.some((a) => picked.includes(a.id) && liveAccounts.has(a.id));
   // Stacked, a Who with picks folds into one line until opened, so Where and Play are in reach.
   const [whoOpen, setWhoOpen] = useState(() => chosen.length === 0);
   const folded = !wide && !whoOpen && chosen.length > 0;
@@ -171,7 +171,7 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
   // The button's own line says what no notice beside it already does (multi-instance and playing
   // accounts have their notices, with the way out); pressing it says that too.
   const reason = pub ?? (batch && !batch.done ? t("launch.batchRunning") : null);
-  const noted = !reason && blocked ? blocked : allPlaying ? t("play.allPlaying") : null;
+  const noted = !reason && blocked ? blocked : null;
   const canLaunch = !!account && (usableTarget || pending) && !blocked;
   // A launch of several under way has the button's place; one account's shows under it.
   const inPlace = !!activity && !activity.done && activity.rows.length > 1;
@@ -198,6 +198,7 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
     if (!account) return;
     const where = { draft, setDraft };
     if (bulk) void launchSame(chosen, where, { sameServer, fpsCap: sessionFps() || null });
+    else if (move.liveOf(account)) move.ask(account, (from) => void launchOne(account, where, sessionFps(), from));
     else void launchOne(account, where, sessionFps());
   };
 
@@ -380,7 +381,13 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
                               <Segmented
                                 label={t("launch.findServer")}
                                 value={spread ? sameServer : "randomPublic"}
-                                options={[{ value: "ownPrivate", label: t("launch.spreadOwn") }, { value: "randomPublic", label: t("launch.spreadRandom") }, { value: "closest", label: t("launch.spreadClosest") }]}
+                                options={[
+                                  { value: "ownPrivate", label: t("launch.spreadOwn") },
+                                  { value: "randomPublic", label: t("launch.spreadRandom") },
+                                  { value: "closest", label: t("launch.spreadClosest") },
+                                  { value: "mostFull", label: t("servers.orderMostFull") },
+                                  { value: "mostEmpty", label: t("servers.orderMostEmpty") },
+                                ]}
                                 onChange={setSameServer}
                               />
                             </div>
@@ -455,9 +462,9 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
                       <Button size="md" onClick={onSettings}>{t("settings.installRoblox")}</Button>
                     </div>
                   )}
-                  {allPlaying && (
+                  {!bulk && account && move.liveOf(account) && (
                     <div className="notice enter">
-                      <p className="flex-[1_1_240px] min-w-0 text-fg-2">{t("play.allPlaying")}</p>
+                      <p className="flex-[1_1_240px] min-w-0 text-fg-2">{t("move.notice", { name: accountName(account) })}</p>
                       <Button size="md" icon="home" onClick={onHome}>{t("app.nav.dashboard")}</Button>
                     </div>
                   )}
@@ -486,6 +493,7 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
         </div>
       </div>
 
+      {move.dialog}
       <JoinDialog open={joinOpen} onClose={() => setJoinOpen(false)} account={asker} accounts={accounts} onPick={join} />
       <ServerDrawer
         open={drawerOpen}

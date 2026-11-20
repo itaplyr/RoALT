@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+// No relative imports (signal.ts, stored.ts): scripts/test-sounds.mjs loads this file in plain Node.
 
 export type Sound = "click" | "on" | "off" | "notification" | "success" | "error";
 type Preferences = { enabled: boolean; volume: number };
@@ -29,12 +30,22 @@ const active = new Set<OscillatorNode>();
 let installed = false;
 let lastControl = -Infinity;
 let lastNotice = -Infinity;
+let idle: ReturnType<typeof setTimeout> | undefined;
+// A running context renders silence all session: suspend it 30 s after the last input or sound.
+// Not sooner: suspending closes the output stream, and reopening it delays or clips the next sound.
+function rest() {
+  clearTimeout(idle);
+  idle = setTimeout(() => {
+    if (!active.size) void context?.suspend().catch(() => {});
+  }, 30_000);
+}
 function unlock() {
   if (!preferences.enabled || !preferences.volume) return;
   try {
     context ??= new AudioContext();
     if (context.state === "suspended") void context.resume().catch(() => {});
   } catch { /* Audio must never interrupt an action. */ }
+  rest();
 }
 /** Short locally synthesized sounds; no network or audio assets. */
 export function playSound(sound: Sound) {
@@ -76,6 +87,7 @@ export function playSound(sound: Sound) {
     else if (sound === "success") { note(660, 660, 0.07); note(880, 880, 0.10, 0.08); }
     else { note(240, 210, 0.09); note(190, 170, 0.12, 0.10); }
   } catch { /* An unavailable audio device doesn't affect the UI. */ }
+  rest();
 }
 export function previewSound() {
   unlock();

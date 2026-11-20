@@ -1,22 +1,21 @@
-//! Roblox login / session windows on kept WebView2 profiles: one for signing in, one per
-//! account for its session window. A fresh profile each time looked like a never-seen browser
-//! to Roblox and drew a captcha (403) on most sign-ins. `.ROBLOSECURITY` (the vault holds it)
-//! and Google / Apple sign-ins are deleted when a window opens and again before it closes. A
-//! window that never closed normally (crash, quit with it open) leaves an `OPEN_MARK` behind:
+//! Roblox pages on kept WebView2 profiles: the sign-in window, and each account's own profile
+//! for Browse (`browse`, Roblox inside the RoALT window). A fresh profile each time looked like a
+//! never-seen browser to Roblox and drew a captcha (403) on most sign-ins. `.ROBLOSECURITY` (the
+//! vault holds it) and Google / Apple sign-ins are deleted when a page opens and again before it
+//! closes. One that never closed normally (crash, quit with it open) leaves an `OPEN_MARK` behind:
 //! that profile is deleted whole at exit or the next start (`sweep_dirty_profiles`).
 
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use tauri::webview::{Cookie, PlatformWebview};
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use tauri::{AppHandle, Manager, Webview, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use url::Url;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-    COREWEBVIEW2_COOKIE_SAME_SITE_KIND_LAX, ICoreWebView2, ICoreWebView2_2, ICoreWebView2CookieList, ICoreWebView2CookieManager,
-    ICoreWebView2Settings4,
+    COREWEBVIEW2_COOKIE_SAME_SITE_KIND_LAX, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL, ICoreWebView2,
+    ICoreWebView2_2, ICoreWebView2_19, ICoreWebView2CookieList, ICoreWebView2CookieManager, ICoreWebView2Settings4,
 };
 use windows::Win32::Foundation::{CloseHandle, WAIT_TIMEOUT};
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
@@ -32,10 +31,9 @@ const TMP_DIR: &str = "tmp-webview";
 const LOGIN_DIR: &str = "webview-login";
 const SESSIONS_DIR: &str = "webview-sessions";
 /// In a profile while its window is open; still there at start-up → the profile may hold a cookie.
-const OPEN_MARK: &str = ".roalt-open";
+pub(crate) const OPEN_MARK: &str = ".roalt-open";
 const POLL: Duration = Duration::from_millis(700);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
-const HOME_PAGE: &str = "https://www.roblox.com/home";
 
 /// Variables WebView2 reads before (and instead of) the options Tauri passes it.
 const WEBVIEW2_VARS: [&str; 6] = [
@@ -48,17 +46,46 @@ const WEBVIEW2_VARS: [&str; 6] = [
 ];
 
 static LOGIN_ACTIVE: AtomicBool = AtomicBool::new(false);
-/// Session windows from close request until their browser has exited: the kept profile is still
-/// held, so the account's next window must wait.
-static CLOSING: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// A sign-in to fill in for the user (a bulk import's `user:pass` line). Only ever put into the
+/// login page's fields; never stored.
+pub struct LoginFill {
+    pub username: String,
+    pub password: Secret,
+}
+
+/// What fills Roblox's login form (pure): on www.roblox.com's top frame only, once its fields
+/// show (up to 20 s), each one still empty; the input events tell its React state. Never presses
+/// Log In: the user does, after any captcha. Values are JSON-escaped.
+fn fill_script(username: &str, password: &str) -> Zeroizing<String> {
+    const BODY: &str = r#"if (location.hostname !== "www.roblox.com" || window.top !== window) return;
+const set = (el, v) => {
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, v);
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+};
+let tries = 0;
+const timer = setInterval(() => {
+  const u = document.getElementById("login-username"), p = document.getElementById("login-password");
+  if (u && p) {
+    clearInterval(timer);
+    if (!u.value) set(u, user);
+    if (!p.value) set(p, pass);
+    p.focus();
+  } else if (++tries >= 100) clearInterval(timer);
+}, 200);"#;
+    let json = |s: &str| Zeroizing::new(serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into()));
+    Zeroizing::new(format!("(() => {{\nconst user = {}, pass = {};\n{BODY}\n}})();", *json(username), *json(password)))
+}
 
 /// Opens `https://www.roblox.com/login` in a `login-<uuid>` window on the kept sign-in profile
 /// `<data_dir>/webview-login` (no devtools, no autofill, no context menu, no IPC capability),
 /// with any `.ROBLOSECURITY` deleted before the page loads, so the last account's cookie can't
-/// be taken for this one. A worker thread polls `cookies()` every ~700 ms until a non-empty
+/// be taken for this one. `fill`: its username and password go into the form (`fill_script`).
+/// A worker thread polls `cookies()` every ~700 ms until a non-empty
 /// `.ROBLOSECURITY` appears, deletes it from the profile, closes the window and waits for its
 /// browser process to exit. Closing the window first → `AppError::Cancelled`.
-pub async fn capture_login(app: &AppHandle, data_dir: &Path) -> Result<Secret> {
+pub async fn capture_login(app: &AppHandle, data_dir: &Path, fill: Option<&LoginFill>) -> Result<Secret> {
     let slot = LoginSlot::take(app)?;
     let login = parse_url(endpoints::LOGIN_PAGE)?;
     let label = format!("login-{}", uuid::Uuid::new_v4());
@@ -75,9 +102,10 @@ pub async fn capture_login(app: &AppHandle, data_dir: &Path) -> Result<Secret> {
         .general_autofill_enabled(false)
         .on_navigation(allowed)
         .build()?;
-    let (pid, cookie) = match harden(&window, None).await {
+    let script = fill.map(|f| fill_script(&f.username, f.password.expose()));
+    let (pid, cookie) = match harden(window.as_ref(), None, script).await {
         // A Google / Apple sign-in left by an earlier window goes before the page loads.
-        Ok(pid) => match (clear_cookies_async(&window, false).await, window.navigate(login)) {
+        Ok(pid) => match (clear_cookies_async(window.as_ref(), false).await, window.navigate(login)) {
             (_, Ok(())) => (Some(pid), wait_for_cookie(app.clone(), label.clone()).await),
             (_, Err(e)) => (Some(pid), Err(e.into())),
         },
@@ -85,7 +113,7 @@ pub async fn capture_login(app: &AppHandle, data_dir: &Path) -> Result<Secret> {
     };
     // Closed by the user: its cookies (a half-done Google sign-in too) can't be deleted any more, so
     // the whole profile goes once its browser has exited (kept marked if that fails: next start).
-    let cleared = app.get_webview_window(&label).is_some() && clear_cookies_async(&window, true).await;
+    let cleared = app.get_webview_window(&label).is_some() && clear_cookies_async(window.as_ref(), true).await;
     if cleared {
         mark_closed(&profile);
     }
@@ -106,15 +134,26 @@ pub async fn capture_login(app: &AppHandle, data_dir: &Path) -> Result<Secret> {
     cookie
 }
 
+/// Closes an open sign-in window: its `capture_login` ends `Cancelled` (a bulk import's Stop).
+pub fn close_login(app: &AppHandle) {
+    for (label, w) in app.webview_windows() {
+        if label.starts_with("login-")
+            && let Err(e) = w.close()
+        {
+            log::debug!("could not close login window {label}: {e}");
+        }
+    }
+}
+
 /// Marks `profile` as in use (created if needed). Logged, not an error: the window still works.
-fn mark_open(profile: &Path) {
+pub(crate) fn mark_open(profile: &Path) {
     if let Err(e) = std::fs::create_dir_all(profile).and_then(|()| std::fs::write(profile.join(OPEN_MARK), b"")) {
         log::warn!("could not mark browser profile {} as open: {e}", profile.display());
     }
 }
 
 /// After a normal close, once the cookies were deleted.
-fn mark_closed(profile: &Path) {
+pub(crate) fn mark_closed(profile: &Path) {
     match std::fs::remove_file(profile.join(OPEN_MARK)) {
         Err(e) if e.kind() != ErrorKind::NotFound => log::warn!("could not unmark browser profile {}: {e}", profile.display()),
         _ => {}
@@ -136,12 +175,13 @@ fn login_profile(data_dir: &Path) -> PathBuf {
     data_dir.join(LOGIN_DIR)
 }
 
-fn session_profile(data_dir: &Path, account_id: i64) -> PathBuf {
+/// An account's kept profile, the one Browse uses as that account.
+pub(crate) fn session_profile(data_dir: &Path, account_id: i64) -> PathBuf {
     data_dir.join(SESSIONS_DIR).join(account_id.to_string())
 }
 
-/// Deletes the sign-in profile and every session profile (blocking: removal retries), unless a
-/// sign-in or session window is open, whose browser holds them: then nothing, and `false`.
+/// Deletes the sign-in profile and every session profile (blocking: removal retries), unless the
+/// sign-in window or Browse is open, whose browser holds one: then nothing, and `false`.
 /// Only browser state goes (captchas may come back); the cookies are in the vault.
 pub fn reset_profiles(app: &AppHandle, data_dir: &Path) -> bool {
     if browsing(app) {
@@ -154,23 +194,16 @@ pub fn reset_profiles(app: &AppHandle, data_dir: &Path) -> bool {
     login && sessions
 }
 
-/// A sign-in or session window is open, or one is still closing: its browser holds a profile,
-/// and a closing session may yet hand over a newer cookie.
+/// The sign-in window or Browse is open (or Browse is still closing): its browser holds a
+/// profile, and Browse may yet hand over a newer cookie.
 pub fn browsing(app: &AppHandle) -> bool {
-    let closing = !CLOSING.lock().unwrap_or_else(|e| e.into_inner()).is_empty();
-    closing || LOGIN_ACTIVE.load(Ordering::Acquire) || app.webview_windows().keys().any(|l| l.starts_with("login-") || l.starts_with("session-"))
+    crate::browse::is_open() || signing_in(app)
 }
 
-/// Waits (blocking, up to ~5 s) for session windows to finish closing: `end_session` stores the
-/// last cookie each one had. Never on the main thread, which those closes need.
-pub fn wait_sessions_closed(app: &AppHandle) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let open = || {
-        !CLOSING.lock().unwrap_or_else(|e| e.into_inner()).is_empty() || app.webview_windows().keys().any(|l| l.starts_with("session-"))
-    };
-    while Instant::now() < deadline && open() {
-        std::thread::sleep(Duration::from_millis(100));
-    }
+/// The sign-in window is open: the cookie it captures is encrypted as it closes, which needs the
+/// vault open (auto-lock waits for it).
+pub fn signing_in(app: &AppHandle) -> bool {
+    LOGIN_ACTIVE.load(Ordering::Acquire) || app.webview_windows().keys().any(|l| l.starts_with("login-"))
 }
 
 /// The folders in `webview-sessions` (none if it is missing).
@@ -190,95 +223,13 @@ pub fn sweep_orphan_profiles(data_dir: &Path, account_ids: &[i64]) {
     }
 }
 
-/// Deletes a removed account's session profile (blocking; logged, never an error). Its window
-/// was asked to close: waits up to ~5 s for it and its browser to go first.
+/// Deletes a removed account's session profile (blocking; logged, never an error). Browse, open
+/// as that account, closes first (its cookie isn't kept: the account is gone).
 pub fn remove_account_profile(app: &AppHandle, data_dir: &Path, account_id: i64) {
-    let label = format!("session-{account_id}");
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline
-        && (app.get_webview_window(&label).is_some() || CLOSING.lock().unwrap_or_else(|e| e.into_inner()).contains(&label))
-    {
-        std::thread::sleep(Duration::from_millis(200));
-    }
+    crate::browse::close_if(app, account_id);
     remove_profile(&session_profile(data_dir, account_id));
 }
 
-/// Opens `https://www.roblox.com/home` signed in as a stored account: a `session-<account_id>`
-/// window titled `title` on the account's kept profile `<data_dir>/webview-sessions/<id>` (no
-/// devtools in release, no IPC capability, same hardening as login). Already open → focused.
-/// The cookie is injected through WebView2's own `ICoreWebView2CookieManager` with domain
-/// `.roblox.com`, path `/`, HttpOnly, Secure, SameSite=Lax (never Tauri's `set_cookie`, which
-/// drops the leading dot), before the first navigation. Returns once the window shows.
-/// When the user closes it, `on_close` gets the profile's last non-empty `.ROBLOSECURITY`
-/// (Roblox may have rotated it, or the user may have signed out / switched accounts), read
-/// before the window is destroyed; then the cookie is deleted from the profile.
-pub async fn open_session(
-    app: &AppHandle,
-    data_dir: &Path,
-    account_id: i64,
-    title: &str,
-    cookie: Secret,
-    on_close: impl FnOnce(Option<Secret>) + Send + 'static,
-) -> Result<()> {
-    let home = parse_url(HOME_PAGE)?;
-    let label = format!("session-{account_id}");
-    // Still closing (its browser may outlive the window by seconds): the profile isn't free yet.
-    if CLOSING.lock().unwrap_or_else(|e| e.into_inner()).contains(&label) {
-        return Err(AppError::Invalid(tr!("That Roblox window is still closing. Try again in a moment.")));
-    }
-    // One profile, one window: its cookie jar is shared.
-    if let Some(w) = app.get_webview_window(&label) {
-        let _ = w.unminimize();
-        let _ = w.set_focus();
-        return Ok(());
-    }
-    let profile = session_profile(data_dir, account_id);
-    // Marked with no window open: left by a crash or a removal that failed (maybe of an earlier
-    // account with this id), so nothing of it is reused.
-    if profile.join(OPEN_MARK).exists() {
-        let p = profile.clone();
-        let _ = tokio::task::spawn_blocking(move || remove_profile(&p)).await;
-    }
-    mark_open(&profile);
-    // Blank first, so nothing loads from Roblox before the cookie is in place.
-    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(parse_url("about:blank")?))
-        .title(title)
-        .inner_size(1180.0, 800.0)
-        .center()
-        .data_directory(profile.clone())
-        .incognito(false)
-        .devtools(cfg!(debug_assertions))
-        .general_autofill_enabled(false)
-        .on_navigation(allowed)
-        .build()?;
-    let pid = match harden(&window, Some(cookie)).await {
-        Ok(pid) => pid,
-        Err(e) => {
-            if let Err(e) = window.destroy() {
-                log::debug!("could not destroy session window {label}: {e}");
-            }
-            return Err(e);
-        }
-    };
-    // ponytail: a close in the instant before this handler exists skips on_close; the profile
-    // keeps its OPEN_MARK and is deleted at the next start.
-    let (app, title) = (app.clone(), title.to_owned());
-    let pending = Mutex::new(Some(move || end_session(&app, &label, &title, pid, &profile, on_close)));
-    window.on_window_event(move |event| {
-        // `cookies()` deadlocks in here: keep the window and finish on another thread.
-        if let WindowEvent::CloseRequested { api, .. } = event {
-            api.prevent_close();
-            if let Some(end) = take_once(&pending) {
-                tauri::async_runtime::spawn_blocking(end);
-            }
-        }
-    });
-    // A Google / Apple sign-in left in this profile goes before the page loads (the account's own
-    // cookie, just put in, stays). After the close handler: this can take seconds.
-    clear_cookies_async(&window, false).await;
-    window.navigate(home)?;
-    Ok(())
-}
 
 /// Deletes leftover `tmp-webview/*` profiles from earlier runs.
 pub fn sweep_temp_profiles(data_dir: &Path) {
@@ -331,12 +282,14 @@ impl Drop for LoginSlot {
     }
 }
 
-/// Turns off what Tauri does not expose, adds `cookie` as `.ROBLOSECURITY` if given, and
-/// returns the profile's browser process id.
-async fn harden(window: &WebviewWindow, cookie: Option<Secret>) -> Result<u32> {
+/// Turns off what Tauri does not expose, adds `cookie` as `.ROBLOSECURITY` and `script` to
+/// every page if given, and returns the profile's browser process id.
+pub(crate) async fn harden(window: &Webview, cookie: Option<Secret>, script: Option<Zeroizing<String>>) -> Result<u32> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     window.with_webview(move |pv| {
-        let r = harden_webview(&pv, cookie.as_ref()).map_err(|e| AppError::Internal(tr!("WebView2 setup failed: {why}", why = e)));
+        let script = script.map(|s| wide(&s));
+        let r = harden_webview(&pv, cookie.as_ref(), script.as_deref().map(Vec::as_slice))
+            .map_err(|e| AppError::Internal(tr!("WebView2 setup failed: {why}", why = e)));
         let _ = tx.send(r);
     })?;
     // The closure is dropped unrun if the window is already gone.
@@ -346,7 +299,7 @@ async fn harden(window: &WebviewWindow, cookie: Option<Secret>) -> Result<u32> {
     })?
 }
 
-fn harden_webview(pv: &PlatformWebview, cookie: Option<&Secret>) -> windows::core::Result<u32> {
+fn harden_webview(pv: &PlatformWebview, cookie: Option<&Secret>, script: Option<&[u16]>) -> windows::core::Result<u32> {
     // SAFETY: COM calls on the main thread (with_webview), on live interfaces from WebView2;
     // `value` outlives the call that reads it.
     unsafe {
@@ -382,6 +335,11 @@ fn harden_webview(pv: &PlatformWebview, cookie: Option<&Secret>) -> windows::cor
             c.SetIsSecure(true)?;
             c.SetSameSite(COREWEBVIEW2_COOKIE_SAME_SITE_KIND_LAX)?;
             mgr.AddOrUpdateCookie(&c)?;
+        }
+        if let Some(script) = script {
+            // NUL-terminated (`wide`); registered before the first navigation, so the login page has it.
+            let done = webview2_com::AddScriptToExecuteOnDocumentCreatedCompletedHandler::create(Box::new(|_, _| Ok(())));
+            wv.AddScriptToExecuteOnDocumentCreated(PCWSTR(script.as_ptr()), &done)?;
         }
         let mut pid = 0;
         wv.BrowserProcessId(&mut pid)?;
@@ -432,10 +390,10 @@ unsafe fn delete_sign_in_providers(mgr: &ICoreWebView2CookieManager, list: &ICor
     }
 }
 
-/// Deletes the Google / Apple cookies of a window's profile, and `.ROBLOSECURITY` too when `auth`
-/// (not while a session window opens: harden just put the account's in). Blocking, ≤ 5 s; true
-/// only when every delete worked — a profile is marked clean on nothing less.
-fn clear_cookies(window: &WebviewWindow, auth: bool) -> bool {
+/// Deletes the Google / Apple cookies of a page's profile, and `.ROBLOSECURITY` too when `auth`
+/// (not while Browse opens: harden just put the account's in). Blocking, ≤ 5 s; true only when
+/// every delete worked — a profile is marked clean on nothing less.
+pub(crate) fn clear_cookies(window: &Webview, auth: bool) -> bool {
     let (tx, rx) = std::sync::mpsc::channel();
     let label = window.label().to_owned();
     let r = window.with_webview(move |pv| {
@@ -478,9 +436,25 @@ fn clear_cookies(window: &WebviewWindow, auth: bool) -> bool {
 }
 
 /// `clear_cookies` off the async thread it would block.
-async fn clear_cookies_async(window: &WebviewWindow, auth: bool) -> bool {
+async fn clear_cookies_async(window: &Webview, auth: bool) -> bool {
     let window = window.clone();
     tauri::async_runtime::spawn_blocking(move || clear_cookies(&window, auth)).await.unwrap_or(false)
+}
+
+/// Lets WebView2 trim `wv`'s memory while it is out of sight (`low`), or back to usual. Best effort:
+/// runtimes before 1.0.2210 can't.
+pub fn memory_target(wv: &Webview, low: bool) {
+    let level = if low { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW } else { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL };
+    let r = wv.with_webview(move |pv| {
+        // SAFETY: COM calls on the main thread (with_webview) on a live controller.
+        let r = unsafe { pv.controller().CoreWebView2().and_then(|core| core.cast::<ICoreWebView2_19>()).and_then(|core| core.SetMemoryUsageTargetLevel(level)) };
+        if let Err(e) = r {
+            log::debug!("WebView2 memory target not set: {e}");
+        }
+    });
+    if let Err(e) = r {
+        log::debug!("WebView2 memory target not set: {e}");
+    }
 }
 
 /// Logs WebView2 renderer/GPU/browser process failures of `window` (a white screen otherwise
@@ -516,44 +490,8 @@ fn wide(s: &str) -> Zeroizing<Vec<u16>> {
     Zeroizing::new(s.encode_utf16().chain([0]).collect())
 }
 
-fn parse_url(s: &str) -> Result<Url> {
+pub(crate) fn parse_url(s: &str) -> Result<Url> {
     s.parse().map_err(|e: url::ParseError| AppError::Internal(e.to_string()))
-}
-
-/// The first close request gets the close path; clicks while it runs get nothing.
-fn take_once<T>(slot: &Mutex<Option<T>>) -> Option<T> {
-    slot.lock().unwrap_or_else(|e| e.into_inner()).take()
-}
-
-/// Blocking (see `poll_cookie`): reads the profile's cookie while the window still exists,
-/// hands it to `on_close`, deletes it from the profile, then destroys the window.
-fn end_session(app: &AppHandle, label: &str, title: &str, pid: u32, profile: &Path, on_close: impl FnOnce(Option<Secret>)) {
-    CLOSING.lock().unwrap_or_else(|e| e.into_inner()).push(label.to_owned());
-    if let Some(window) = app.get_webview_window(label) {
-        let _ = window.hide();
-        let last = match window.cookies().map(pick_roblosecurity) {
-            Ok(Some(c)) => Some(c),
-            Ok(None) => {
-                log::warn!("session window \"{title}\" closed signed out of Roblox; stored cookie not changed");
-                None
-            }
-            Err(e) => {
-                log::warn!("could not read the cookies of session window \"{title}\": {e}");
-                None
-            }
-        };
-        on_close(last);
-        // Unmarked before the window goes: once it is destroyed a new window for this account can
-        // open on the same profile, and its mark must not be removed by this one.
-        if clear_cookies(&window, true) {
-            mark_closed(profile);
-        }
-        if let Err(e) = window.destroy() {
-            log::debug!("could not destroy session window {label}: {e}");
-        }
-    }
-    wait_for_exit(pid);
-    CLOSING.lock().unwrap_or_else(|e| e.into_inner()).retain(|l| l != label);
 }
 
 async fn wait_for_cookie(app: AppHandle, label: String) -> Result<Secret> {
@@ -594,26 +532,35 @@ fn poll_cookie(app: &AppHandle, label: &str) -> Result<Secret> {
 }
 
 /// The first non-empty `.ROBLOSECURITY` from roblox.com (Tauri strips the leading dot).
-fn pick_roblosecurity(cookies: Vec<Cookie<'static>>) -> Option<Secret> {
+pub(crate) fn pick_roblosecurity(cookies: Vec<Cookie<'static>>) -> Option<Secret> {
     cookies
         .into_iter()
         .find(|c| c.name() == ".ROBLOSECURITY" && !c.value().is_empty() && c.domain().is_some_and(is_roblox))
         .map(|c| Secret::new(c.value()))
 }
 
-/// Where a Roblox window may go: Roblox over https, and the sign-in providers it hands off to.
+/// Where a Roblox page may go: Roblox over https, and the sign-in providers it hands off to.
 /// A Tauri window's page can crash the app through its IPC with a crafted host name, so it stays
-/// off anything else.
-fn allowed(url: &Url) -> bool {
+/// off anything else. Never Create (`creating`): building games is not what RoALT is for.
+pub(crate) fn allowed(url: &Url) -> bool {
     let ok = url.as_str() == "about:blank"
         || (url.scheme() == "https"
             && url.username().is_empty()
             && url.port().is_none()
-            && url.host_str().is_some_and(|h| is_roblox(h) || is_sign_in_provider(h)));
+            && url.host_str().is_some_and(|h| is_roblox(h) || is_sign_in_provider(h))
+            && !creating(url));
     if !ok {
         log::debug!("Roblox window: navigation to another site refused");
     }
     ok
+}
+
+/// Roblox's Create pages: the Creator Hub and Studio's web pages.
+pub(crate) fn creating(url: &Url) -> bool {
+    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    let path = url.path().to_ascii_lowercase();
+    host == "create.roblox.com"
+        || ((host == "www.roblox.com" || host == "roblox.com") && ["/develop", "/create", "/build"].iter().any(|p| path == *p || path.starts_with(&format!("{p}/"))))
 }
 
 fn allowed_uri(uri: &str) -> bool {
@@ -626,7 +573,7 @@ fn is_roblox(domain: &str) -> bool {
 }
 
 /// A profile folder stays locked until its browser process has exited (≤ 5 s here).
-fn wait_for_exit(pid: u32) {
+pub(crate) fn wait_for_exit(pid: u32) {
     // SAFETY: the handle is used only here and closed before returning.
     unsafe {
         if let Ok(h) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) {
@@ -641,7 +588,7 @@ fn wait_for_exit(pid: u32) {
 /// Child processes can hold files a moment longer, so retry; a final failure is logged and
 /// returns false (gone or never there: true). What is left is marked open, so the next sweep
 /// tries again (the mark may have been among the files already deleted).
-fn remove_profile(dir: &Path) -> bool {
+pub(crate) fn remove_profile(dir: &Path) -> bool {
     for attempt in 1..=5 {
         match std::fs::remove_dir_all(dir) {
             Ok(()) => return true,
@@ -754,24 +701,30 @@ mod tests {
             "https://www.roblox.com:8443/",
             "file:///C:/x",
             "http://xn--a.localhost:1/",
+            "https://create.roblox.com/dashboard/creations",
+            "https://www.roblox.com/develop",
+            "https://www.roblox.com/create/x",
+            "https://roblox.com/build",
         ] {
             assert!(!go(u), "{u}");
         }
+        assert!(go("https://www.roblox.com/developer-terms") && go("https://www.roblox.com/creators"), "only Create's own pages");
     }
 
     #[test]
     fn session_helpers() {
         assert_eq!(*wide("aZ_9"), [97, 90, 95, 57, 0]);
         assert_eq!(*wide(""), [0]);
-        assert_eq!(parse_url(HOME_PAGE).unwrap().host_str(), Some("www.roblox.com"));
+        assert_eq!(parse_url("https://www.roblox.com/home").unwrap().host_str(), Some("www.roblox.com"));
         assert!(parse_url("about:blank").is_ok());
     }
 
     #[test]
-    fn close_path_runs_once() {
-        let pending = Mutex::new(Some(7));
-        assert_eq!(take_once(&pending), Some(7));
-        assert_eq!(take_once(&pending), None);
+    fn fill_script_escapes_what_it_puts_in() {
+        let s = fill_script("bob", "p\"a\\s</script>\n'x");
+        assert!(s.contains(r#"const user = "bob", pass = "p\"a\\s</script>\n'x";"#), "{}", *s);
+        assert!(s.contains(r#"location.hostname !== "www.roblox.com""#) && s.contains("window.top !== window"));
+        assert!(!s.contains("login-button"), "never presses Log In");
     }
 
     #[test]

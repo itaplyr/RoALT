@@ -1,6 +1,9 @@
-//! Multiple clients on Linux are provided by Cordial profiles (or Sober, which has no
-//! multi-instance support). There is no Windows singleton mutex to hold; RoALT only records
-//! whether the user asked for it so the rest of the app behaves consistently.
+//! Multiple clients on Linux are provided by Cordial profiles. Mocktail explicitly refuses a
+//! second client (its lock is keyed by uid and executable, not by data root, and a second launch
+//! is forwarded to the running one), so `launcher::client` refuses that launch instead of
+//! letting it land in another account. Sober has no multi-instance support either. There is no
+//! Windows singleton mutex to hold; RoALT only records whether the user asked for it so the rest
+//! of the app behaves consistently.
 #![allow(dead_code)]
 
 

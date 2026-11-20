@@ -72,44 +72,17 @@ export function Select<T extends string>({ value, onChange, options, className =
   );
 }
 
-/** A checkbox with its label; `hideLabel` keeps the label for screen readers only. */
-export function Checkbox({ checked, indeterminate, onChange, label, hideLabel, disabled, className = "" }: {
+/** A checkbox with its label. */
+export function Checkbox({ checked, onChange, label, disabled, className = "" }: {
   checked: boolean;
-  indeterminate?: boolean;
   onChange: (v: boolean) => void;
   label: ReactNode;
-  hideLabel?: boolean;
   disabled?: boolean;
   className?: string;
 }) {
   return (
     <label className={`inline-flex items-center gap-2.5 ${disabled ? "opacity-60" : "cursor-pointer"} ${className}`}>
-      <input
-        type="checkbox"
-        className="cb"
-        checked={checked}
-        disabled={disabled}
-        ref={(el) => {
-          if (el) el.indeterminate = !!indeterminate;
-        }}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-      <span className={hideLabel ? "sr-only" : "min-w-0"}>{label}</span>
-    </label>
-  );
-}
-
-export function Radio({ checked, onChange, name, value, label, disabled }: {
-  checked: boolean;
-  onChange: () => void;
-  name: string;
-  value: string;
-  label: ReactNode;
-  disabled?: boolean;
-}) {
-  return (
-    <label className={`inline-flex items-center gap-2.5 ${disabled ? "opacity-60" : "cursor-pointer"}`}>
-      <input type="radio" className="radio" name={name} value={value} checked={checked} disabled={disabled} onChange={onChange} />
+      <input type="checkbox" className="cb" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
       <span className="min-w-0">{label}</span>
     </label>
   );

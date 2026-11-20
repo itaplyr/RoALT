@@ -83,12 +83,8 @@
       outline-offset: -2px;
     }
     .radio:checked::after,
-    .meter > span,
-    .step-done {
+    .meter > span {
       background: Highlight;
-    }
-    .step-fail {
-      background: CanvasText;
     }
   }
 }

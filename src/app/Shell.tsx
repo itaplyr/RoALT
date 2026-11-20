@@ -1,40 +1,48 @@
-import { startTransition, useCallback, useEffect, useLayoutEffect, useRef, useState, ViewTransition } from "react";
+import { Fragment, lazy, startTransition, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, ViewTransition, type ComponentType } from "react";
 import { createPortal } from "react-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { friendly, toast } from "../ui/Toast";
-import { asError, type Favourite, type SameServer, type Settings, type VaultStatus } from "../api";
-import { qk, useAccounts, useGroups, useInstances, useMacroRuns } from "../data";
+import { LoadFailed, toast } from "../ui/Toast";
+import type { Favourite, SameServer, Settings, VaultStatus } from "../api";
+import { qk, useAccounts, useGroups, useInstances } from "../data";
 import { t } from "../i18n";
-import { AccountsView } from "../features/accounts/AccountsView";
 import { AddAccountDialog, type Tab as AddTab } from "../features/accounts/AddAccountDialog";
 import { AccountRail } from "../features/dashboard/AccountRail";
 import { DashboardView } from "../features/dashboard/DashboardView";
 import { useHomeTabs, useSectionOrder } from "../features/dashboard/homeLayout";
-import { DebugView } from "../features/debug/DebugView";
-import { DiscordView } from "../features/discord/DiscordView";
 import { LaunchFlight } from "../features/launch/LaunchButton";
 import { lastLaunchAccount } from "../features/launch/launchQueue";
-import { LaunchView } from "../features/launch/LaunchView";
 import { isLive } from "../features/launch/Running";
 import { draftFor, EMPTY_DRAFT, type Draft } from "../features/launch/target";
-import { MacrosView } from "../features/macros/MacrosView";
-import { MonitorView } from "../features/monitor/MonitorView";
-import { PerformanceView } from "../features/performance/PerformanceView";
-import { ServersView } from "../features/servers/ServersView";
 import { AREAS, type SettingsArea } from "../features/settings/areas";
-import { jumpTo } from "../features/settings/jump";
-import { SettingsView } from "../features/settings/SettingsView";
+import { jumpTo } from "../features/settings/jumpTo";
 import { useSplashPhase } from "../features/splash/phase";
 import { overlayOpen } from "../ui/a11y";
-import { Button } from "../ui/Button";
 import { Island } from "../ui/island/Island";
 import type { IslandLeaf, IslandModel } from "../ui/island/model";
 import { markViewEntering } from "../ui/motion";
 import { Divider, usePanelWidth } from "../ui/Resizer";
 import { LiveActivities } from "./LiveActivities";
-import { MAIN_SECTIONS, requestNavigation, SECTION_ICON, SECTION_VIEW, SHORTCUT_VIEW, shortcutFor, TOOL_SECTIONS, useNavigationRequests, VIEW_NAME, type Section, type View } from "./navigation";
+import { MAIN_SECTIONS, requestNavigation, SECTION_ICON, SECTION_VIEW, SHORTCUT_VIEW, shortcutFor, TOOL_SECTIONS, useNavigationRequests, VIEW_NAME, type BrowseRequest, type Request, type Section, type View } from "./navigation";
+
+// Home is the start; every other view is its own chunk, fetched once Home has painted.
+const viewChunks: (() => Promise<unknown>)[] = [];
+function lazyView<M, C extends ComponentType<any>>(load: () => Promise<M>, pick: (m: M) => C) {
+  viewChunks.push(load);
+  return lazy(() => load().then((m) => ({ default: pick(m) })));
+}
+const AccountsView = lazyView(() => import("../features/accounts/AccountsView"), (m) => m.AccountsView);
+const BrowseView = lazyView(() => import("../features/browse/BrowseView"), (m) => m.BrowseView);
+const DebugView = lazyView(() => import("../features/debug/DebugView"), (m) => m.DebugView);
+const DiscordView = lazyView(() => import("../features/discord/DiscordView"), (m) => m.DiscordView);
+const LaunchView = lazyView(() => import("../features/launch/LaunchView"), (m) => m.LaunchView);
+const MonitorView = lazyView(() => import("../features/monitor/MonitorView"), (m) => m.MonitorView);
+const PerformanceView = lazyView(() => import("../features/performance/PerformanceView"), (m) => m.PerformanceView);
+const ServersView = lazyView(() => import("../features/servers/ServersView"), (m) => m.ServersView);
+const SettingsView = lazyView(() => import("../features/settings/SettingsView"), (m) => m.SettingsView);
 
 const MAIN = ".stage main";
+/** Numbers Browse's asks; outlives the shell (a lock unmounts it), as Browse's "already followed" does. */
+let browseSeq = 0;
 
 /** Focuses the first match and says whether there was one: a view's <main> becomes focusable for
  * it, and a field's text is selected. */
@@ -56,7 +64,6 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
   const accounts = useAccounts();
   const groups = useGroups();
   const instances = useInstances().data ?? [];
-  const macroRuns = useMacroRuns().data?.length ?? 0;
   const [view, setView] = useState<View>("dashboard");
   const [area, setArea] = useState<SettingsArea>("launching");
   const [group, setGroup] = useState<number | null>(null);
@@ -72,6 +79,8 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
   const [sectionOrder, setSectionOrder] = useSectionOrder();
   // The game the Servers view shows.
   const [serversPlace, setServersPlace] = useState<number | null>(null);
+  // What Browse was last asked to show (an account's "Open on roblox.com"); `n` tells two alike apart.
+  const [browseAsk, setBrowseAsk] = useState<(BrowseRequest & { n: number }) | null>(null);
   const [adding, setAdding] = useState(false);
   const [addOn, setAddOn] = useState<AddTab>("login");
   const phase = useSplashPhase();
@@ -88,6 +97,18 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
   useEffect(() => {
     document.title = `${viewName} · RoALT`;
   }, [viewName]);
+
+  // So a first visit doesn't wait on its chunk (a switch is a transition: the old view stays meanwhile).
+  useEffect(() => {
+    const load = () => viewChunks.forEach((l) => void l());
+    // The website demo also runs in Safari, which has no requestIdleCallback before 18.4.
+    if (!("requestIdleCallback" in window)) {
+      const timer = setTimeout(load, 1000);
+      return () => clearTimeout(timer);
+    }
+    const idle = requestIdleCallback(load, { timeout: 3000 });
+    return () => cancelIdleCallback(idle);
+  }, []);
 
   // A new account needs its headshot; the backend only asks Roblox for the missing ones.
   useEffect(() => {
@@ -144,9 +165,13 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
   const handlers = useRef({ go, openArea });
   handlers.current = { go, openArea };
   useNavigationRequests(
-    useCallback((r: { view: View; area?: SettingsArea }) => {
+    useCallback((r: Request) => {
       if (r.view === "settings" && r.area) handlers.current.openArea(r.area);
-      else handlers.current.go(r.view);
+      else {
+        const browse = r.browse;
+        if (browse) setBrowseAsk({ ...browse, n: ++browseSeq });
+        handlers.current.go(r.view);
+      }
     }, []),
   );
 
@@ -184,15 +209,7 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
   });
 
   const failed = accounts.error ?? groups.error;
-  if (failed)
-    return (
-      <div className="flex-1 grid place-items-center p-8">
-        <div role="alert" className="notice max-w-md" data-tone="attention">
-          <p className="alert flex-[1_1_240px] min-w-0">{friendly(asError(failed))}</p>
-          <Button size="md" icon="refresh" busy={accounts.isFetching || groups.isFetching} onClick={() => { accounts.refetch(); groups.refetch(); }}>{t("common.tryAgain")}</Button>
-        </div>
-      </div>
-    );
+  if (failed) return <LoadFailed error={failed} busy={accounts.isFetching || groups.isFetching} onRetry={() => { accounts.refetch(); groups.refetch(); }} />;
   if (!accounts.data || !groups.data) return <div className="flex-1" />;
 
   const showAll = () => {
@@ -225,7 +242,6 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
       shortcut: shortcutFor(v),
       current: view === v,
       count: s === "accounts" && accounts.data!.length > 0 ? accounts.data!.length : undefined,
-      badge: s === "macros" && macroRuns > 0 ? macroRuns : undefined,
       onSelect: () => (s === "servers" ? openServers() : s === "accounts" ? showAll() : go(v)),
     };
   };
@@ -253,6 +269,10 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
     ],
   };
 
+  const showViewTransition = (window as { __ROALT_VIEW_TRANSITIONS?: boolean }).__ROALT_VIEW_TRANSITIONS !== false;
+  // WebKitGTK with software compositing aborts inside a view transition (2.54). Fragment skips it.
+  const Transition = (showViewTransition ? ViewTransition : Fragment) as typeof ViewTransition;
+
   const side = settings.tabLayout === "side";
   return (
     <div className="shell">
@@ -277,7 +297,9 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
         </>
       )}
       <div className="stage">
-        <ViewTransition key={view} enter="view-in" exit="view-out" update="none" default="none">
+        {/* Outside the keyed transition: a view whose chunk is still on its way never flashes an empty stage. */}
+        <Suspense fallback={null}>
+        <Transition key={view} {...(showViewTransition ? { enter: "view-in", exit: "view-out", update: "none", default: "none" } : {})}>
           {view === "dashboard" ? (
             <DashboardView
               accounts={accounts.data}
@@ -317,6 +339,8 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
               onAccounts={showAll}
               onSettings={() => jumpTo("client")}
             />
+          ) : view === "browse" ? (
+            <BrowseView accounts={accounts.data} ask={browseAsk} />
           ) : view === "servers" ? (
             <ServersView
               accounts={accounts.data}
@@ -329,8 +353,6 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
             <MonitorView accounts={accounts.data} />
           ) : view === "discord" ? (
             <DiscordView />
-          ) : view === "macros" ? (
-            <MacrosView accounts={accounts.data} settings={settings} />
           ) : view === "debug" ? (
             <DebugView />
           ) : view === "performance" ? (
@@ -338,7 +360,8 @@ export function Shell({ vault, settings, islandSlot }: { vault: VaultStatus; set
           ) : (
             <SettingsView area={area} />
           )}
-        </ViewTransition>
+        </Transition>
+        </Suspense>
       </div>
 
       <AddAccountDialog

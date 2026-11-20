@@ -99,6 +99,39 @@ pub fn mobile_join_url(join: &Join) -> Option<String> {
     Some(s)
 }
 
+/// Where a `roblox-player:` URI from a Roblox page (its Play or Join button, in Browse) would go
+/// (pure), read from its `placelauncherurl` alone: the ticket in it (`gameinfo`) is never read, so
+/// RoALT launches with its own. None for anything else, or a launcher URL off Roblox.
+// Only the Windows Browse webview feeds this back in; Linux has no equivalent hook yet.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn target_of_player_uri(uri: &str) -> Option<crate::model::LaunchTarget> {
+    use crate::model::LaunchTarget as T;
+    let rest = uri.get(..14).filter(|p| p.eq_ignore_ascii_case("roblox-player:")).map(|_| &uri[14..])?;
+    let encoded = rest.split('+').find_map(|part| part.strip_prefix("placelauncherurl:"))?;
+    // Form decoding: the value is encodeURIComponent'd, so a '+' in it can only be a separator's.
+    let pair = format!("u={encoded}");
+    let (_, decoded) = url::form_urlencoded::parse(pair.as_bytes()).next()?;
+    let url = url::Url::parse(&decoded).ok()?;
+    let roblox = url.scheme() == "https" && matches!(url.host_str(), Some("www.roblox.com" | "assetgame.roblox.com"));
+    if !roblox || !url.path().eq_ignore_ascii_case("/Game/PlaceLauncher.ashx") {
+        return None;
+    }
+    let q: std::collections::HashMap<String, String> = url.query_pairs().map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
+    let get = |k: &str| q.get(k).filter(|v| !v.is_empty()).cloned();
+    let id = |k: &str| get(k)?.parse::<i64>().ok().filter(|n| *n > 0);
+    match get("request")?.as_str() {
+        "RequestGame" => Some(T::Place { place_id: id("placeId")?, launch_data: get("launchData") }),
+        "RequestGameJob" => Some(T::Server { place_id: id("placeId")?, job_id: get("gameId")? }),
+        "RequestPrivateGame" => match (get("accessCode"), get("linkCode")) {
+            (Some(access_code), _) => Some(T::PrivateAccess { place_id: id("placeId")?, access_code }),
+            (None, Some(link_code)) => Some(T::PrivateLink { place_id: id("placeId")?, link_code }),
+            (None, None) => None,
+        },
+        "RequestFollowUser" => Some(T::FollowUser { user_id: id("userId")? }),
+        _ => None,
+    }
+}
+
 /// A random 16-digit browser tracker id, unique per launch (the client log names it, which is
 /// how a client is tied back to its account). Kept at or below 2^53 - 1 so JavaScript holds it exactly.
 pub fn new_browser_tracker_id() -> i64 {
@@ -188,6 +221,23 @@ mod tests {
         let private = Join::Private { place_id: 2, link_code: Some("123".into()), access_code: None };
         assert_eq!(mobile_join_url(&private).as_deref(), Some("roblox://experiences/start?placeId=2&linkCode=123"));
         assert_eq!(mobile_join_url(&Join::Follow { user_id: 1 }), None);
+    }
+
+    #[test]
+    fn reads_the_target_back_and_never_the_ticket() {
+        use crate::model::LaunchTarget as T;
+        let ticket = Secret::new("SECRET+TICKET");
+        let back = |join: Join| target_of_player_uri(player_uri(&ticket, 1, &launch(&join), false).expose());
+        assert_eq!(back(Join::Game { place_id: 1818, launch_data: Some("a b+c".into()) }), Some(T::Place { place_id: 1818, launch_data: Some("a b+c".into()) }));
+        assert_eq!(back(Join::Game { place_id: 7, launch_data: None }), Some(T::Place { place_id: 7, launch_data: None }));
+        assert_eq!(back(Join::Job { place_id: 7, job_id: "abc-def".into() }), Some(T::Server { place_id: 7, job_id: "abc-def".into() }));
+        assert_eq!(back(Join::Private { place_id: 7, link_code: Some("123".into()), access_code: None }), Some(T::PrivateLink { place_id: 7, link_code: "123".into() }));
+        assert_eq!(back(Join::Private { place_id: 7, link_code: None, access_code: Some("g".into()) }), Some(T::PrivateAccess { place_id: 7, access_code: "g".into() }));
+        assert_eq!(back(Join::Follow { user_id: 99 }), Some(T::FollowUser { user_id: 99 }));
+        let evil = "roblox-player:1+launchmode:play+placelauncherurl:https%3A%2F%2Fevil.com%2FGame%2FPlaceLauncher.ashx%3Frequest%3DRequestGame%26placeId%3D1";
+        for bad in ["https://www.roblox.com/", "roblox-player:1+launchmode:play", evil, "roblox-player:1+placelauncherurl:not%20a%20url"] {
+            assert_eq!(target_of_player_uri(bad), None, "{bad}");
+        }
     }
 
     #[test]

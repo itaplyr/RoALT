@@ -8,7 +8,7 @@ import { NumberField, Segmented, Switch } from "../../ui/controls";
 import { Dialog } from "../../ui/Dialog";
 import { toast, toastError } from "../../ui/Toast";
 import { isRunning, uptime } from "../launch/Running";
-import { mb } from "../monitor/MonitorView";
+import { mb } from "../monitor/format";
 
 const CAPS = [0, 50, 25, 10, 5];
 /** -1: the default from Settings; 0: never. */
@@ -63,7 +63,7 @@ function LimitsBody({ inst }: { inst: Instance }) {
           mono
           label={t("launch.limits.cpu")}
           value={inst.limits.cpuCap ?? 0}
-          options={CAPS.map((c) => ({ value: c, label: c ? t("launch.limits.pct", { pct: c }) : t("common.off") }))}
+          options={CAPS.map((c) => ({ value: c, label: c ? t("settings.percent", { n: c }) : t("common.off") }))}
           onChange={(c) => set({ cpuCap: c || null })}
         />
       </div>
@@ -78,7 +78,7 @@ function LimitsBody({ inst }: { inst: Instance }) {
             mono
             label={t("launch.limits.trimEvery")}
             value={inst.limits.trimEveryMin ?? -1}
-            options={TRIMS.map((m) => ({ value: m, label: m < 0 ? t("common.default") : m ? t("launch.minutes", { m }) : t("common.off") }))}
+            options={TRIMS.map((m) => ({ value: m, label: m < 0 ? t("common.default") : m ? t("settings.minutesShort", { n: m }) : t("common.off") }))}
             onChange={(m) => set({ trimEveryMin: m < 0 ? null : m })}
           />
           <button className="btn btn-sm" disabled={trimming} onClick={trimNow}>

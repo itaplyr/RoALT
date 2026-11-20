@@ -2,9 +2,9 @@
 // Springs for what moves and resizes, short tweens for what leaves. Exits are faster than entrances.
 import type { Transition } from "motion/react";
 
-export const DUR = { instant: 80, fast: 140, base: 200, slow: 320, exit: 120, dialogExit: 160, viewIn: 460, viewOut: 220, move: 220 } as const;
-export const EASE = { out: [0.22, 1, 0.36, 1], in: [0.4, 0, 1, 1], inOut: [0.65, 0, 0.35, 1] } as const;
-export const EASE_CSS = { out: "cubic-bezier(0.22, 1, 0.36, 1)", in: "cubic-bezier(0.4, 0, 1, 1)", inOut: "cubic-bezier(0.65, 0, 0.35, 1)" } as const;
+export const DUR = { instant: 80, fast: 140, base: 200, exit: 120, dialogExit: 160, move: 220 } as const;
+export const EASE = { out: [0.22, 1, 0.36, 1], in: [0.4, 0, 1, 1] } as const;
+export const EASE_CSS = { out: "cubic-bezier(0.22, 1, 0.36, 1)" } as const;
 
 /** Liquid: everything that moves or resizes overshoots a little and settles, like a drop. */
 export const SPRING = {
@@ -24,10 +24,8 @@ export const SPRING = {
 export const TWEEN = {
   exit: { duration: DUR.exit / 1000, ease: EASE.in },
   fade: { duration: DUR.fast / 1000, ease: EASE.out },
-  enter: { duration: DUR.base / 1000, ease: EASE.out },
   icon: { duration: 0.18, ease: EASE.out },
   number: { duration: 0.6, ease: EASE.out },
-  instant: { duration: 0 },
 } as const satisfies Record<string, Transition>;
 
 /** List entrances: 24 ms apart, at most 8 steps; lists past 40 items don't animate at all. */

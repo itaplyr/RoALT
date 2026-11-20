@@ -1,0 +1,78 @@
+@layer components {
+  .browse {
+    padding: 12px 16px 16px;
+    gap: 10px;
+  }
+  /* One line while it fits: account, page buttons, tabs, then the search taking what is left. */
+  .browse-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 14px;
+  }
+  .browse-account {
+    min-width: 0;
+    max-width: 220px;
+  }
+  .browse-forward svg {
+    transform: scaleX(-1);
+  }
+  .browse-search {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1 1 260px;
+    min-width: 0;
+  }
+  /* Roblox's page (in its box) and RoALT's own tabs over it share this place. */
+  .browse-stage {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+  }
+  /* Roblox's page is drawn over this box by the system, not by the page: square corners. */
+  .browse-pane {
+    flex: 1;
+    min-height: 0;
+    background: var(--surface-1);
+    border: 1px solid var(--line);
+  }
+  .browse-native {
+    position: absolute;
+    inset: 0;
+    padding: 4px 2px 16px;
+  }
+  .browse-grid {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
+  }
+  .browse-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    height: 100%;
+    justify-content: space-between;
+  }
+  .browse-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px;
+  }
+  .browse-icon {
+    flex: none;
+    width: 52px;
+    height: 52px;
+    border-radius: 12px;
+    object-fit: cover;
+    background: var(--surface-2);
+  }
+  .browse-icon-none {
+    display: grid;
+    place-items: center;
+    color: var(--fg-3);
+  }
+}

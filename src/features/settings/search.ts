@@ -22,8 +22,8 @@ const screenOf = (p: Place) => (p.view === "settings" ? `settings:${p.area}` : p
 /** A place's stable key: its screen and group. */
 export const keyOf = (p: Place) => `${screenOf(p)}|${"group" in p ? (p.group ?? "") : ""}`;
 
-// Island order: Settings' areas, then Performance, Discord, Macros, then the views links go to.
-const SCREENS = [...AREAS.map((a) => `settings:${a.id}`), "performance", "discord", "macros", "accounts", "launch", "dashboard"];
+// Island order: Settings' areas, then Performance, Discord, then the views links go to.
+const SCREENS = [...AREAS.map((a) => `settings:${a.id}`), "performance", "discord", "accounts", "launch", "dashboard"];
 const ORDER = new Map(ENTRIES.map((e, i) => [e.id, i]));
 const GROUP_ORDER = new Map<string, number>();
 ENTRIES.forEach((e, i) => {

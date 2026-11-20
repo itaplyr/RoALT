@@ -12,10 +12,19 @@ export function TitleBar({ start, tools, islandSlot }: { start: ReactNode; tools
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
-    const sync = () => win.isMaximized().then(setMaximized, () => {});
-    sync();
+    // Resize fires every frame of a drag or the start-up grow: ask once it settles.
+    let timer = 0;
+    const ask = () => void win.isMaximized().then(setMaximized, () => {});
+    const sync = () => {
+      clearTimeout(timer);
+      timer = window.setTimeout(ask, 100);
+    };
+    ask();
     const un = win.onResized(sync);
-    return () => void un.then((f) => f());
+    return () => {
+      clearTimeout(timer);
+      void un.then((f) => f());
+    };
   }, [win]);
 
   return (

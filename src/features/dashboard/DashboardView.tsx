@@ -2,11 +2,11 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNo
 import { useQueryClient } from "@tanstack/react-query";
 import "./dashboard.css";
 import { api, asError, type AccountSummary, type Favourite, type GameInfo, type Instance } from "../../api";
-import { qk, useInstances, useMacroRuns, useSetSettings, useSettings } from "../../data";
+import { qk, useInstances, useSetSettings, useSettings } from "../../data";
 import { fmtList, t } from "../../i18n";
 import { Skeleton } from "../../ui/Bits";
 import { Button } from "../../ui/Button";
-import { DUR, riseIn, STAGGER, staggerDelay, Swap, useFreshItems } from "../../ui/motion";
+import { DUR, riseIn, STAGGER, staggerDelay, Swap, useFlip, useFreshItems } from "../../ui/motion";
 import { friendly, toastError } from "../../ui/Toast";
 import { Counted } from "../accounts/AccountsToolbar";
 import { isRunning, useNow } from "../launch/Running";
@@ -14,13 +14,13 @@ import { AccountTabs } from "./AccountTabs";
 import { cardFlex, ClientCard, clientName, type GripProps } from "./ClientCard";
 import { ClientMenu, closeKey, type MenuAt } from "./ClientMenu";
 import { EndedPanel } from "./Ended";
+import { ValueTotal } from "./ValueTotal";
 import { homeSorted, reordered, useHomeDetailed, useHomeSizes, type HomeTabs } from "./homeLayout";
 import { HomeToolbar, type Fold } from "./HomeToolbar";
 import { LimitsDialog } from "./LimitsDialog";
 import { usePreviewFps } from "./previewFps";
 import { Trouble } from "./Trouble";
 import { useGridDrag } from "./useGridDrag";
-import { useSteadyFlip } from "./useSteadyFlip";
 import { Welcome } from "./Welcome";
 
 /** True once `on` has lasted `ms`: a quick load shows no placeholder at all. */
@@ -92,7 +92,7 @@ function LoadError({ error, busy, onRetry }: { error: unknown; busy: boolean; on
 }
 
 /** The running clients: the header with its pill, what waits to come back, and the cards. The cards
- * glide when others come, go or move (useSteadyFlip), and rise in as they arrive. */
+ * glide when others come, go or move (useFlip), and rise in as they arrive. */
 function Clients({ accounts, home, list, running, detailed, setDetailed, extra }: {
   accounts: AccountSummary[];
   home: HomeTabs;
@@ -108,13 +108,12 @@ function Clients({ accounts, home, list, running, detailed, setDetailed, extra }
   const [sizes, setSize] = useHomeSizes();
   const [fps] = usePreviewFps();
   const now = useNow(30_000);
-  const macroOn = new Map((useMacroRuns().data ?? []).map((r) => [r.instanceId, r.name]));
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const nameOf = (i: Instance) => clientName(i, byId.get(i.accountId));
   const shown = homeSorted(running, home.order);
   const ids = shown.map((i) => i.id);
   const grid = useRef<HTMLElement | null>(null);
-  const hold = useSteadyFlip(grid, ids.join());
+  const hold = useFlip(grid, { key: ids.join() });
   const drag = useGridDrag((from, over) => {
     hold();
     home.setOrder(reordered(home.order, shown.map((i) => i.accountId), from, over));
@@ -225,7 +224,6 @@ function Clients({ accounts, home, list, running, detailed, setDetailed, extra }
             afkOn={afkOn}
             defaultFps={settings?.fpsCap ?? 0}
             fps={fps}
-            macro={macroOn.get(i.id)}
             now={now}
           />
         ))}
@@ -274,6 +272,7 @@ function Overview({ accounts, home, extra, onAdd, onImport, onAccounts, onPickFa
         />
       )}
       <EndedPanel accounts={accounts} />
+      <ValueTotal accounts={accounts} />
     </>
   );
 }

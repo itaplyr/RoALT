@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { api, type Settings } from "../api";
-import { qk } from "../data";
+import type { Settings } from "../api";
+import { useBackgroundUrl } from "../data";
 import { prefersReducedMotion } from "../ui/motion";
+import { writeStored } from "../ui/stored";
 
 /** Last applied theme, read before first paint so a light-theme start does not flash dark. */
 export const THEME_KEY = "roalt.theme";
@@ -44,6 +44,17 @@ export function accentTokens(hex: string, theme: "dark" | "light") {
   return { fill: hex, ink, text, ring };
 }
 
+/** Puts a user accent on <html> for one theme: `data-accent` and the --user-accent* properties. */
+export function applyAccent(hex: string, theme: "dark" | "light") {
+  const root = document.documentElement;
+  const a = accentTokens(hex, theme);
+  root.dataset.accent = "";
+  root.style.setProperty("--user-accent", a.fill);
+  root.style.setProperty("--user-on-accent", a.ink);
+  root.style.setProperty("--user-accent-text", a.text);
+  root.style.setProperty("--user-accent-ring", a.ring);
+}
+
 /** Applies the theme to <html>: `data-theme` (dark or light, "system" follows Windows live), the
  * accent (`data-accent`), and the background image. A theme change cross-fades the whole window in
  * one snapshot. Returns whether it is dark. */
@@ -53,16 +64,8 @@ export function useTheme(s: Settings | undefined) {
   const accent = s?.accent ?? "";
   // Less than this over a bright picture and no text stays readable.
   const dim = Math.max(40, s?.backgroundDim ?? 60);
-  const bytes = useQuery({ queryKey: qk.background, queryFn: api.backgroundGet, staleTime: Infinity, enabled: !!s }).data;
-  const [image, setImage] = useState<string | null>(null);
+  const image = useBackgroundUrl(!!s);
   const applied = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (!bytes?.byteLength) return setImage(null);
-    const url = URL.createObjectURL(new Blob([bytes]));
-    setImage(url);
-    return () => URL.revokeObjectURL(url);
-  }, [bytes]);
 
   useEffect(() => {
     if (!theme) return;
@@ -72,16 +75,8 @@ export function useTheme(s: Settings | undefined) {
       const t = theme === "system" ? (mq.matches ? "dark" : "light") : theme;
       root.dataset.theme = t;
       setDark(t !== "light");
-      if (accent) {
-        const a = accentTokens(accent, t);
-        root.dataset.accent = "";
-        root.style.setProperty("--user-accent", a.fill);
-        root.style.setProperty("--user-on-accent", a.ink);
-        root.style.setProperty("--user-accent-text", a.text);
-        root.style.setProperty("--user-accent-ring", a.ring);
-      } else {
-        delete root.dataset.accent;
-      }
+      if (accent) applyAccent(accent, t);
+      else delete root.dataset.accent;
       // The window's colour covers the picture by `dim`; surfaces on top are partly see-through.
       for (const v of Object.keys(SEE_THROUGH)) root.style.removeProperty(v);
       if (image) {
@@ -93,13 +88,8 @@ export function useTheme(s: Settings | undefined) {
       } else {
         delete root.dataset.bg;
       }
-      try {
-        localStorage.setItem(THEME_KEY, t);
-        if (accent) localStorage.setItem(ACCENT_KEY, accent);
-        else localStorage.removeItem(ACCENT_KEY);
-      } catch {
-        // Storage can be unavailable; the theme still applies.
-      }
+      writeStored(THEME_KEY, t);
+      writeStored(ACCENT_KEY, accent || null);
     };
     // Only a real switch (not the first apply, not a background change) cross-fades.
     const key = `${theme}|${mq.matches}`;
@@ -123,7 +113,11 @@ function crossFade(apply: () => void) {
   const root = document.documentElement;
   const settle = () => requestAnimationFrame(() => requestAnimationFrame(() => delete root.dataset.instant));
   root.dataset.instant = "";
-  if (prefersReducedMotion() || !("startViewTransition" in document)) {
+  if (
+    prefersReducedMotion() ||
+    !("startViewTransition" in document) ||
+    (window as { __ROALT_VIEW_TRANSITIONS?: boolean }).__ROALT_VIEW_TRANSITIONS === false
+  ) {
     apply();
     return settle();
   }

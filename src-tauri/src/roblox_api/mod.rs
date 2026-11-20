@@ -28,15 +28,16 @@ use zeroize::Zeroizing;
 use crate::error::{AppError, Result};
 use crate::vault::Secret;
 use types::{
-    AuthenticatedUser, Data, FriendOnline, FriendStatus, FriendStatusRow, Game, GameDetails, Presences, PrivateServerList, Profiles, ServerList,
-    ShareLinkResolution, ShareLinkV2, SocialCounts, Thumbnails, TwoStepConfig, UserDetails, UserPresence, VipServerResponse,
+    AgeRecommendation, AuthenticatedUser, BadgePage, CollectiblePage, Data, FriendOnline, FriendStatus, FriendStatusRow, Game, GameDetails, GroupRoleRow,
+    GroupRow, Holding, IdPage, Listed, PassPage, Presences, PrivateServerList, Profiles, RobloxBadgeRow, ServerList, ShareLinkResolution, ShareLinkV2,
+    SocialCounts, Thumbnails, TwoStepConfig, UniverseRow, UserDetails, UserGamePage, UserPresence, VipServerResponse, VoteRow,
 };
 
 /// Called with `(account_id, new cookie)` when Roblox rotates a stored account's cookie.
 pub type RotationSink = Arc<dyn Fn(i64, Secret) + Send + Sync>;
 
 const USER_AGENT: &str =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36";
 const MAX_ATTEMPTS: u32 = 3;
 const CSRF: &str = "x-csrf-token";
 const CHALLENGE: &str = "rblx-challenge-id";
@@ -47,6 +48,15 @@ const HEADSHOT_RETRIES: u32 = 5;
 const HEADSHOT_STEP: Duration = Duration::from_millis(500);
 #[cfg(test)]
 const HEADSHOT_STEP: Duration = Duration::from_millis(1);
+/// Pages read of a game's passes or badges (100 each): a game with more shows the first 500.
+const MAX_LIST_PAGES: usize = 5;
+/// Pages read of an account's limiteds (100 copies each).
+const MAX_INVENTORY_PAGES: usize = 50;
+/// Between inventory pages: Roblox throttles inventory hard.
+#[cfg(not(test))]
+const PAGE_GAP: Duration = Duration::from_secs(1);
+#[cfg(test)]
+const PAGE_GAP: Duration = Duration::from_millis(1);
 /// 2-step `mediaType` names by enum value.
 const MEDIA_TYPES: [&str; 8] =
     ["Email", "SMS", "Authenticator", "RecoveryCode", "SecurityKey", "CrossDevice", "Password", "Passkey"];
@@ -394,15 +404,24 @@ impl Client {
             let page: Data<Game> = self.get(endpoints::GAMES, &url, 0, None).await?;
             let (rows, before) = (page.data.len(), out.len());
             out.extend(page.data.into_iter().filter_map(|g| {
+                let group_id = g.creator.as_ref().filter(|c| c.kind.as_deref() == Some("Group")).and_then(|c| c.id);
                 Some(GameDetails {
                     universe_id: g.id?,
                     root_place_id: g.root_place_id?,
                     name: g.name.unwrap_or_default(),
                     creator: g.creator.and_then(|c| c.name).unwrap_or_default(),
+                    group_id,
+                    avatar_type: g.universe_avatar_type.and_then(|v| v.as_str().map(str::to_owned)).filter(|s| !s.is_empty()),
+                    copying: g.copying_allowed,
                     playing: g.playing.unwrap_or_default(),
                     visits: g.visits.unwrap_or_default(),
                     max_players: g.max_players.unwrap_or_default(),
                     private_servers: g.create_vip_servers_allowed.unwrap_or_default(),
+                    favourites: g.favorited_count.unwrap_or_default(),
+                    created: g.created,
+                    updated: g.updated,
+                    genre: g.genre_l1.or(g.genre).filter(|s| !s.is_empty() && s != "All"),
+                    subgenre: g.genre_l2.filter(|s| !s.is_empty()),
                 })
             }));
             if out.len() - before < rows {
@@ -410,6 +429,239 @@ impl Client {
             }
         }
         Ok(out)
+    }
+
+    /// `GET apis.roblox.com/explore-api/v1/get-sorts` (no cookie; `session_id`, a uuid, groups the
+    /// calls of one run as the website's do): the Charts' game lists (`popular_of`).
+    pub async fn popular_games(&self, session_id: &str) -> Result<Vec<crate::model::GameSort>> {
+        let url = endpoints::fill(endpoints::EXPLORE_SORTS, session_id);
+        Ok(popular_of(self.get(endpoints::EXPLORE_SORTS, &url, 0, None).await?))
+    }
+
+    /// `GET thumbnails.roblox.com/v1/games/icons?universeIds=..` (no cookie, `GAME_ICONS`): universe
+    /// id → image URL (`thumbnails`).
+    pub async fn game_icons(&self, universe_ids: &[i64]) -> (HashMap<i64, String>, bool) {
+        self.thumbnails(endpoints::GAME_ICONS, universe_ids).await
+    }
+
+    /// Icons from a thumbnails `route` whose `{}` takes ≤100 ids (no cookie): id → image URL for
+    /// `Completed` icons, and whether every icon came back: a call that fails (logged), or an icon
+    /// Roblox is still making, leaves it out, and the answer isn't complete (callers don't keep it).
+    async fn thumbnails(&self, route: &'static str, ids: &[i64]) -> (HashMap<i64, String>, bool) {
+        let mut out = HashMap::new();
+        let mut complete = true;
+        for chunk in valid_ids(ids).chunks(100) {
+            let url = endpoints::fill(route, csv(chunk));
+            match self.get(route, &url, 0, None).await {
+                Ok(page) => {
+                    complete &= sort_thumbnails(page, &mut out).is_empty();
+                }
+                Err(e) => {
+                    log::debug!("icons: a call of {} failed: {e}", chunk.len());
+                    complete = false;
+                }
+            }
+        }
+        (out, complete)
+    }
+
+    /// `GET games.roblox.com/v1/games/votes?universeIds=` (no cookie): (up, down); None when
+    /// Roblox doesn't list the universe.
+    pub async fn game_votes(&self, universe_id: i64) -> Result<Option<(i64, i64)>> {
+        let route = endpoints::GAME_VOTES;
+        let rows: Data<VoteRow> = self.get(route, &endpoints::fill(route, universe_id), 0, None).await?;
+        Ok(rows.data.into_iter().find(|r| r.id == Some(universe_id)).map(|r| (r.up_votes.unwrap_or(0), r.down_votes.unwrap_or(0))))
+    }
+
+    /// A game's passes (`GAME_PASSES`, no cookie; ≤5 pages of 100) with their icons. A pass off
+    /// sale has no price; rows without an id are dropped.
+    pub async fn game_passes(&self, universe_id: i64) -> Result<Listed<crate::model::GamePass>> {
+        let route = endpoints::GAME_PASSES;
+        let mut list = paged("game passes", MAX_LIST_PAGES, Duration::ZERO, |token| {
+            let mut url = endpoints::fill(route, universe_id);
+            if let Some(t) = token {
+                url.push_str("&pageToken=");
+                url.push_str(&crate::launcher::uri::encode(&t));
+            }
+            async move {
+                let page: PassPage = self.get(route, &url, 0, None).await?;
+                let rows = page.game_passes.unwrap_or_default().into_iter().filter_map(|p| {
+                    Some(crate::model::GamePass {
+                        id: p.id?,
+                        name: p.display_name.or(p.name).unwrap_or_default(),
+                        price: p.price.filter(|_| p.is_for_sale == Some(true)),
+                        icon_url: None,
+                    })
+                });
+                Ok((rows.collect(), page.next_page_token))
+            }
+        })
+        .await?;
+        let (icons, complete) = self.thumbnails(endpoints::PASS_ICONS, &list.items.iter().map(|p| p.id).collect::<Vec<_>>()).await;
+        for p in &mut list.items {
+            p.icon_url = icons.get(&p.id).cloned();
+        }
+        list.complete &= complete;
+        Ok(list)
+    }
+
+    /// A game's badges (`GAME_BADGES`, no cookie; ≤5 pages of 100), in Roblox's order, with their
+    /// icons. Disabled badges are left out.
+    pub async fn game_badges(&self, universe_id: i64) -> Result<Listed<crate::model::GameBadge>> {
+        let route = endpoints::GAME_BADGES;
+        let mut list = paged("badges", MAX_LIST_PAGES, Duration::ZERO, |cursor| {
+            let url = with_cursor(endpoints::fill(route, universe_id), cursor);
+            async move {
+                let page: BadgePage = self.get(route, &url, 0, None).await?;
+                let rows = page.data.unwrap_or_default().into_iter().filter(|b| b.enabled != Some(false)).filter_map(|b| {
+                    let stats = b.statistics.unwrap_or_default();
+                    Some(crate::model::GameBadge {
+                        id: b.id?,
+                        name: b.display_name.or(b.name).unwrap_or_default(),
+                        awarded: stats.awarded_count.unwrap_or(0),
+                        awarded_yesterday: stats.past_day_awarded_count.unwrap_or(0),
+                        win_rate: stats.win_rate_percentage.filter(|r| r.is_finite()).unwrap_or(0.0).clamp(0.0, 1.0),
+                        icon_url: None,
+                    })
+                });
+                Ok((rows.collect(), page.next_page_cursor))
+            }
+        })
+        .await?;
+        let (icons, complete) = self.thumbnails(endpoints::BADGE_ICONS, &list.items.iter().map(|b| b.id).collect::<Vec<_>>()).await;
+        for b in &mut list.items {
+            b.icon_url = icons.get(&b.id).cloned();
+        }
+        list.complete &= complete;
+        Ok(list)
+    }
+
+    /// A game's age rating (`AGE_RATING`, POST, no cookie): its label and the content it was rated
+    /// for. None when Roblox gives no rating.
+    pub async fn age_rating(&self, universe_id: i64) -> Result<Option<crate::model::AgeRating>> {
+        let url = endpoints::AGE_RATING;
+        let body = serde_json::json!({ "universeId": universe_id.to_string() });
+        let (_, bytes, _) = self.request(Method::POST, url, url, Some(&body), 0, None).await?;
+        let details = json::<AgeRecommendation>(&bytes)?.age_recommendation_details.unwrap_or_default();
+        let Some(label) = details.summary.and_then(|s| s.age_recommendation) else { return Ok(None) };
+        let Some(name) = label.display_name.filter(|n| !n.is_empty()) else { return Ok(None) };
+        let descriptors = details
+            .descriptor_usages
+            .into_iter()
+            .filter(|u| u.contains != Some(false))
+            .filter_map(|u| u.descriptor?.display_name.filter(|n| !n.is_empty()))
+            .collect();
+        Ok(Some(crate::model::AgeRating { label: name, minimum_age: label.minimum_age, descriptors }))
+    }
+
+    /// Whether the game is archived (`UNIVERSE`, no cookie).
+    pub async fn universe_archived(&self, universe_id: i64) -> Result<Option<bool>> {
+        let route = endpoints::UNIVERSE;
+        Ok(self.get::<UniverseRow>(route, &endpoints::fill(route, universe_id), 0, None).await?.is_archived)
+    }
+
+    /// How many places a game has (`UNIVERSE_PLACES`, no cookie; ≤2 pages of 100).
+    pub async fn universe_places(&self, universe_id: i64) -> Result<Listed<i64>> {
+        let route = endpoints::UNIVERSE_PLACES;
+        paged("places", 2, Duration::ZERO, |cursor| {
+            let url = with_cursor(endpoints::fill(route, universe_id), cursor);
+            async move {
+                let page: IdPage = self.get(route, &url, 0, None).await?;
+                Ok((page.data.unwrap_or_default().into_iter().filter_map(|r| r.id).collect(), page.next_page_cursor))
+            }
+        })
+        .await
+    }
+
+    /// A group's member count (`GROUP`, no cookie).
+    pub async fn group_members(&self, group_id: i64) -> Result<Option<i64>> {
+        let route = endpoints::GROUP;
+        Ok(self.get::<GroupRow>(route, &endpoints::fill(route, group_id), 0, None).await?.member_count)
+    }
+
+    /// The groups a player is in, with their role (`USER_GROUPS`, no cookie), biggest first.
+    pub async fn user_groups(&self, user_id: i64) -> Result<Vec<crate::model::PlayerGroup>> {
+        let route = endpoints::USER_GROUPS;
+        let rows: Data<GroupRoleRow> = self.get(route, &endpoints::fill(route, user_id), 0, None).await?;
+        let mut out: Vec<_> = rows
+            .data
+            .into_iter()
+            .filter_map(|r| {
+                let (g, role) = (r.group?, r.role.unwrap_or_default());
+                Some(crate::model::PlayerGroup {
+                    id: g.id?,
+                    name: g.name.unwrap_or_default(),
+                    role: role.name.unwrap_or_default(),
+                    members: g.member_count.unwrap_or(0),
+                })
+            })
+            .collect();
+        out.sort_by_key(|g| std::cmp::Reverse(g.members));
+        Ok(out)
+    }
+
+    /// The Roblox badges a player holds (`ROBLOX_BADGES`, no cookie; a bare array).
+    pub async fn roblox_badges(&self, user_id: i64) -> Result<Vec<crate::model::RobloxBadge>> {
+        let route = endpoints::ROBLOX_BADGES;
+        let rows: Vec<RobloxBadgeRow> = self.get(route, &endpoints::fill(route, user_id), 0, None).await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|b| {
+                Some(crate::model::RobloxBadge {
+                    id: b.id?,
+                    name: b.name.unwrap_or_default(),
+                    image_url: b.image_url.filter(|u| is_rbxcdn(u)),
+                })
+            })
+            .collect())
+    }
+
+    /// The public games a player made (`USER_GAMES`, no cookie; ≤2 pages of 50), newest first.
+    pub async fn user_games(&self, user_id: i64) -> Result<Listed<crate::model::PlayerGame>> {
+        let route = endpoints::USER_GAMES;
+        paged("player games", 2, Duration::ZERO, |cursor| {
+            let url = with_cursor(endpoints::fill(route, user_id), cursor);
+            async move {
+                let page: UserGamePage = self.get(route, &url, 0, None).await?;
+                let rows = page.data.unwrap_or_default().into_iter().filter_map(|g| {
+                    Some(crate::model::PlayerGame {
+                        universe_id: g.id?,
+                        place_id: g.root_place?.id?,
+                        name: g.name.unwrap_or_default(),
+                        visits: g.place_visits.unwrap_or(0),
+                    })
+                });
+                Ok((rows.collect(), page.next_page_cursor))
+            }
+        })
+        .await
+    }
+
+    /// `user_id`'s limiteds (`COLLECTIBLES`) with the account's cookie, a page a second (≤50
+    /// pages of 100 copies), copies of one item added up. A null RAP counts as 0.
+    pub async fn collectibles(&self, account_id: i64, cookie: &Secret, user_id: i64) -> Result<Listed<Holding>> {
+        let route = endpoints::COLLECTIBLES;
+        let rows = paged("limiteds", MAX_INVENTORY_PAGES, PAGE_GAP, |cursor| {
+            let url = with_cursor(endpoints::fill(route, user_id), cursor);
+            async move {
+                let page: CollectiblePage = self.get(route, &url, account_id, Some(cookie)).await?;
+                Ok((page.data.unwrap_or_default(), page.next_page_cursor))
+            }
+        })
+        .await?;
+        let mut held: Vec<Holding> = Vec::new();
+        let mut at: HashMap<i64, usize> = HashMap::new();
+        for r in rows.items {
+            let Some(asset_id) = r.asset_id else { continue };
+            match at.get(&asset_id) {
+                Some(&i) => held[i].copies += 1,
+                None => {
+                    at.insert(asset_id, held.len());
+                    held.push(Holding { asset_id, name: r.name.unwrap_or_default(), copies: 1, rap: r.recent_average_price.unwrap_or(0).max(0) });
+                }
+            }
+        }
+        Ok(Listed { items: held, more: rows.more, complete: rows.complete })
     }
 
     /// `GET thumbnails.roblox.com/v1/places/gameicons?placeIds=..` (no cookie, `PLACE_ICONS`):
@@ -970,6 +1222,51 @@ fn csv(ids: &[i64]) -> String {
     ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
 }
 
+/// `url` with `&cursor=` when there is one (URL-encoded, passed through opaque).
+fn with_cursor(mut url: String, cursor: Option<String>) -> String {
+    if let Some(c) = cursor {
+        url.push_str("&cursor=");
+        url.push_str(&crate::launcher::uri::encode(&c));
+    }
+    url
+}
+
+/// A list read page by page: `page(cursor)` gives a page's rows and the next cursor (None or
+/// empty: the end), `gap` apart, at most `max` pages. A first page that fails is the error; a
+/// later one keeps what was read (`more`, not `complete`). Stopping at `max` is logged (`more`).
+async fn paged<T, F, Fut>(what: &str, max: usize, gap: Duration, mut page: F) -> Result<Listed<T>>
+where
+    F: FnMut(Option<String>) -> Fut,
+    Fut: std::future::Future<Output = Result<(Vec<T>, Option<String>)>>,
+{
+    let mut out = Listed { items: Vec::new(), more: false, complete: true };
+    let mut cursor = None;
+    for n in 0..max {
+        if n > 0 && !gap.is_zero() {
+            tokio::time::sleep(gap).await;
+        }
+        match page(cursor.take()).await {
+            Ok((rows, next)) => {
+                out.items.extend(rows);
+                match next.filter(|c| !c.is_empty()) {
+                    Some(c) => cursor = Some(c),
+                    None => return Ok(out),
+                }
+            }
+            Err(e) if n == 0 => return Err(e),
+            Err(e) => {
+                log::info!("{what}: page {} failed, keeping the {} read: {e}", n + 1, out.items.len());
+                out.more = true;
+                out.complete = false;
+                return Ok(out);
+            }
+        }
+    }
+    log::info!("{what}: stopped at {max} pages");
+    out.more = true;
+    Ok(out)
+}
+
 /// Keeps Completed rows with a URL in `out` (by `targetId`); returns the ids still Pending.
 fn sort_thumbnails(page: Thumbnails, out: &mut HashMap<i64, String>) -> Vec<i64> {
     let mut pending = Vec::new();
@@ -984,6 +1281,41 @@ fn sort_thumbnails(page: Thumbnails, out: &mut HashMap<i64, String>) -> Vec<i64>
         }
     }
     pending
+}
+
+/// The Charts' game lists (pure): only lists of games, without ads, games without ids or
+/// empty lists; icons are filled in later.
+fn popular_of(page: types::ExploreSorts) -> Vec<crate::model::GameSort> {
+    page.sorts
+        .into_iter()
+        .filter(|s| s.content_type == "Games" && !s.sort_id.is_empty())
+        .map(|s| crate::model::GameSort {
+            id: s.sort_id,
+            name: s.sort_display_name,
+            games: s
+                .games
+                .into_iter()
+                .filter(|g| !g.is_sponsored)
+                .filter_map(|g| {
+                    Some(crate::model::PopularGame {
+                        universe_id: g.universe_id.filter(|&id| id > 0)?,
+                        root_place_id: g.root_place_id.filter(|&id| id > 0)?,
+                        name: g.name,
+                        playing: g.player_count,
+                        up_votes: g.total_up_votes,
+                        down_votes: g.total_down_votes,
+                        icon_url: None,
+                    })
+                })
+                .collect(),
+        })
+        .filter(|s| !s.games.is_empty())
+        .collect()
+}
+
+/// The error `collectibles` gives for an inventory its owner hid (HTTP 403 without a challenge).
+pub fn is_private_inventory(e: &AppError) -> bool {
+    matches!(e, AppError::Roblox(m) if m == "HTTP 403")
 }
 
 /// An https URL on *.rbxcdn.com.

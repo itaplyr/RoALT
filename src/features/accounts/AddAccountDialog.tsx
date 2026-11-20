@@ -12,6 +12,28 @@ import { friendly, toast } from "../../ui/Toast";
 
 export type Tab = "login" | "cookie" | "many";
 
+/** The start of every .ROBLOSECURITY value: lines holding one are cookie imports. */
+const COOKIE_MARK = "_|WARNING:-DO-NOT-SHARE-THIS.";
+type Login = { username: string; password: string };
+
+/** The `user:pass` lines of pasted text (pure): split at the first ":" (a password may hold more),
+ * both parts trimmed, cookie lines and lines without both parts left out, each username once. */
+export function parseLogins(text: string): Login[] {
+  const seen = new Set<string>();
+  const out: Login[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const at = line.indexOf(":");
+    if (line.includes(COOKIE_MARK) || at < 0) continue;
+    const username = line.slice(0, at).trim();
+    // Trimmed: stray spaces around pasted lines are far likelier than a password's own.
+    const password = line.slice(at + 1).trim();
+    if (!username || !password || seen.has(username.toLowerCase())) continue;
+    seen.add(username.toLowerCase());
+    out.push({ username, password });
+  }
+  return out;
+}
+
 const TABS: Tab[] = ["login", "cookie", "many"];
 const RAM_FILTER = [{ name: "Roblox Account Manager", extensions: ["json"] }];
 
@@ -60,12 +82,20 @@ export function AddAccountDialog({ open, startOn = "login", onClose, onAdded }: 
   const [busy, setBusy] = useState(false);
   const [cookie, setCookie] = useState("");
   const [many, setMany] = useState("");
+  // The sign-in under way of a `user:pass` import; `stop` is true unless one runs (or once it should end).
+  const [queue, setQueue] = useState<{ n: number; total: number; name: string } | null>(null);
+  const stop = useRef(true);
 
   useEffect(() => {
     if (open) return;
     setCookie("");
     setMany("");
     setError(null);
+    // Closed mid-import: no more sign-in windows, and the open one goes.
+    if (!stop.current) {
+      stop.current = true;
+      void api.accountLoginCancel().catch(() => {});
+    }
   }, [open]);
 
   const pick = (next: Tab) => {
@@ -150,8 +180,49 @@ export function AddAccountDialog({ open, startOn = "login", onClose, onAdded }: 
     const value = many;
     setMany(""); // as with one cookie, the field never keeps what was submitted
     if (!value.trim() || busy) return;
-    runImport(() => api.accountsImportCookies(value));
+    const logins = parseLogins(value);
+    runImport(async () => {
+      // Cookies first (also what says "nothing found" when there is neither), then the sign-ins.
+      const r = value.includes(COOKIE_MARK) || !logins.length ? await api.accountsImportCookies(value) : { added: 0, updated: 0, skipped: 0, failed: 0 };
+      return logins.length ? signInEach(logins, r) : r;
+    });
   }
+
+  /** One Roblox sign-in window after another, each filled in from its line; the user finishes each
+   * (captcha, Log In) or closes it to skip. Stop ends it after the open one. */
+  async function signInEach(logins: Login[], r: ImportReport) {
+    const had = new Set((qc.getQueryData<AccountSummary[]>(qk.accounts) ?? []).map((a) => a.id));
+    let refused: string | null = null;
+    stop.current = false;
+    try {
+      for (const [i, fill] of logins.entries()) {
+        if (stop.current) break;
+        setQueue({ n: i + 1, total: logins.length, name: fill.username });
+        try {
+          const a = await api.accountAddLogin(fill);
+          if (had.has(a.id)) r.updated++;
+          else r.added++;
+        } catch (e) {
+          const err = asError(e);
+          if (err.kind === "locked") throw e;
+          if (err.kind !== "cancelled") {
+            r.failed++;
+            refused = friendly(err);
+          }
+        }
+      }
+    } finally {
+      stop.current = true;
+      setQueue(null);
+    }
+    if (refused) toast(refused, "error");
+    return r;
+  }
+
+  const stopQueue = () => {
+    stop.current = true;
+    void api.accountLoginCancel().catch(() => {});
+  };
 
   async function fromRam() {
     if (busy) return;
@@ -245,7 +316,18 @@ export function AddAccountDialog({ open, startOn = "login", onClose, onAdded }: 
                 />
               </label>
               <p className="text-[13px] text-fg-3">{tx("accounts.add.manyHelp", {}, { mono: (s) => <span className="mono">{s}</span> })}</p>
-              {busy && <div className="live-bar" role="status" aria-label={t("accounts.add.importing")} />}
+              {queue ? (
+                <div role="status" className="flex flex-col gap-2">
+                  <div className="live-bar" />
+                  <span>{t("accounts.add.queue", { n: queue.n, total: queue.total, name: queue.name })}</span>
+                  <span className="text-[13px] text-fg-3">{t("accounts.add.queueHint")}</span>
+                  <div>
+                    <Button size="sm" icon="stop" onClick={stopQueue}>{t("accounts.add.stop")}</Button>
+                  </div>
+                </div>
+              ) : (
+                busy && <div className="live-bar" role="status" aria-label={t("accounts.add.importing")} />
+              )}
               {alert}
               <div className="flex flex-col items-start gap-1.5">
                 <Button icon="upload" disabled={busy} aria-describedby="acc-ram-hint" onClick={fromRam}>

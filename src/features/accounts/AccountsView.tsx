@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from "motion/react";
 import "./accounts.css";
 import { api, type AccountStatus, type AccountSummary, type Density, type Group, type Presence, type VaultMode } from "../../api";
 import { qk, setAccounts, useInstances, usePresence, useSettings, useUpdateAccount } from "../../data";
-import { isRtl, t, tx, type Key } from "../../i18n";
+import { isRtl, t, type Key } from "../../i18n";
 import { announce, overlayOpen } from "../../ui/a11y";
 import { Kbd } from "../../ui/Bits";
 import { Button, IconButton } from "../../ui/Button";
@@ -18,11 +18,11 @@ import { toast } from "../../ui/Toast";
 import { isLive } from "../launch/Running";
 import { AccountMenu, type MenuAt } from "./AccountMenu";
 import { AccountsTable } from "./AccountsTable";
-import { AccountsToolbar, Counted, focusFirstItem } from "./AccountsToolbar";
+import { AccountsToolbar, Counted } from "./AccountsToolbar";
 import { DetailPanel, type DetailTab } from "./DetailPanel";
 import { ExportCookies } from "./ExportCookies";
 import { GroupChips } from "./GroupsNav";
-import { accountName, ago } from "./shared";
+import { ago, useRemoveAccounts } from "./shared";
 
 type Filter = "all" | "inGame" | "online" | "offline" | Exclude<AccountStatus, "valid"> | "fav";
 // The filters match what the Status column shows.
@@ -81,9 +81,6 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
   const [tab, setTab] = useState<DetailTab>("overview");
   const [narrow, setNarrow] = useState(false);
   const [sheet, setSheet] = useState(false);
-  const [removeIds, setRemoveIds] = useState<number[]>([]);
-  const [removeOpen, setRemoveOpen] = useState(false);
-  const [mainConfirm, setMainConfirm] = useState(false);
   const [befriendOpen, setBefriendOpen] = useState(false);
   // Accounts whose cookies "Export cookies" writes: null for all, undefined while closed.
   const [exportIds, setExportIds] = useState<number[] | null | undefined>(undefined);
@@ -196,22 +193,13 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
     },
   });
 
-  const remove = useMutation({
-    mutationFn: (ids: number[]) => api.accountsRemove(ids),
-    onSuccess: (_, ids) => {
-      // The focus goes to the row after the last one removed (else before it), not to a button that is gone.
-      const keep = (a: AccountSummary) => !ids.includes(a.id);
-      const last = shown.length - 1 - [...shown].reverse().findIndex((a) => !keep(a));
-      const next = shown.slice(last + 1).find(keep) ?? shown.slice(0, last).reverse().find(keep);
-      refocus.current = next?.id ?? null;
-      setAccounts(qc, (list) => list.filter((a) => !ids.includes(a.id)));
-      // Ids can be reused by the next account added: drop what belonged to these.
-      for (const id of ids) qc.removeQueries({ queryKey: qk.info(id) });
-      setChecked(new Set());
-      setRemoveOpen(false);
-      setMainConfirm(false);
-      toast(t("accounts.toast.removed", { count: ids.length }));
-    },
+  const removing = useRemoveAccounts(accounts, (ids) => {
+    // The focus goes to the row after the last one removed (else before it), not to a button that is gone.
+    const keep = (a: AccountSummary) => !ids.includes(a.id);
+    const last = shown.length - 1 - [...shown].reverse().findIndex((a) => !keep(a));
+    const next = shown.slice(last + 1).find(keep) ?? shown.slice(0, last).reverse().find(keep);
+    refocus.current = next?.id ?? null;
+    setChecked(new Set());
   });
 
   const reorder = useMutation({
@@ -228,18 +216,12 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
   // button that may be gone.
   const refocus = useRef<number | null | undefined>(undefined);
   useEffect(() => {
-    if (refocus.current === undefined || removeOpen || mainConfirm) return;
+    if (refocus.current === undefined || removing.open) return;
     const id = refocus.current;
     refocus.current = undefined;
     const to = (id !== null && document.querySelector<HTMLElement>(`[data-name="${id}"]`)) || document.getElementById("account-filter") || document.querySelector<HTMLElement>("[data-rest]");
     to?.focus();
-  }, [removeOpen, mainConfirm, accounts]);
-
-  const mainToRemove = removeIds.map((id) => byId.get(id)).find((a) => a?.main);
-  const askRemove = (ids: number[]) => {
-    setRemoveIds(ids);
-    setRemoveOpen(true);
-  };
+  }, [removing.open, accounts]);
 
   // ---------- selection ----------
 
@@ -324,7 +306,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
       } else if (e.key === "Delete" && !typing) {
         const row = e.target instanceof Element ? e.target.closest<HTMLElement>("tr[data-id]") : null;
         const ids = checkedIds.length ? checkedIds : row ? [Number(row.dataset.id)] : openId !== undefined ? [openId] : [];
-        if (ids.length) askRemove(ids);
+        if (ids.length) removing.ask(ids);
       } else if (e.key === "Escape" && !typing) {
         // The sheet over the list closes first; the selection clears after.
         if (sheet) closeSheet();
@@ -372,7 +354,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
           tab={tab}
           onTab={setTab}
           onValidate={() => runValidate([current.id])}
-          onRemove={() => askRemove([current.id])}
+          onRemove={() => removing.ask([current.id])}
           onLaunch={() => onLaunch([current.id])}
           menuOpen={menu?.solo === true && menu.id === current.id}
           onMenu={(from) => {
@@ -434,7 +416,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
             onPlay={() => onLaunch(checkedIds)}
             onBefriend={() => setBefriendOpen(true)}
             onAddToGroup={addToGroup}
-            onRemove={() => askRemove(checkedIds)}
+            onRemove={() => removing.ask(checkedIds)}
             onClear={clear}
           />
         </header>
@@ -496,7 +478,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
                 {filter === "all" ? t("accounts.filter.status") : t(FILTERS.find((f) => f.key === filter)!.label)}
                 <Icon name="chevron" size={12} />
               </button>
-              <Popover id="status-filter" anchor={statusMenu.name} role="menu" label={t("accounts.filter.status")} onToggle={focusFirstItem("status-filter")}>
+              <Popover id="status-filter" anchor={statusMenu.name} role="menu" label={t("accounts.filter.status")}>
                 {FILTERS.map((f) => (
                   <MenuRadioItem
                     key={f.key}
@@ -592,40 +574,9 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
         onClose={() => setMenu(null)}
         onLaunch={onLaunch}
         onValidate={runValidate}
-        onRemove={askRemove}
+        onRemove={removing.ask}
       />
-      <ConfirmDialog
-        open={removeOpen}
-        onClose={() => setRemoveOpen(false)}
-        onConfirm={() => {
-          // The MAIN goes only after a second, explicit confirm.
-          if (!mainToRemove) return remove.mutate(removeIds);
-          setRemoveOpen(false);
-          setMainConfirm(true);
-        }}
-        busy={remove.isPending}
-        title={t("accounts.removeTitle", { count: removeIds.length })}
-        text={
-          <>
-            {removeIds.length === 1
-              ? tx("accounts.removeOneText", {
-                  name: <span className="text-fg font-medium">{byId.has(removeIds[0]) ? accountName(byId.get(removeIds[0])!) : t("accounts.thisAccount")}</span>,
-                })
-              : t("accounts.removeManyText", { count: removeIds.length })}
-            {mainToRemove && <p className="alert mt-2">{t("accounts.removeMainWarning", { name: `@${mainToRemove.username}` })}</p>}
-          </>
-        }
-        confirmLabel={t("common.remove")}
-      />
-      <ConfirmDialog
-        open={mainConfirm}
-        onClose={() => setMainConfirm(false)}
-        onConfirm={() => remove.mutate(removeIds)}
-        busy={remove.isPending}
-        title={t("accounts.removeMainTitle")}
-        text={t("accounts.removeMainConfirm", { name: `@${mainToRemove?.username ?? ""}` })}
-        confirmLabel={t("common.remove")}
-      />
+      {removing.dialogs}
       <ConfirmDialog
         open={befriendOpen}
         onClose={() => setBefriendOpen(false)}

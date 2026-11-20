@@ -1,4 +1,6 @@
 import { useSyncExternalStore } from "react";
+import { signal } from "../signal";
+import { readStored, writeStored } from "../stored";
 
 // Motion, one source for CSS and JS: this PC's choice (Settings › Appearance › Motion), kept in
 // localStorage so it survives a restart. "on" (the default, whatever Windows says): the liquid
@@ -8,7 +10,7 @@ import { useSyncExternalStore } from "react";
 export type MotionPreference = "on" | "reduced" | "off";
 const KEY = "roalt.motion";
 
-const subs = new Set<() => void>();
+const { subscribe, notify } = signal();
 let installed = false;
 let pref: MotionPreference = "on";
 let apply = () => {};
@@ -21,18 +23,13 @@ function read(stored: string | null): MotionPreference {
 export function installReducedMotion() {
   if (installed) return;
   installed = true;
-  let forced = false;
-  try {
-    forced = import.meta.env.DEV && new URLSearchParams(location.search).get("rm") === "1";
-    pref = read(localStorage.getItem(KEY));
-  } catch {
-    // No URL or storage to read: On.
-  }
+  const forced = import.meta.env.DEV && new URLSearchParams(location.search).get("rm") === "1";
+  pref = read(readStored(KEY));
   apply = () => {
     const root = document.documentElement;
     root.toggleAttribute("data-rm", forced || pref !== "on");
     root.toggleAttribute("data-motion-off", pref === "off");
-    subs.forEach((f) => f());
+    notify();
   };
   apply();
 }
@@ -41,7 +38,7 @@ export function installReducedMotion() {
 export const prefersReducedMotion = () => document.documentElement.hasAttribute("data-rm");
 
 /** No motion at all. */
-export const motionOff = () => document.documentElement.hasAttribute("data-motion-off");
+const motionOff = () => document.documentElement.hasAttribute("data-motion-off");
 
 /** This PC's choice now. */
 export const motionPreference = () => pref;
@@ -49,19 +46,9 @@ export const motionPreference = () => pref;
 /** This PC's choice, kept on this PC only. */
 export function setMotionPreference(next: MotionPreference) {
   pref = next;
-  try {
-    if (next === "on") localStorage.removeItem(KEY);
-    else localStorage.setItem(KEY, next);
-  } catch {
-    // Not kept: it applies until RoALT restarts.
-  }
+  writeStored(KEY, next === "on" ? null : next);
   apply();
 }
-
-const subscribe = (f: () => void) => {
-  subs.add(f);
-  return () => void subs.delete(f);
-};
 
 /** True while motion should be reduced (Reduced or Off); re-renders when the choice changes. */
 export function useReducedMotionFlag() {

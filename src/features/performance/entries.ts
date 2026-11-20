@@ -53,6 +53,7 @@ export const PERFORMANCE_ENTRIES: readonly Entry[] = [
   { id: "noGrass", ...flags, label: "performance.noGrass", hint: "performance.hintNoGrass", field: "renderFlags.noGrass", control: { kind: "switch" } },
   { id: "lowestFrm", ...flags, label: "performance.lowestFrm", hint: "performance.hintLowestFrm", field: "renderFlags.lowestFrm", control: { kind: "switch" }, aliases: ["frm"] },
   { id: "pauseVoxelizer", ...flags, label: "performance.pauseVoxelizer", hint: "performance.hintPauseVoxelizer", field: "renderFlags.pauseVoxelizer", control: { kind: "switch" }, aliases: ["voxel"] },
+  { id: "customFlags", place: tune, label: "flags.title", hint: (c) => (c.s.customFlagsScope === "account" ? "flags.hintAccount" : "flags.hint"), more: "flags.more", field: ["customFlags", "customFlagsScope"], control: { kind: "custom" }, aliases: ["fflags", "fastflags", "flags", "ClientAppSettings", "bloxstrap"] },
   { id: "minimize", place: tune, label: "settings.minimize", hint: "performance.hintMinimize", more: "settings.minimizeHint", field: "minimizeOnLaunch", control: { kind: "switch" }, aliases: ["hide"] },
   { id: "tinyOnLaunch", place: tune, label: "performance.tinyOnLaunch", hint: "performance.hintTinyOnLaunch", field: "tinyOnLaunch", control: { kind: "switch" }, aliases: ["micro", "small", "tiny window size", "width", "height"] },
   { id: "mute", place: tune, label: "performance.muteOnLaunch", hint: "performance.hintMuteOnLaunch", field: "muteOnLaunch", control: { kind: "switch" }, aliases: ["sound", "audio"] },

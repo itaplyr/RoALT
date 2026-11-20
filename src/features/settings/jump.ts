@@ -13,7 +13,7 @@ const targets = new Map<string, HTMLElement>();
 function snapshot(): Ctx | null {
   const s = queryClient.getQueryData<Settings>(qk.settings);
   const vault = queryClient.getQueryData<VaultStatus>(qk.vault);
-  return s && vault ? { s, vault, background: !!queryClient.getQueryData<ArrayBuffer>(qk.background)?.byteLength } : null;
+  return s && vault ? { s, vault, background: !!queryClient.getQueryData<string | null>(qk.background) } : null;
 }
 
 /** Asks for row `id`: once it is on screen it scrolls to the centre, takes the focus and flashes. */

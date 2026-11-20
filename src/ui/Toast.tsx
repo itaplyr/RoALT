@@ -1,25 +1,22 @@
 import { playSound, type Sound } from "./sounds";
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
 import { asError, type ErrorPayload } from "../api";
-import { IconButton } from "./Button";
+import { Button, IconButton } from "./Button";
 import { isRtl, t, type Key } from "../i18n";
 import { SPRING, TWEEN, useReducedMotionFlag } from "./motion";
+import { signal } from "./signal";
 
 type Tone = "ok" | "error";
 type Item = { id: number; text: string; tone: Tone };
 
 let items: Item[] = [];
 let nextId = 0;
-const subs = new Set<() => void>();
+const { subscribe, notify } = signal();
 const publish = (next: Item[]) => {
   items = next;
-  subs.forEach((f) => f());
-};
-const subscribe = (f: () => void) => {
-  subs.add(f);
-  return () => subs.delete(f);
+  notify();
 };
 
 /** Gone from the list at once; AnimatePresence plays its exit. */
@@ -70,6 +67,21 @@ export function toastError(e: unknown) {
   if (err.kind !== "cancelled") toast(friendly(err), "error");
 }
 
+/** In place of a screen whose data could not be read: why, and Try again. */
+export function LoadFailed({ title, error, busy, onRetry }: { title?: string; error: unknown; busy?: boolean; onRetry: () => void }) {
+  return (
+    <div className="flex-1 grid place-items-center p-8">
+      <div role="alert" className="notice max-w-md" data-tone="attention">
+        <div className="flex-[1_1_240px] min-w-0 flex flex-col gap-1">
+          {title && <h1 className="section-title">{title}</h1>}
+          <p className="alert">{friendly(asError(error))}</p>
+        </div>
+        <Button size="md" icon="refresh" busy={busy} onClick={onRetry}>{t("common.tryAgain")}</Button>
+      </div>
+    </div>
+  );
+}
+
 /** The modal dialog on top, if any. A modal makes everything outside it inert, so the toasts move
  * into it while it is open (they would sit dimmed under it, out of reach, otherwise). */
 function useTopModal() {
@@ -78,15 +90,16 @@ function useTopModal() {
     let stack = [...document.querySelectorAll<HTMLDialogElement>("dialog:modal")];
     setTop(stack.at(-1) ?? null);
     const mo = new MutationObserver((records) => {
-      for (const { target } of records) {
-        if (!(target instanceof HTMLDialogElement)) continue;
+      for (const { type, target } of records) {
+        if (type !== "attributes" || !(target instanceof HTMLDialogElement)) continue;
         stack = stack.filter((d) => d !== target);
         if (target.matches(":modal")) stack.push(target);
       }
       stack = stack.filter((d) => d.isConnected && d.matches(":modal"));
       setTop(stack.at(-1) ?? null);
     });
-    mo.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["open"] });
+    // childList too: a dialog its owner unmounts while open leaves with no change to `open`.
+    mo.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["open"] });
     return () => mo.disconnect();
   }, []);
   return top;
@@ -97,41 +110,50 @@ export function Toaster() {
   const reduced = useReducedMotionFlag();
   const away = (isRtl() ? -1 : 1) * 16;
   const top = useTopModal();
-  const box = useRef<HTMLDivElement>(null);
+  // One container for the toaster's life, moved here rather than portalled anew into each modal:
+  // React never sees its parent change, so it never removes a node from where it no longer is.
+  const [box] = useState(() => {
+    const el = document.createElement("div");
+    el.popover = "manual";
+    el.dataset.passive = "";
+    el.dataset.tauriDragRegion = "false";
+    el.className = "toaster flex flex-col items-end gap-2 pointer-events-none";
+    return el;
+  });
+  useEffect(() => () => box.remove(), [box]);
   const newest = list.at(-1)?.id;
   // In the top layer, and raised again for each new toast: above whatever opened since (a menu).
+  // A move out of the document hides it, so it is shown again after each move too.
   useLayoutEffect(() => {
-    const el = box.current;
-    if (!el) return;
-    if (el.matches(":popover-open")) el.hidePopover();
-    el.showPopover();
-  }, [top, newest]);
+    const host = top ?? document.body;
+    if (box.parentNode !== host) host.append(box);
+    if (box.matches(":popover-open")) box.hidePopover();
+    box.showPopover();
+  }, [box, top, newest]);
   // Each toast is its own status or alert region: no live region around them (read twice).
   return createPortal(
-    <div ref={box} popover="manual" data-passive className="toaster flex flex-col items-end gap-2 pointer-events-none" data-tauri-drag-region="false">
-      <AnimatePresence initial={false}>
-        {list.map((item) => (
-          <motion.div
-            key={item.id}
-            layout={reduced ? false : "position"}
-            role={item.tone === "error" ? "alert" : "status"}
-            className={`toast ${item.tone === "error" ? "toast-error" : ""}`}
-            // It rises as a squashed drop and wobbles to rest; it leaves as a drop that shrinks away.
-            initial={{ opacity: 0, y: reduced ? 0 : 28, scaleX: reduced ? 1 : 0.7, scaleY: reduced ? 1 : 0.85 }}
-            animate={{ opacity: 1, y: 0, scaleX: 1, scaleY: 1, transition: { ...SPRING.snappy, bounce: 0.45, visualDuration: 0.42, opacity: TWEEN.fade } }}
-            exit={{ opacity: 0, x: reduced ? 0 : away, scale: reduced ? 1 : 0.6, transition: TWEEN.exit }}
-            onPointerEnter={() => hold(item.id)}
-            onPointerLeave={() => resume(item.id)}
-            onFocus={() => hold(item.id)}
-            onBlur={() => resume(item.id)}
-          >
-            <span aria-hidden="true" className="toast-mark" />
-            <span className="flex-1 min-w-0 break-words">{item.text}</span>
-            <IconButton icon="x" size="sm" label={t("common.dismiss")} onClick={() => dismiss(item.id)} />
-          </motion.div>
-        ))}
-      </AnimatePresence>
-    </div>,
-    top ?? document.body,
+    <AnimatePresence initial={false}>
+      {list.map((item) => (
+        <motion.div
+          key={item.id}
+          layout={reduced ? false : "position"}
+          role={item.tone === "error" ? "alert" : "status"}
+          className={`toast ${item.tone === "error" ? "toast-error" : ""}`}
+          // It rises as a squashed drop and wobbles to rest; it leaves as a drop that shrinks away.
+          initial={{ opacity: 0, y: reduced ? 0 : 28, scaleX: reduced ? 1 : 0.7, scaleY: reduced ? 1 : 0.85 }}
+          animate={{ opacity: 1, y: 0, scaleX: 1, scaleY: 1, transition: { ...SPRING.snappy, bounce: 0.45, visualDuration: 0.42, opacity: TWEEN.fade } }}
+          exit={{ opacity: 0, x: reduced ? 0 : away, scale: reduced ? 1 : 0.6, transition: TWEEN.exit }}
+          onPointerEnter={() => hold(item.id)}
+          onPointerLeave={() => resume(item.id)}
+          onFocus={() => hold(item.id)}
+          onBlur={() => resume(item.id)}
+        >
+          <span aria-hidden="true" className="toast-mark" />
+          <span className="flex-1 min-w-0 break-words">{item.text}</span>
+          <IconButton icon="x" size="sm" label={t("common.dismiss")} onClick={() => dismiss(item.id)} />
+        </motion.div>
+      ))}
+    </AnimatePresence>,
+    box,
   );
 }

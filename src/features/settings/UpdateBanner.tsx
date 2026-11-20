@@ -4,28 +4,26 @@ import { api } from "../../api";
 import { qk, useInstances } from "../../data";
 import { ConfirmDialog } from "../../ui/Dialog";
 import { Collapse } from "../../ui/motion";
+import { signal } from "../../ui/signal";
 import { toastError } from "../../ui/Toast";
 import { isRunning } from "../launch/Running";
 import { t, tx } from "../../i18n";
 
 /** The version Later hid: not offered again until RoALT restarts, or Check now finds it. */
 let hidden: string | null = null;
-const subs = new Set<() => void>();
+const { subscribe, notify } = signal();
 const hide = (version: string | null) => {
   hidden = version;
-  subs.forEach((f) => f());
-};
-const subscribe = (f: () => void) => {
-  subs.add(f);
-  return () => void subs.delete(f);
+  notify();
 };
 export const unhideUpdate = () => hide(null);
 
 /** The newer release on offer (self_update), or null: none known, or Later hid it. */
 export function useUpdateOffer() {
   // The start-up check can finish before the app://update listener exists: ask the cached
-  // result again (no network) until an update is known.
-  const version = useQuery({ queryKey: qk.appUpdate, queryFn: api.selfUpdateStatus, refetchInterval: (q) => (q.state.data?.available ? false : 5_000) }).data?.available;
+  // result again (no network) for about a minute, until an update is known. Later ones come
+  // by app://update (Root) or Check now.
+  const version = useQuery({ queryKey: qk.appUpdate, queryFn: api.selfUpdateStatus, refetchInterval: (q) => (q.state.data?.available || q.state.dataUpdateCount >= 12 ? false : 5_000) }).data?.available;
   const later = useSyncExternalStore(subscribe, () => hidden);
   return version && version !== later ? version : null;
 }

@@ -4,4 +4,4 @@
  * How a bulk launch places its accounts: all in one server, or each in a different one
  * (public-game targets only; targets that already name one server ignore it).
  */
-export type SameServer = "off" | "pickFirst" | "followFirst" | "ownPrivate" | "randomPublic" | "closest";
+export type SameServer = "off" | "pickFirst" | "followFirst" | "ownPrivate" | "randomPublic" | "closest" | "mostFull" | "mostEmpty";

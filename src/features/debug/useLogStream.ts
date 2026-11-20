@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, asError, events, type ErrorPayload } from "../../api";
+import { readStored, writeStored } from "../../ui/stored";
 
 /** Lines kept in view; older ones stay in roalt.log. */
 const KEEP = 5000;
@@ -25,20 +26,6 @@ let nextId = 0;
 /** The newest line Clear hid. roalt.log keeps everything (the diagnostics report reads it), so what
  * the history shows starts after this line, across tab switches and restarts. */
 const CLEARED_KEY = "roalt.debug.clearedAfter";
-function clearedAfter(): string | null {
-  try {
-    return localStorage.getItem(CLEARED_KEY);
-  } catch {
-    return null;
-  }
-}
-function setClearedAfter(line: string) {
-  try {
-    localStorage.setItem(CLEARED_KEY, line);
-  } catch {
-    // Then Clear lasts until the tab closes.
-  }
-}
 
 /** The lines after the last `marker`; all of them when it has aged out of `lines`, as they are then
  * all newer than it. */
@@ -101,7 +88,7 @@ export function useLogStream(paused: boolean) {
             prev = levelOf(s, prev);
             return { id: 0, level: prev, text: s };
           });
-          const shown = all.slice(all.length - afterMarker(text, clearedAfter()).length);
+          const shown = all.slice(all.length - afterMarker(text, readStored(CLEARED_KEY)).length);
           // Ids in reading order: the history, then what came in while it loaded.
           for (const l of [...shown, ...queue.current]) l.id = nextId++;
           setLines(keep(shown));
@@ -136,7 +123,7 @@ export function useLogStream(paused: boolean) {
     clear: () => {
       const newest = queue.current.at(-1) ?? lines.at(-1);
       // A live line can span several of the file's.
-      if (newest) setClearedAfter(newest.text.split("\n").at(-1) ?? newest.text);
+      if (newest) writeStored(CLEARED_KEY, newest.text.split("\n").at(-1) ?? newest.text);
       queue.current = [];
       setHeld(0);
       setLines([]);

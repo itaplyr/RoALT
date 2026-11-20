@@ -8,7 +8,7 @@ import { useWindowTools } from "../features/dashboard/windowTools";
 import { useLaunchActivity } from "../features/launch/launchQueue";
 import { LaunchProgress } from "../features/launch/LaunchProgress";
 import { isRunning, STATES } from "../features/launch/Running";
-import { jumpTo } from "../features/settings/jump";
+import { jumpTo } from "../features/settings/jumpTo";
 import { usePublicBlock } from "../features/settings/PublicNetworkBanner";
 import { UpdateText, useUpdateInstall, useUpdateOffer } from "../features/settings/UpdateBanner";
 import { announce } from "../ui/a11y";

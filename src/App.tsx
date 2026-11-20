@@ -1,9 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
-import { api, asError, events, type VaultStatus } from "./api";
+import { api, events, type VaultStatus } from "./api";
 import { qk, queryClient, useSetSettings, useSettings, useVault } from "./data";
 import { AppMenu } from "./app/AppMenu";
-import { Shell } from "./app/Shell";
 import { TitleTools } from "./app/TitleTools";
 import { useTheme } from "./app/theme";
 import { DonateDialog } from "./features/donate/DonateDialog";
@@ -12,13 +11,17 @@ import { resetLaunches } from "./features/launch/launchQueue";
 import { Splash } from "./features/splash/Splash";
 import { RecoveryCodeHost } from "./features/vault/recoveryCode";
 import { UnlockScreen, type LockReason } from "./features/vault/UnlockScreen";
-import { setLang, t } from "./i18n";
+import { t, useLang } from "./i18n";
 import { Announcer } from "./ui/a11y";
-import { Button } from "./ui/Button";
 import { MotionRoot } from "./ui/motion";
 import { TitleBar } from "./ui/TitleBar";
-import { friendly, toast, toastError, Toaster } from "./ui/Toast";
+import { LoadFailed, toast, toastError, Toaster } from "./ui/Toast";
 import { TooltipHost } from "./ui/Tooltip";
+
+// The start shows the splash or the unlock screen first: the shell (every view) loads alongside,
+// asked for now rather than at unlock.
+const shellChunk = import("./app/Shell");
+const Shell = lazy(() => shellChunk.then((m) => ({ default: m.Shell })));
 
 export default function App() {
   return (
@@ -47,19 +50,20 @@ function Root() {
   const v = vault.data;
   const s = settings.data;
   // Before any child renders, so the whole tree uses the chosen language.
-  setLang(s?.language);
+  useLang(s?.language);
   const unlocked = !!v && !v.locked;
 
   const markLocked = () => {
     qc.setQueryData<VaultStatus>(qk.vault, (old) => old && { ...old, locked: true });
-    for (const queryKey of [qk.accounts, qk.presence, ["info"], qk.favourites, qk.join, qk.privateServers, qk.discord, qk.macros]) qc.removeQueries({ queryKey });
+    for (const queryKey of [qk.accounts, qk.presence, ["info"], qk.favourites, qk.join, qk.privateServers, qk.discord]) qc.removeQueries({ queryKey });
     // A launch kept on show from here (its target can hold a private server's code) goes too. The
     // backend's batch (qk.bulk) stays: "unlock, then launch the ones cancelled" shows after unlock.
     resetLaunches();
   };
 
-  // Everything on screen asks again; the webview itself is never reloaded.
-  const refresh = () => void qc.invalidateQueries();
+  // Everything on screen asks again; the webview itself is never reloaded. Not the background
+  // image: only Appearance changes it (and refreshes it), and a reread is up to 8 MB.
+  const refresh = () => void qc.invalidateQueries({ predicate: (q) => q.queryKey[0] !== qk.background[0] });
 
   const lock = () => {
     manualLockAt.current = Date.now();
@@ -70,14 +74,13 @@ function Root() {
   useEffect(() => {
     const subs = [
       events.onAccountsChanged(() => {
-        // A restore fires it too, and can bring macros.
-        for (const queryKey of [qk.accounts, qk.groups, qk.vault, qk.macros]) qc.invalidateQueries({ queryKey });
+        // A restore fires it too.
+        for (const queryKey of [qk.accounts, qk.groups, qk.vault]) qc.invalidateQueries({ queryKey });
       }),
       events.onInstancesChanged(() => {
-        for (const queryKey of [qk.instances, qk.multi, qk.crashes]) qc.invalidateQueries({ queryKey });
+        for (const queryKey of [qk.instances, qk.multi, qk.crashes, ["serverHistory"]]) qc.invalidateQueries({ queryKey });
       }),
       events.onBulkProgress((p) => qc.setQueryData(qk.bulk, p)),
-      events.onMacroRuns((runs) => qc.setQueryData(qk.macroRuns, runs)),
       events.onRobloxClient((c) => qc.setQueryData(qk.client, c)),
       events.onNetwork((n) => qc.setQueryData(qk.network, n)),
       events.onAppUpdate((u) => qc.setQueryData(qk.appUpdate, u)),
@@ -150,6 +153,7 @@ function Root() {
         tools={
           <TitleTools
             dark={dark}
+            onRefresh={unlocked ? refresh : undefined}
             onToggleTheme={s ? () => setSettings.mutate({ theme: dark ? "light" : "dark" }) : undefined}
             onLock={unlocked && v.mode === "master" ? lock : undefined}
             vaultMode={unlocked ? v.mode : undefined}
@@ -161,21 +165,15 @@ function Root() {
       {/* Unlocked, the island carries notices; locked, there is no island. */}
       {s && !failed && !unlocked && <PublicNetworkBanner settings={s} />}
       {failed ? (
-        <div className="flex-1 grid place-items-center p-8">
-          <div role="alert" className="notice max-w-md" data-tone="attention">
-            <div className="flex-[1_1_240px] min-w-0 flex flex-col gap-1">
-              <h1 className="section-title">{t("app.startFailed")}</h1>
-              <p className="alert">{friendly(asError(failed))}</p>
-            </div>
-            <Button size="md" icon="refresh" onClick={() => qc.invalidateQueries()}>{t("common.tryAgain")}</Button>
-          </div>
-        </div>
+        <LoadFailed title={t("app.startFailed")} error={failed} onRetry={() => qc.invalidateQueries()} />
       ) : !v || !s ? (
         <div className="flex-1" />
       ) : v.locked ? (
         <UnlockScreen status={v} reason={lockReason} />
       ) : (
-        <Shell vault={v} settings={s} islandSlot={islandSlot} />
+        <Suspense fallback={<div className="flex-1" />}>
+          <Shell vault={v} settings={s} islandSlot={islandSlot} />
+        </Suspense>
       )}
       {/* A new recovery code no flow is showing (a recovered unlock, a lock mid-flow): up here because it must outlive what made it, as the old code is void by now. Never while locked: it would open the vault for whoever comes by. */}
       <RecoveryCodeHost unlocked={unlocked} />

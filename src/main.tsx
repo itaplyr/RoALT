@@ -5,9 +5,9 @@ import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
 import "./theme.css";
 import App from "./App";
-import { accentTokens, ACCENT_KEY, THEME_KEY } from "./app/theme";
+import { accentTokens, ACCENT_KEY, applyAccent, THEME_KEY } from "./app/theme";
 import { debugLog } from "./api";
-import { t } from "./i18n";
+import { loadLastLang, t } from "./i18n";
 import { LayoutPreview, type PreviewData } from "./features/launch/LayoutPreview";
 import { assertMotionTokens, installReactive, installReducedMotion } from "./ui/motion";
 
@@ -63,12 +63,7 @@ try {
   if (theme === "light") root.dataset.theme = theme;
   const accent = localStorage.getItem(ACCENT_KEY);
   if (accent && /^#[0-9a-f]{6}$/i.test(accent)) {
-    const a = accentTokens(accent, theme);
-    root.dataset.accent = "";
-    root.style.setProperty("--user-accent", a.fill);
-    root.style.setProperty("--user-on-accent", a.ink);
-    root.style.setProperty("--user-accent-text", a.text);
-    root.style.setProperty("--user-accent-ring", a.ring);
+    applyAccent(accent, theme);
     // The splash is always dark: its cube takes the dark-theme shade.
     root.style.setProperty("--splash-accent", accentTokens(accent, "dark").text);
   }
@@ -89,8 +84,9 @@ if (preview) {
 installReducedMotion();
 installReactive();
 
-// Plain-browser preview (`npm run dev` outside Tauri). Dead code in production builds.
-if (!preview && import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
+// Plain-browser preview (`npm run dev` outside Tauri), and the website's demo (`npm run build:demo`).
+// Dead code in production builds.
+if (!preview && (import.meta.env.DEV || import.meta.env.MODE === "demo") && !("__TAURI_INTERNALS__" in window)) {
   await import("./dev/mockIpc");
 }
 if (import.meta.env.DEV) assertMotionTokens();
@@ -99,6 +95,8 @@ if (!preview) installSounds();
 
 // Dev only (?gallery): every primitive in its states. Dead code in production builds.
 const gallery = import.meta.env.DEV && new URLSearchParams(location.search).has("gallery") ? await import("./dev/GalleryRoot") : null;
+
+await loadLastLang();
 
 createRoot(document.getElementById("root")!).render(
   preview ? (

@@ -17,8 +17,13 @@ export function Tabs<T extends string | number>({ label, value, onChange, items,
   const thumb = useRef<HTMLSpanElement>(null);
   useLiquid(list, thumb, "[role=tab][aria-selected=true]");
   const enabled = items.filter((i) => !i.disabled);
+  // The one Tab stop: the selected tab, or the first when none is (it stays reachable).
+  const stop = enabled.some((i) => i.value === value) ? value : enabled[0]?.value;
   const key = (e: KeyboardEvent) => {
-    const at = enabled.findIndex((i) => i.value === value);
+    // From the focused tab: the selected one may be none, or lag (Browse's follows its page loading).
+    const from = (e.target as HTMLElement).closest<HTMLElement>("[role=tab]")?.dataset.value;
+    const focused = enabled.findIndex((i) => String(i.value) === from);
+    const at = focused >= 0 ? focused : enabled.findIndex((i) => i.value === value);
     const back = isRtl() ? "ArrowRight" : "ArrowLeft";
     const next = e.key === back ? at - 1 : e.key === (isRtl() ? "ArrowLeft" : "ArrowRight") ? at + 1 : e.key === "Home" ? 0 : e.key === "End" ? enabled.length - 1 : null;
     if (next === null) return;
@@ -41,7 +46,7 @@ export function Tabs<T extends string | number>({ label, value, onChange, items,
             data-value={i.value}
             aria-selected={on}
             aria-controls={panelId}
-            tabIndex={on ? 0 : -1}
+            tabIndex={i.value === stop ? 0 : -1}
             disabled={i.disabled}
             onClick={() => !on && onChange(i.value)}
           >

@@ -5,7 +5,7 @@ import { publicBlock, useBulk, useInstances, useMultiStatus, useNetwork, useSett
 import { isRtl, t } from "../../i18n";
 import { Disclosure } from "../../ui/Bits";
 import { Button, IconButton } from "../../ui/Button";
-import { Collapse, riseIn, SPRING, TWEEN, useFreshItems, useLiquid } from "../../ui/motion";
+import { riseIn, SPRING, TWEEN, useFlip, useFreshItems, useLiquid } from "../../ui/motion";
 import { Popover, useAnchor } from "../../ui/Popover";
 import { StatusDot, StatusPill } from "../../ui/Status";
 import { announce } from "../../ui/a11y";
@@ -17,15 +17,14 @@ import { FavouritesRow } from "../launch/Favourites";
 import { LaunchButton } from "../launch/LaunchButton";
 import { launchBlocked, launchEach, launchOne, useLaunchActivity } from "../launch/launchQueue";
 import { MultiNotice } from "../launch/MultiNotice";
-import { isLive, isRunning, STATES } from "../launch/Running";
+import { isLive, isRunning, STATE_TONE, STATES } from "../launch/Running";
 import { TargetField } from "../launch/TargetField";
 import { draftFor, readDraft, type Draft } from "../launch/target";
 import { useNewsFeed } from "../news/news";
 import { NewsView } from "../news/NewsView";
-import { homeSorted, readyTabs, STATE_TONE, storedText, tabLaunch, type HomeActive, type HomeTab, type HomeTabs } from "./homeLayout";
+import { homeSorted, readyTabs, storedText, tabLaunch, type HomeActive, type HomeTab, type HomeTabs } from "./homeLayout";
 import { AccountColumn } from "./AccountColumn";
 import { Sortable } from "./Sortable";
-import { useSteadyFlip } from "./useSteadyFlip";
 
 const ADD = "home-tabs-add";
 const tabId = (id: HomeActive) => `home-tab-${id ?? "overview"}`;
@@ -97,7 +96,7 @@ function TabBody({ tab, account: a, accounts, instances, status, block, why, onD
   const unsaved = usable && !pending && !storedText(draft);
   // Only as it opens: Disclosure's `open` follows its prop, and clearing the last option would fold it
   // away under the focus.
-  const [own] = useState(() => !!a.fpsCap || !!a.launchArgs || a.fullQuality || a.allowDisconnect || a.discordMuted);
+  const [own] = useState(() => !!a.fpsCap || !!a.launchArgs || a.fullQuality || a.allowDisconnect || a.discordMuted || Object.keys(a.customFlags).length > 0);
   return (
     <div className="home-tab-cols">
       <section aria-labelledby="home-tab-where" className="panel home-tab-body">
@@ -167,7 +166,7 @@ export function AccountTabs({ accounts, home, onAdd, children }: { accounts: Acc
   // In the order they were dragged to, which "Play with N" goes by too.
   const tabs = homeSorted(home.tabs, home.order).filter((tab) => byId.has(tab.accountId));
   const ids = tabs.map((tab) => tab.accountId);
-  const hold = useSteadyFlip(row, ids.join());
+  const hold = useFlip(row, { key: ids.join() });
   const fresh = useFreshItems(ids);
   const open = tabs.find((tab) => tab.accountId === active);
   const ready = readyTabs(tabs, byId, instances);
@@ -212,7 +211,7 @@ export function AccountTabs({ accounts, home, onAdd, children }: { accounts: Acc
     strip.current?.querySelector("[role=tab][aria-selected=true]")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [active]);
 
-  // A new tab rises into the strip; its neighbours glide (useSteadyFlip).
+  // A new tab rises into the strip; its neighbours glide (useFlip).
   useLayoutEffect(() => {
     fresh.forEach((id, n) => {
       const el = row.current?.querySelector(`:scope > [data-id="${id}"]`);
@@ -244,7 +243,7 @@ export function AccountTabs({ accounts, home, onAdd, children }: { accounts: Acc
   return (
     <>
       {/* Only in the top layout: a layout switch swaps the strip at once, it doesn't fold it away. */}
-      {!side && <Collapse open={showStrip}>
+      {showStrip && (
         <div className="home-strip">
           <div ref={strip} role="tablist" aria-label={t("dashboard.tabs.label")} className="tab-strip" onKeyDown={tabKeys}>
             <span ref={tabDrop} aria-hidden="true" className="home-tab-on lq-drop" />
@@ -323,7 +322,7 @@ export function AccountTabs({ accounts, home, onAdd, children }: { accounts: Acc
           {plus}
           {playAll && <div className="ms-auto">{playAll}</div>}
         </div>
-      </Collapse>}
+      )}
       {side && open && playAll && <div className="flex justify-end">{playAll}</div>}
       {(open || ready.length > 1 || allReplace) && <MultiNotice wanted={ready.length > 1} replaces={allReplace || (!!open && replaces(open))} />}
       <div role={showStrip ? "tabpanel" : undefined} id="home-tab-panel" aria-labelledby={showStrip ? tabId(active) : undefined} className="flex flex-col gap-6 min-w-0">

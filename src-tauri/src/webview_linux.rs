@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use tauri::webview::Cookie;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use tauri::{AppHandle, Manager, Webview, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use zeroize::Zeroizing;
 
 use crate::error::{AppError, Result};
 use crate::roblox_api::endpoints;
@@ -29,14 +30,46 @@ static LOGIN_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// Session windows from close request until their close path has finished with the profile.
 static CLOSING: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
-pub async fn capture_login(app: &AppHandle, data_dir: &Path) -> Result<Secret> {
+/// A sign-in to fill in for the user (a bulk import's `user:pass` line). Only ever put into the
+/// login page's fields; never stored.
+pub struct LoginFill {
+    pub username: String,
+    pub password: Secret,
+}
+
+/// What fills Roblox's login form (pure): on www.roblox.com's top frame only, once its fields
+/// show (up to 20 s), each one still empty; the input events tell its React state. Never presses
+/// Log In: the user does, after any captcha. Values are JSON-escaped.
+fn fill_script(username: &str, password: &str) -> Zeroizing<String> {
+    const BODY: &str = r#"if (location.hostname !== "www.roblox.com" || window.top !== window) return;
+const set = (el, v) => {
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, v);
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+};
+let tries = 0;
+const timer = setInterval(() => {
+  const u = document.getElementById("login-username"), p = document.getElementById("login-password");
+  if (u && p) {
+    clearInterval(timer);
+    if (!u.value) set(u, user);
+    if (!p.value) set(p, pass);
+    p.focus();
+  } else if (++tries >= 100) clearInterval(timer);
+}, 200);"#;
+    let json = |s: &str| Zeroizing::new(serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into()));
+    Zeroizing::new(format!("(() => {{\nconst user = {}, pass = {};\n{BODY}\n}})();", *json(username), *json(password)))
+}
+
+pub async fn capture_login(app: &AppHandle, data_dir: &Path, fill: Option<&LoginFill>) -> Result<Secret> {
     let slot = LoginSlot::take(app)?;
     let login = parse_url(endpoints::LOGIN_PAGE)?;
     let label = format!("login-{}", uuid::Uuid::new_v4());
     let profile = login_profile(data_dir);
     mark_open(&profile);
     // Blank first: the old cookie goes before anything loads from Roblox.
-    let built = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(parse_url("about:blank")?))
+    let script = fill.map(|f| fill_script(&f.username, f.password.expose()));
+    let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(parse_url("about:blank")?))
         .title(tr!("Sign in to Roblox — RoALT"))
         .inner_size(480.0, 760.0)
         .center()
@@ -44,8 +77,11 @@ pub async fn capture_login(app: &AppHandle, data_dir: &Path) -> Result<Secret> {
         .incognito(false)
         .devtools(cfg!(debug_assertions))
         .general_autofill_enabled(false)
-        .on_navigation(allowed)
-        .build();
+        .on_navigation(allowed);
+    if let Some(s) = &script {
+        builder = builder.initialization_script(s.as_str());
+    }
+    let built = builder.build();
     let window = match built {
         Ok(w) => w,
         Err(e) => {
@@ -72,6 +108,17 @@ pub async fn capture_login(app: &AppHandle, data_dir: &Path) -> Result<Secret> {
     }
     drop(slot);
     cookie
+}
+
+/// Closes an open sign-in window: its `capture_login` ends `Cancelled` (a bulk import's Stop).
+pub fn close_login(app: &AppHandle) {
+    for (label, w) in app.webview_windows() {
+        if label.starts_with("login-")
+            && let Err(e) = w.close()
+        {
+            log::debug!("could not close login window {label}: {e}");
+        }
+    }
 }
 
 pub async fn open_session(
@@ -294,6 +341,9 @@ impl Drop for LoginSlot {
 }
 
 pub fn log_process_failures(_window: &WebviewWindow) {}
+
+/// Kept for the shared `set_main_shown`: WebKitGTK has no per-webview memory target to lower.
+pub fn memory_target(_wv: &Webview, _low: bool) {}
 
 fn parse_url(s: &str) -> Result<url::Url> {
     s.parse().map_err(|e: url::ParseError| AppError::Internal(e.to_string()))

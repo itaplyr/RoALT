@@ -1,12 +1,13 @@
 {
   "name": "roalt",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && node scripts/check-i18n.mjs && vite build",
+    "build:demo": "vite build --mode demo --base ./ --outDir dist-demo",
     "i18n:check": "node scripts/check-i18n.mjs",
     "typecheck": "tsc --noEmit",
     "test:sounds": "node --experimental-strip-types scripts/test-sounds.mjs",

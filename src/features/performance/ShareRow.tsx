@@ -4,7 +4,7 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { api, asError, type Profile } from "../../api";
 import { t } from "../../i18n";
 import { Button } from "../../ui/Button";
-import { Dialog, DialogBody, DialogFooter } from "../../ui/Dialog";
+import { Dialog } from "../../ui/Dialog";
 import { Field } from "../../ui/Field";
 import { Collapse } from "../../ui/motion";
 import { friendly } from "../../ui/Toast";
@@ -143,7 +143,7 @@ function PasteDialog({ open, onClose, onProfile }: { open: boolean; onClose: () 
   return (
     <Dialog open={open} onClose={onClose} title={t("performance.pasteTitle")}>
       <form onSubmit={submit}>
-        <DialogBody>
+        <div className="dlg-body">
           <Field label={t("performance.pasteLabel")} error={error}>
             {({ id, describedBy, invalid }) => (
               <textarea
@@ -165,14 +165,14 @@ function PasteDialog({ open, onClose, onProfile }: { open: boolean; onClose: () 
               />
             )}
           </Field>
-        </DialogBody>
-        <DialogFooter>
+        </div>
+        <div className="dlg-foot">
           <Button size="md" onClick={onClose}>{t("common.cancel")}</Button>
           {/* Busy, aria-disabled: disabled would drop the focus, and leave it nowhere after an error. */}
           <Button size="md" type="submit" variant="primary" busy={busy} disabled={!code.trim()} aria-disabled={busy || undefined}>
             {t("performance.review")}
           </Button>
-        </DialogFooter>
+        </div>
       </form>
     </Dialog>
   );

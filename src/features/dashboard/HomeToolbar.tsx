@@ -11,7 +11,7 @@ import { PillSeparator, PillToolbar } from "../../ui/PillToolbar";
 import { MenuItem, MenuSeparator, Popover, useAnchor } from "../../ui/Popover";
 import { StatusDot, StatusPill, type Tone } from "../../ui/Status";
 import { toastError } from "../../ui/Toast";
-import { mb, pct } from "../monitor/MonitorView";
+import { mb, pct } from "../monitor/format";
 import { useWindowTools } from "./windowTools";
 
 const MORE = "home-more";
@@ -194,7 +194,6 @@ export function HomeToolbar({ running, fold, detailed, onDetailed }: { running: 
         placement="below-end"
         role="menu"
         label={t("home.more")}
-        onToggle={(on) => on && document.getElementById(MORE)?.querySelector<HTMLElement>("[role^=menuitem]:not(:disabled)")?.focus()}
       >
         {folded && (
           <>

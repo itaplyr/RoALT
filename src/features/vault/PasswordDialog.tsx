@@ -32,6 +32,63 @@ type FormProps = {
 /** Where a problem shows: under its field, or under the whole form. */
 type Slot = "current" | "next" | "confirm" | "form";
 
+/** A new password and its confirmation (this form's and the recovery card's), with the form's one
+ * show/hide key. The form keeps its own problems: `fields` takes its edit and errorAt. */
+export function useNewPassword() {
+  const [nw, setNw] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [peek, setPeek] = useState(false);
+  // The confirmation is checked once it has been left, then as either field changes.
+  const [left, setLeft] = useState(false);
+  const mismatch = left && !!confirm && confirm !== nw;
+  const togglePeek = () => setPeek(!peek);
+  return {
+    nw,
+    peek,
+    togglePeek,
+    clear: () => (setNw(""), setConfirm("")),
+    /** Too short, or not the same twice: where to say so, and what. */
+    check: (): ["next" | "confirm", string] | null => {
+      if (nw.length < MIN_PASSWORD) return ["next", t("vault.tooShort", { count: MIN_PASSWORD })];
+      if (nw === confirm) return null;
+      setLeft(true);
+      return ["confirm", t("vault.mismatch")];
+    },
+    fields: ({ edit, errorAt, label = t("vault.newPassword"), withKey, autoFocus }: {
+      edit: (at: "next" | "confirm", set: (v: string) => void) => (v: string) => void;
+      errorAt: (at: "next" | "confirm") => string | undefined;
+      label?: string;
+      withKey?: boolean;
+      autoFocus?: boolean;
+    }) => (
+      <>
+        <PasswordField
+          label={label}
+          value={nw}
+          onChange={edit("next", setNw)}
+          autoComplete="new-password"
+          hint={t("vault.minLength", { count: MIN_PASSWORD })}
+          error={errorAt("next")}
+          withKey={withKey}
+          autoFocus={autoFocus}
+          peek={peek}
+          onPeek={togglePeek}
+        />
+        <PasswordField
+          label={t("vault.confirm")}
+          value={confirm}
+          onChange={edit("confirm", setConfirm)}
+          onBlur={() => setLeft(true)}
+          autoComplete="new-password"
+          error={errorAt("confirm") ?? (mismatch ? t("vault.mismatch") : undefined)}
+          peek={peek}
+          onPeek={togglePeek}
+        />
+      </>
+    ),
+  };
+}
+
 /**
  * The password step on its own (for a dialog with several steps): the current password, a new one
  * (with confirmation), both, or neither (a question with an async answer). onSubmit rejecting with
@@ -45,11 +102,7 @@ export function PasswordForm({
 }: FormProps) {
   const form = useRef<HTMLFormElement>(null);
   const [cur, setCur] = useState("");
-  const [nw, setNw] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const [peek, setPeek] = useState(false);
-  // The confirmation is checked once it has been left, then as either field changes.
-  const [left, setLeft] = useState(false);
+  const pw = useNewPassword();
   const [problem, setProblem] = useState<{ at: Slot; text: string } | null>(null);
   const [shakes, setShakes] = useState(0);
   const [busy, setBusyState] = useState(false);
@@ -70,25 +123,20 @@ export function PasswordForm({
     if (problem?.at === at || (at === "next" && problem?.at === "confirm")) setProblem(null);
   };
   const errorAt = (at: Slot) => (problem?.at === at ? problem.text : undefined);
-  const mismatch = left && !!confirm && confirm !== nw;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (busy) return;
     if (current && !cur) return fail("current", t("vault.enterField", { label: getLang() === "en" ? currentLabel.toLowerCase() : currentLabel }));
-    if (next && nw.length < MIN_PASSWORD) return fail("next", t("vault.tooShort", { count: MIN_PASSWORD }));
-    if (next && nw !== confirm) {
-      setLeft(true);
-      return fail("confirm", t("vault.mismatch"));
-    }
+    const bad = next && pw.check();
+    if (bad) return fail(...bad);
     setBusy(true);
     setProblem(null);
     try {
-      await onSubmit({ current: cur, next: nw });
+      await onSubmit({ current: cur, next: pw.nw });
       // Used: the typed passwords go now, not once the step or the dialog has finished leaving.
       setCur("");
-      setNw("");
-      setConfirm("");
+      pw.clear();
       onDone();
     } catch (err) {
       const e2 = asError(err);
@@ -99,7 +147,6 @@ export function PasswordForm({
     }
   }
 
-  const togglePeek = () => setPeek(!peek);
   return (
     <form ref={form} onSubmit={submit} className={`flex flex-col gap-4 px-[22px] pb-5 ${shakes ? (shakes % 2 ? "shake" : "shake2") : ""}`}>
       <div className="text-fg-2">{text}</div>
@@ -112,36 +159,11 @@ export function PasswordForm({
           error={errorAt("current")}
           withKey
           autoFocus
-          peek={peek}
-          onPeek={togglePeek}
+          peek={pw.peek}
+          onPeek={pw.togglePeek}
         />
       )}
-      {next && (
-        <>
-          <PasswordField
-            label={nextLabel}
-            value={nw}
-            onChange={edit("next", setNw)}
-            autoComplete="new-password"
-            hint={t("vault.minLength", { count: MIN_PASSWORD })}
-            error={errorAt("next")}
-            withKey={!current}
-            autoFocus={!current}
-            peek={peek}
-            onPeek={togglePeek}
-          />
-          <PasswordField
-            label={t("vault.confirm")}
-            value={confirm}
-            onChange={edit("confirm", setConfirm)}
-            onBlur={() => setLeft(true)}
-            autoComplete="new-password"
-            error={errorAt("confirm") ?? (mismatch ? t("vault.mismatch") : undefined)}
-            peek={peek}
-            onPeek={togglePeek}
-          />
-        </>
-      )}
+      {next && pw.fields({ edit, errorAt, label: nextLabel, withKey: !current, autoFocus: !current })}
       {problem?.at === "form" && <p role="alert" className="alert">{problem.text}</p>}
       <div className="flex justify-end gap-2 pt-1">
         <Button onClick={onCancel} disabled={busy}>{cancelLabel}</Button>

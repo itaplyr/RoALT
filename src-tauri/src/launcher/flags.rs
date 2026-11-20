@@ -1,8 +1,9 @@
-//! Lighter rendering for the clients RoALT starts (`Settings.lighter_rendering`), through the only
-//! local flags Roblox still honours: its allowlist (DevForum "Allowlist for local client
-//! configuration via Fast Flags"; any other is logged as "Denied local configuration for: ...")
-//! in `<version folder>\ClientSettings\ClientAppSettings.json`. Lowest geometry detail always, and
-//! what `Settings.render_flags` picks: less GPU memory and time per client.
+//! FFlags for the clients RoALT starts, in `<version folder>\ClientSettings\ClientAppSettings.json`:
+//! lighter rendering (`Settings.lighter_rendering`; lowest geometry detail always, and what
+//! `Settings.render_flags` picks: less GPU memory and time per client), then the user's own
+//! (`Settings.custom_flags` or the account's), which win. Roblox honours only its allowlist
+//! (DevForum "Allowlist for local client configuration via Fast Flags"; any other is logged as
+//! "Denied local configuration for: ...").
 //!
 //! Every client shares the file and reads it once, as it starts; Roblox never writes it. A launch
 //! merges these flags into the user's own flags and puts the file back exactly as it was once its
@@ -14,12 +15,14 @@
 #![cfg_attr(not(windows), allow(dead_code))]
 
 
+use std::collections::BTreeMap;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
 use super::client_settings::{retry, set_readonly};
+use crate::error::{AppError, Result};
 use crate::model::{Msaa, RenderFlags, RenderMode, TextureQuality};
 
 /// Only one of these can be on.
@@ -86,20 +89,45 @@ pub(crate) fn flags_for_linux(low: bool, lighter: Option<&RenderFlags>) -> Vec<(
     f
 }
 
-/// The file's text with `set` set and the user's other flags kept (pure); None when it isn't a JSON
-/// object (it is left alone then). A chosen rendering mode replaces one of the user's own.
+/// The file's text with `set` set in order (a later one wins) and the user's other flags kept
+/// (pure); None when it isn't a JSON object (it is left alone then). A rendering mode replaces any
+/// other one already there.
 fn merge(text: Option<&str>, set: &[(&str, &str)]) -> Option<String> {
     let mut flags: Map<String, Value> = match text.map(str::trim) {
         None | Some("") => Map::new(),
         Some(t) => serde_json::from_str(t).ok()?,
     };
-    if set.iter().any(|(k, _)| MODES.contains(k)) {
-        flags.retain(|k, _| !MODES.contains(&k.as_str()));
-    }
     for (k, v) in set {
+        if MODES.contains(k) {
+            flags.retain(|k, _| !MODES.contains(&k.as_str()));
+        }
         flags.insert((*k).into(), (*v).into());
     }
     serde_json::to_string_pretty(&flags).ok()
+}
+
+/// The flags a launch writes (pure): `lighter`'s rendering flags if any, then `custom`, which win.
+pub fn launch_set<'a>(lighter: Option<&RenderFlags>, custom: &'a BTreeMap<String, String>) -> Vec<(&'a str, &'a str)> {
+    let mut set = lighter.map(flags_of).unwrap_or_default();
+    set.extend(custom.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    set
+}
+
+/// What custom flags may be (`Settings.custom_flags`, an account's own): at most 500, each name
+/// 1-128 letters, digits or `_`, each value at most 1024 characters.
+pub fn check(flags: &BTreeMap<String, String>) -> Result<()> {
+    if flags.len() > 500 {
+        return Err(AppError::Invalid(tr!("Use at most 500 custom FFlags.")));
+    }
+    for (k, v) in flags {
+        if k.is_empty() || k.len() > 128 || !k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+            return Err(AppError::Invalid(tr!("\"{name}\" isn't an FFlag name: use 1 to 128 letters, digits or _.", name = k.chars().take(40).collect::<String>())));
+        }
+        if v.chars().count() > 1024 {
+            return Err(AppError::Invalid(tr!("The value of {name} is too long (at most 1024 characters).", name = k)));
+        }
+    }
+    Ok(())
 }
 
 /// Replaces the file in one step; a read-only one stays read-only.
@@ -113,7 +141,7 @@ fn write(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
         retry(|| std::fs::rename(&tmp, file))
     });
     if readonly && let Err(e) = set_readonly(file, true) {
-        log::warn!("lighter rendering: couldn't make {} read-only again: {e}", file.display());
+        log::warn!("FFlags: couldn't make {} read-only again: {e}", file.display());
     }
     if done.is_err() {
         let _ = std::fs::remove_file(&tmp);
@@ -136,7 +164,7 @@ fn put_back_at(file: &Path) -> bool {
     match done.and_then(|()| retry(|| std::fs::remove_file(&saved))) {
         Ok(()) => true,
         Err(e) => {
-            log::warn!("lighter rendering: couldn't put {} back: {e}", file.display());
+            log::warn!("FFlags: couldn't put {} back: {e}", file.display());
             false
         }
     }
@@ -175,40 +203,41 @@ pub fn restore() {
     }
 }
 
-/// Writes `render`'s flags next to the client at `exe` for the launch about to start; what to put
-/// back once it has started, None when nothing was written. Failures are logged and never stop the
-/// launch.
-pub fn apply(exe: &Path, render: &RenderFlags) -> Option<Undo> {
+/// Writes `set` (`launch_set`) next to the client at `exe` for the launch about to start; what to
+/// put back once it has started, None when nothing was written. Failures are logged and never stop
+/// the launch. On Linux/Cordial the flags travel to the runtime instead (`flags_for_linux`), so
+/// nothing is written beside the binary.
+pub fn apply(exe: &Path, set: &[(&str, &str)]) -> Option<Undo> {
     #[cfg(not(windows))]
     {
-        let _ = (exe, render);
+        let _ = (exe, set);
         None
     }
     #[cfg(windows)]
     {
-        apply_windows(exe, render)
+        apply_windows(exe, set)
     }
 }
 
 #[cfg(windows)]
-fn apply_windows(exe: &Path, render: &RenderFlags) -> Option<Undo> {
+fn apply_windows(exe: &Path, set: &[(&str, &str)]) -> Option<Undo> {
     let file = exe.parent()?.join("ClientSettings").join("ClientAppSettings.json");
     // A launch cut short: the user's own file first, or these flags would pass for it and the only
     // copy of it would be lost.
     if !put_back_at(&file) {
-        log::warn!("lighter rendering skipped: the user's own {} couldn't be put back", file.display());
+        log::warn!("FFlags skipped: the user's own {} couldn't be put back", file.display());
         return None;
     }
     let before = match retry(|| std::fs::read(&file)) {
         Ok(b) => Some(b),
         Err(e) if e.kind() == ErrorKind::NotFound => None,
         Err(e) => {
-            log::warn!("lighter rendering skipped: can't read {}: {e}", file.display());
+            log::warn!("FFlags skipped: can't read {}: {e}", file.display());
             return None;
         }
     };
-    let Some(text) = merge(before.as_deref().map(String::from_utf8_lossy).as_deref(), &flags_of(render)) else {
-        log::warn!("lighter rendering skipped: {} isn't a JSON object", file.display());
+    let Some(text) = merge(before.as_deref().map(String::from_utf8_lossy).as_deref(), set) else {
+        log::warn!("FFlags skipped: {} isn't a JSON object", file.display());
         return None;
     };
     let saved = file.with_file_name(SAVED);
@@ -224,7 +253,7 @@ fn apply_windows(exe: &Path, render: &RenderFlags) -> Option<Undo> {
     match written {
         Ok(()) => Some(Undo { file }),
         Err(e) => {
-            log::warn!("lighter rendering not written to {}: {e}", file.display());
+            log::warn!("FFlags not written to {}: {e}", file.display());
             let _ = std::fs::remove_file(&saved);
             None
         }
@@ -279,6 +308,31 @@ mod tests {
     }
 
     #[test]
+    fn custom_flags_win() {
+        let d = RenderFlags { mode: RenderMode::D3d11, ..RenderFlags::default() };
+        let custom: BTreeMap<String, String> = [("FIntDebugForceMSAASamples".into(), "4".into()), (MODES[1].into(), "True".into())].into();
+        let v: Value = serde_json::from_str(&merge(None, &launch_set(Some(&d), &custom)).unwrap()).unwrap();
+        assert_eq!(v["FIntDebugForceMSAASamples"], "4", "over the preset's x1");
+        assert_eq!((v.get(MODES[0]), v[MODES[1]].as_str()), (None, Some("True")), "one mode, the custom one");
+        assert_eq!(v["DFIntTextureQualityOverride"], "0", "the preset's others stay");
+        assert_eq!(launch_set(None, &custom).len(), 2, "no lighter rendering: only the custom ones");
+        assert!(launch_set(None, &BTreeMap::new()).is_empty());
+    }
+
+    #[test]
+    fn checks_custom_flags() {
+        let one = |k: &str, v: &str| BTreeMap::from([(k.to_owned(), v.to_owned())]);
+        assert!(check(&one("DFIntTaskSchedulerTargetFps", "144")).is_ok());
+        assert!(check(&one("FStringX", "")).is_ok(), "an empty value is a value");
+        for bad in ["", "has space", "Flag\"quote", "Ünicode", &"x".repeat(129)] {
+            assert!(check(&one(bad, "1")).is_err(), "{bad:?}");
+        }
+        assert!(check(&one("FIntX", &"9".repeat(1025))).is_err());
+        let many: BTreeMap<String, String> = (0..501).map(|n| (format!("FIntX{n}"), "1".into())).collect();
+        assert!(check(&many).is_err());
+    }
+
+    #[test]
     fn puts_the_file_back_exactly() {
         let dir = std::env::temp_dir().join(format!("roalt-test-flags-{}", std::process::id()));
         let exe = dir.join("RobloxPlayerBeta.exe");
@@ -287,7 +341,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         // No file before: written, then removed again.
-        let r = RenderFlags::default();
+        let r = flags_of(&RenderFlags::default());
         let undo = apply(&exe, &r).expect("written");
         assert!(std::fs::read_to_string(&file).unwrap().contains("DFIntDebugFRMQualityLevelOverride"));
         undo.put_back();

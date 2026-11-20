@@ -1,5 +1,5 @@
 export { DUR, EASE, EASE_CSS, LAYOUT_IDS, RISE, SPRING, STAGGER, TWEEN, assertMotionTokens, lid } from "./tokens";
-export { installReducedMotion, motionOff, motionPreference, prefersReducedMotion, setMotionPreference, useMotionOff, useMotionPreference, useReducedMotionFlag, type MotionPreference } from "./reduced";
+export { installReducedMotion, motionPreference, prefersReducedMotion, setMotionPreference, useMotionOff, useMotionPreference, useReducedMotionFlag, type MotionPreference } from "./reduced";
 export { follow, useLiquid, type Follower } from "./liquid";
 export { installReactive } from "./reactive";
 export { MotionRoot } from "./MotionRoot";

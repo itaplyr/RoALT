@@ -7,7 +7,7 @@ import { rovingKeys } from "../../ui/a11y";
 import { IconButton } from "../../ui/Button";
 import { Input } from "../../ui/Field";
 import { Icon } from "../../ui/Icon";
-import { lid, Num, SPRING, STAGGER } from "../../ui/motion";
+import { lid, Num, SPRING, STAGGER, useFlip } from "../../ui/motion";
 import { accountName, Avatar } from "../accounts/shared";
 import { useLaunchActivity } from "../launch/launchQueue";
 import { isLive, STATES } from "../launch/Running";
@@ -15,7 +15,6 @@ import { useNewsFeed } from "../news/news";
 import { LaunchMark, ReadyRing } from "./AccountTabs";
 import { byOrder, readyTabs, tabLaunch, type HomeTab, type HomeTabs } from "./homeLayout";
 import { Sortable, type DragProps } from "./Sortable";
-import { useSteadyFlip } from "./useSteadyFlip";
 
 const ON = lid("home-rail", "on");
 const ROW = ".rail-item";
@@ -107,7 +106,7 @@ export function AccountRail({ width, accounts, instances, home, onHome, onOpen, 
   const needle = who.trim().toLowerCase();
   const shown = needle ? accounts.filter((a) => `${a.alias}\n${a.displayName}\n${a.username}`.toLowerCase().includes(needle)) : accounts;
   const ids = byOrder(shown.map((a) => a.id), home.order);
-  const hold = useSteadyFlip(col, ids.join());
+  const hold = useFlip(col, { key: ids.join() });
   // A long list's rows don't move: no glides, no ring popping in.
   const still = ids.length > STAGGER.listLimit;
   const running = instances.filter(isLive).length;

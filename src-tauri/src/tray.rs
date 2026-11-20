@@ -135,6 +135,8 @@ fn menu(app: &AppHandle, v: &View) -> tauri::Result<Menu<Wry>> {
 
 /// Shows, unminimizes and focuses the main window (it may be hidden in the tray).
 pub fn show_main(app: &AppHandle) {
+    // The page first, so the window doesn't show a stale frame.
+    crate::set_main_shown(app, true);
     if let Some(w) = app.get_webview_window("main") {
         for r in [w.show(), w.unminimize(), w.set_focus()] {
             if let Err(e) = r {

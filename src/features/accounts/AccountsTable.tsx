@@ -75,7 +75,13 @@ export function AccountsTable({ rows, ordered, groupById, presence, compact, now
   useEffect(() => {
     const el = scroller.current;
     if (!el || !windowed) return;
-    const read = () => setView({ top: el.scrollTop, height: el.clientHeight });
+    // A new view only when the first or last row changes: a scroll within one row renders nothing.
+    const read = () => {
+      const top = el.scrollTop;
+      const height = el.clientHeight;
+      const h = rowH.current;
+      setView((v) => (Math.floor(v.top / h) === Math.floor(top / h) && Math.ceil((v.top + v.height) / h) === Math.ceil((top + height) / h) ? v : { top, height }));
+    };
     read();
     el.addEventListener("scroll", read, { passive: true });
     const ro = new ResizeObserver(read);

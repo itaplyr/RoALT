@@ -1,0 +1,182 @@
+<!doctype html>
+<!-- Source of the README banners, in roalt.dev's style (assets/og-source.html on the site).
+     Open with a hash for the layout, at the CSS size below and 2x scale:
+       #banner  1280x720 -> banner.png (2560x1440)
+       #wide    1600x400 -> banner-wide.png (3200x800)
+       #logo    1280x720 -> banner-logo.png (2560x1440)
+       #social  1280x640 at 1x -> social.png (GitHub's social preview, under 1 MB)
+       #dbanner 960x540 -> discord-banner.png (1920x1080, the server banner; Discord draws the
+                server name over its top-left, so that corner stays empty)
+       #dbanner-anim 960x540 at 1x, frame(t) for t in [0, LOOP) -> frames, then ffmpeg -> discord-banner.gif
+       #dinvite 1920x1080 at 1x -> discord-invite.png (the invite background; the invite card
+                covers the middle, so the content sits on both sides)
+     It reads home.webp beside it, the app icon and Geist from the repo: render it from a checkout after npm ci. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RoALT banners</title>
+<style>
+@font-face { font-family: Geist; src: url(../../node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2) format('woff2'); font-weight: 100 900; }
+* { box-sizing: border-box; margin: 0; }
+html, body { overflow: hidden; }
+body { position: relative; background: #f2f2ef; color: #111; font-family: Geist, sans-serif; -webkit-font-smoothing: antialiased; }
+body.banner, body.logo { width: 1280px; height: 720px; }
+body.wide { width: 1600px; height: 400px; }
+body.social { width: 1280px; height: 640px; }
+body.dbanner { width: 960px; height: 540px; }
+body.dinvite { width: 1920px; height: 1080px; }
+.layout { display: none; }
+.banner .l-hero, .social .l-hero, .wide .l-wide, .logo .l-logo, .dbanner .l-dbanner, .dinvite .l-hero { display: block; }
+
+.brand { position: absolute; display: flex; align-items: center; gap: 16px; font-size: 32px; font-weight: 600; letter-spacing: -.02em; }
+.brand img { width: 56px; height: 56px; }
+h1 { position: absolute; font-weight: 600; line-height: .98; letter-spacing: -.045em; }
+.sub { position: absolute; line-height: 1.3; letter-spacing: -.01em; }
+.url { position: absolute; font-weight: 600; letter-spacing: -.01em; }
+.url span { font-weight: 400; color: #55554f; }
+/* The real app window running off the edge, with its island under it, as on the site. */
+.win { position: absolute; overflow: hidden; border-radius: 16px; background: #0a0a0a; }
+.win img { width: 100%; display: block; }
+.island { position: absolute; display: flex; white-space: nowrap; align-items: center; gap: 4px; height: 56px; padding: 6px; border-radius: 999px; background: #141414; color: #b0b0b0; }
+.tile { display: flex; align-items: center; height: 44px; padding: 0 14px; border-radius: 999px; font-size: 18px; font-weight: 500; }
+.tile.on { background: #f5f5f5; color: #0a0a0a; }
+.lbl { margin-left: 8px; overflow: hidden; }
+.tile:not(.on) .lbl { display: none; }
+.tile svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.cap { display: flex; align-items: center; gap: 9px; height: 44px; padding: 0 17px; margin-left: 6px; border-radius: 999px; background: #222; color: #ededed; font-size: 18px; font-weight: 500; }
+.cap i { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; }
+
+/* 16:9 and 2:1 */
+.l-hero .brand { left: 64px; top: 56px; }
+.l-hero h1 { left: 64px; top: 168px; width: 560px; font-size: 82px; }
+.l-hero .sub { left: 64px; top: 452px; width: 500px; font-size: 27px; }
+.l-hero .url { left: 64px; bottom: 58px; font-size: 27px; }
+.l-hero .win { left: 660px; top: 64px; width: 860px; height: 538px; }
+.l-hero .island { left: 700px; top: 624px; }
+.social .l-hero .brand { top: 48px; }
+.social .l-hero h1 { top: 140px; font-size: 74px; }
+.social .l-hero .sub { top: 400px; font-size: 25px; }
+.social .l-hero .url { bottom: 48px; font-size: 25px; }
+.social .l-hero .win { top: 52px; width: 780px; height: 488px; }
+.social .l-hero .island { top: 558px; }
+
+/* Discord invite background: 1920x1080, nothing in the middle third. */
+.dinvite .l-hero .brand { left: 112px; top: 104px; font-size: 46px; gap: 22px; }
+.dinvite .l-hero .brand img { width: 80px; height: 80px; }
+.dinvite .l-hero h1 { left: 112px; top: 260px; width: 640px; font-size: 92px; }
+.dinvite .l-hero .sub { left: 112px; top: 600px; width: 560px; font-size: 36px; }
+.dinvite .l-hero .url { left: 112px; bottom: 104px; font-size: 36px; }
+.dinvite .l-hero .win { left: 1260px; top: 150px; width: 1040px; height: 650px; border-radius: 22px; }
+.dinvite .l-hero .island { left: 1310px; top: 836px; transform: scale(1.4); transform-origin: left top; }
+
+/* Discord server banner: shown small, so big type; the top-left corner is left for the server name. */
+.l-dbanner h1 { left: 48px; top: 150px; width: 470px; font-size: 68px; }
+.l-dbanner .sub { left: 48px; top: 400px; width: 420px; font-size: 24px; color: #33332f; }
+.l-dbanner .win { left: 540px; top: 72px; width: 600px; height: 375px; }
+.l-dbanner .island { left: 572px; top: 466px; transform: scale(.82); transform-origin: left top; }
+/* #dbanner-anim: the same banner, driven frame by frame by frame(t) for discord-banner.gif. */
+.anim .tile .lbl { display: block; }
+.anim .l-dbanner .island { transform: scale(.74); }
+.anim .win img { position: absolute; left: 0; top: 0; }
+
+/* 4:1 */
+.l-wide .brand { left: 72px; top: 52px; font-size: 28px; gap: 14px; }
+.l-wide .brand img { width: 48px; height: 48px; }
+.l-wide h1 { left: 72px; top: 132px; width: 760px; font-size: 68px; }
+.l-wide .sub { left: 72px; top: 292px; font-size: 24px; color: #33332f; }
+.l-wide .win { left: 960px; top: 36px; width: 760px; height: 278px; }
+.l-wide .island { left: 1000px; top: 330px; }
+
+/* Centered mark */
+.l-logo .mark { position: absolute; left: 0; right: 0; top: 112px; display: flex; flex-direction: column; align-items: center; }
+.l-logo .mark img { width: 168px; height: 168px; }
+.l-logo .name { margin-top: 28px; font-size: 120px; font-weight: 600; line-height: 1; letter-spacing: -.05em; }
+.l-logo .tag { margin-top: 22px; font-size: 32px; letter-spacing: -.015em; color: #33332f; }
+.l-logo .island { position: static; margin-top: 44px; }
+</style>
+</head>
+<body>
+<template id="island">
+  <span class="tile on"><svg viewBox="0 0 16 16"><path d="M2.5 7.2 8 2.6l5.5 4.6M4 6v6.4A1.1 1.1 0 0 0 5.1 13.5h5.8a1.1 1.1 0 0 0 1.1-1.1V6M6.6 13.5V10h2.8v3.5"/></svg><span class="lbl">Home</span></span>
+  <span class="tile"><svg viewBox="0 0 16 16"><path d="M5 3.2v9.6a.6.6 0 0 0 .9.5l7.5-4.8a.6.6 0 0 0 0-1L5.9 2.7a.6.6 0 0 0-.9.5z"/></svg><span class="lbl">Play</span></span>
+  <span class="tile"><svg viewBox="0 0 16 16"><circle cx="8" cy="5.4" r="2.7"/><path d="M2.9 14c.3-2.7 2.4-4.4 5.1-4.4s4.8 1.7 5.1 4.4"/></svg><span class="lbl">Accounts</span></span>
+  <span class="tile"><svg viewBox="0 0 16 16"><path d="M2.7 10.65a5.3 5.3 0 1 1 10.6 0"/><path d="M8 10.65l2.6-3.4"/></svg><span class="lbl">Performance</span></span>
+  <span class="cap"><i></i>4 playing</span>
+</template>
+
+<div class="layout l-hero">
+  <div class="brand"><img src="../../src-tauri/icons/app-icon.svg" alt="">RoALT</div>
+  <h1>Every Roblox alt, one click from any game.</h1>
+  <p class="sub">Free account manager and multi-client launcher for Windows.</p>
+  <p class="url">roalt.dev <span>· local only, open source</span></p>
+  <div class="win"><img src="home.webp" alt=""></div>
+  <div class="island"></div>
+</div>
+
+<div class="layout l-wide">
+  <div class="brand"><img src="../../src-tauri/icons/app-icon.svg" alt="">RoALT</div>
+  <h1>Every Roblox alt, one click from any game.</h1>
+  <p class="sub">Free account manager and multi-client launcher for Windows.</p>
+  <div class="win"><img src="home.webp" alt=""></div>
+  <div class="island"></div>
+</div>
+
+<div class="layout l-dbanner">
+  <h1>Every Roblox alt, one click from any game.</h1>
+  <p class="sub">Free account manager and multi-client launcher for Windows.</p>
+  <div class="win"><img src="home.webp" alt=""></div>
+  <div class="island"></div>
+</div>
+
+<div class="layout l-logo">
+  <div class="mark">
+    <img src="../../src-tauri/icons/app-icon.svg" alt="">
+    <p class="name">RoALT</p>
+    <p class="tag">Every Roblox alt, one click from any game.</p>
+    <div class="island"></div>
+  </div>
+</div>
+
+<script>
+const layout = () => (document.body.className = (location.hash.slice(1) || "banner").replace("-", " "));
+layout();
+addEventListener("hashchange", layout);
+const island = document.getElementById("island").innerHTML;
+document.querySelectorAll(".island").forEach((el) => (el.innerHTML = island));
+
+// #dbanner-anim: frame(t) draws second t of an 8 s loop. Each section holds 1.5 s, then the island
+// moves to the next one in 0.5 s while the window cross-fades; after Performance it wraps to Home.
+const SHOTS = ["home", "play", "accounts", "performance"];
+const win = document.querySelector(".l-dbanner .win");
+win.innerHTML = SHOTS.map((s) => `<img src="${s}.webp" alt="">`).join("");
+const imgs = [...win.children];
+const tiles = [...document.querySelectorAll(".l-dbanner .tile")];
+const dot = document.querySelector(".l-dbanner .cap i");
+let labelW; // measured on the first frame, once Geist has loaded
+const ease = (p) => (p < 0.5 ? 4 * p ** 3 : 1 - (-2 * p + 2) ** 3 / 2);
+const mix = (a, b, o) => Math.round(a + (b - a) * o);
+window.LOOP = 8;
+window.frame = (t) => {
+  labelW ??= tiles.map((el) => el.querySelector(".lbl").scrollWidth);
+  const seg = Math.floor(t / 2) % 4, next = (seg + 1) % 4;
+  const p = ease(Math.min(1, Math.max(0, (t % 2 - 1.5) / 0.5)));
+  tiles.forEach((el, i) => {
+    el.classList.remove("on");
+    const o = i === seg ? 1 - p : i === next ? p : 0;
+    el.style.background = `rgba(245,245,245,${o})`;
+    el.style.color = `rgb(${mix(176, 10, o)},${mix(176, 10, o)},${mix(176, 10, o)})`;
+    const l = el.querySelector(".lbl");
+    l.style.maxWidth = `${labelW[i] * o}px`;
+    l.style.marginLeft = `${8 * o}px`;
+    l.style.opacity = o;
+  });
+  // The next screen fades in over the current one, so the window never looks see-through.
+  imgs.forEach((im, i) => {
+    im.style.opacity = i === seg ? 1 : i === next ? p : 0;
+    im.style.zIndex = i === next ? 2 : 1;
+  });
+  const pulse = 0.5 - 0.5 * Math.cos((2 * Math.PI * t) / 2);
+  dot.style.boxShadow = `0 0 0 ${pulse * 5}px rgba(74,222,128,${0.35 * (1 - pulse)})`;
+};</script>
+</body>
+</html>

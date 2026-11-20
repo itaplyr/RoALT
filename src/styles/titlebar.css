@@ -73,8 +73,33 @@
   .app-menu-btn[aria-expanded="true"] .app-menu-chevron {
     rotate: 180deg;
   }
+  /* How many use RoALT now and their accounts playing (AppMenu): plain text beside the logo. */
+  .online-count {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding-inline: 4px 8px;
+    color: var(--fg-2);
+    font-size: 12px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .online-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: var(--r-pill);
+    background: var(--ok);
+  }
+  .online-playing {
+    margin-inline-start: 4px;
+    color: var(--fg-3);
+  }
   @container titlebar (width < 1060px) {
     .app-menu-btn .wordmark {
+      display: none;
+    }
+    .online-count,
+    .online-count-sep {
       display: none;
     }
   }
@@ -109,5 +134,30 @@
     display: grid;
     place-content: center;
     color: var(--fg-3);
+  }
+}
+
+/* Here and not in settings.css: the locked screen shows it, and settings.css is not loaded yet. Still
+   in views, the layer it always had. */
+@layer views {
+  /* While locked there is no island: the public-network block is a slim pill under the title bar. */
+  .set-public-pill {
+    flex: none;
+    align-self: center;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    padding-block: 7px;
+    padding-inline: 12px 16px;
+    border-radius: var(--r-pill);
+    background: color-mix(in srgb, var(--attention) 8%, var(--surface-1));
+    outline: 1px solid var(--line);
+    outline-offset: -1px;
+    color: var(--fg-2);
+    font-size: var(--fs-small);
+  }
+  .set-public-pill > svg {
+    color: var(--attention);
   }
 }

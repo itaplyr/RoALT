@@ -11,13 +11,14 @@ Examples:
 ```text
 v0.9.2.1
 v0.9.2.2
-v1.0.0.1
+v1.1.0.1
 ```
 
-- `0.9.2` / `1.0.0` is the upstream RoALT version.
+- `0.9.2` / `1.1.0` is the upstream RoALT version.
 - `.1`, `.2`, ... are Linux-fork releases for that upstream version.
-- The latest Linux tag is `v0.9.2.2` (upstream `0.9.2`). Upstream is now
-  `v1.0.0`, so the next Linux release starts at `v1.0.0.1`.
+- The latest Linux tag is `v0.9.2.2` (upstream `0.9.2`). Upstream has since
+  released `v1.1.0`, which this fork has merged; the next Linux release starts
+  at `v1.1.0.1`.
 - Four-part tags never collide with upstream's three-part tags.
 
 The app version shown in Settings is computed from `Cargo.toml` plus
@@ -42,8 +43,8 @@ The app version shown in Settings is computed from `Cargo.toml` plus
 6. Tag and push:
 
    ```bash
-   git tag v1.0.0.1
-   git push fork v1.0.0.1
+   git tag v1.1.0.1
+   git push fork v1.1.0.1
    ```
 
 The **Release Linux** workflow builds the binary and creates a draft release with:
@@ -57,6 +58,14 @@ SHA256SUMS.txt
 
 Publish the draft when it looks right. The Windows release workflow ignores
 four-part Linux tags.
+
+## Release notes
+
+- Mocktail is experimental. Describe it as a single-instance, vault-seeded
+  alternative to Cordial; never as a drop-in replacement, and never as a
+  multi-instance path. Say that no signed-in launch is verified yet.
+- Cordial remains the supported multi-instance launcher, so multi-client claims
+  belong to Cordial only.
 
 ## Auto-update
 
@@ -88,6 +97,8 @@ The updater only replaces the binary. It does not install Cordial or Cage. Use
   (`pacman`, `apt-get`, `dnf`, `zypper`, `apk`, or `xbps-install`)
 - installs Cordial if missing: paru/yay, the official package, or Flatpak on
   Arch; Flatpak (installed first when missing) on other distributions
+- does not install Mocktail; the experimental backend is a separate, opt-in
+  install that the script leaves alone
 - downloads the latest `roalt-linux-x86_64` and its SHA-256, then verifies the
   binary before installing it
 - installs it to `${XDG_BIN_HOME:-$HOME/.local/bin}/roalt`

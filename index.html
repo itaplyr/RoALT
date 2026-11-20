@@ -4,6 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>RoALT</title>
+    <!-- The layer order, before any stylesheet: the build drops theme.css's own statement, and a
+         lazy chunk's sheet can load first and would put `views` below everything. -->
+    <style>@layer tokens, theme, base, components, views, utilities, a11y;</style>
   </head>
   <body>
     <div id="root"></div>

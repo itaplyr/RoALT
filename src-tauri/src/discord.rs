@@ -787,6 +787,7 @@ mod tests {
             discord_muted: false,
             full_quality: false,
             main: false,
+            custom_flags: Default::default(),
             fps_cap: None,
 
         };

@@ -3,6 +3,7 @@ import type { Adaptive } from "./Adaptive";
 import type { AntiAfk } from "./AntiAfk";
 import type { Density } from "./Density";
 import type { DiscordEvents } from "./DiscordEvents";
+import type { FlagScope } from "./FlagScope";
 import type { MemThrottle } from "./MemThrottle";
 import type { RenderFlags } from "./RenderFlags";
 import type { TabLayout } from "./TabLayout";
@@ -136,6 +137,17 @@ selfUpdate: boolean,
  */
 discordPresence: boolean, 
 /**
+ * Ping RoALT's online counter every 2 minutes with a random id made once per launch, and
+ * show how many people use RoALT beside the Discord button (`online`). Off: nothing is sent.
+ */
+onlineCount: boolean, 
+/**
+ * While counting an account's limiteds, download Rolimons' public item list (`rolimons`;
+ * api.rolimons.com, at most every 30 minutes) and add its value, demand and trend. No user id,
+ * name or cookie is sent. Off by default: Rolimons isn't Roblox.
+ */
+rolimonsValues: boolean, 
+/**
  * Hide each client (without taking the focus) once, when it first reaches a game, unless its
  * account is full quality. A hidden client (`instances::window`) stays live while Home shows
  * it and sleeps otherwise, and comes back from the taskbar or Alt-Tab.
@@ -163,6 +175,20 @@ lowGraphics: boolean,
  * geometry detail and what `render_flags` picks.
  */
 lighterRendering: boolean, renderFlags: RenderFlags, 
+/**
+ * The user's own FFlags (`launcher::flags`), written over `lighter_rendering`'s at each
+ * launch while `custom_flags_scope` is Global; Roblox ignores those off its allowlist.
+ */
+customFlags: { [key in string]: string }, 
+/**
+ * Whose FFlags a launch writes: `custom_flags`, or the account's own.
+ */
+customFlagsScope: FlagScope, 
+/**
+ * Browse refuses anything that spends Robux (free items still work) and the Robux, Premium and
+ * billing pages (`browse`); RoALT's own private server purchase is refused too. On by default.
+ */
+lockPurchases: boolean, 
 /**
  * Width and height "Make it tiny" and "Tile tiny windows" use.
  */
@@ -192,13 +218,4 @@ allowPublicNetworks: boolean,
 /**
  * UI and message language (`i18n::LANGS`), or "" to follow Windows' display language.
  */
-language: string, 
-/**
- * AutoHotkey64.exe the user picked; "" to look for it (`macros::find_ahk`).
- */
-ahkPath: string, 
-/**
- * Each client reaching a game starts the first "Run on launch" macro by name, unless its
- * account is Full quality.
- */
-macroAutorun: boolean, };
+language: string, };

@@ -1,7 +1,9 @@
 # Linux port progress
 
-This describes the Linux fork of RoALT after the v1.0.0 merge. It is not a
-statement about the upstream Windows application.
+This describes the Linux fork of RoALT after the v1.1.0 merge. It is not a
+statement about the upstream Windows application. Upstream removed macros in
+v1.0.1, so macros are no longer a Linux port gap. The Mocktail backend is a
+Linux-fork switch, not an upstream feature; it is listed as experimental.
 
 ![Linux port status](images/linux-port-status.svg)
 
@@ -17,24 +19,27 @@ statement about the upstream Windows application.
 The SVG uses green for ported areas and gray for partial, untested, missing, or
 not-applicable areas.
 
-Current totals: **15 ported, 21 partial, untested or missing** across 36 areas.
+Current totals: **15 ported, 24 partial, untested or missing** across 39 areas.
 
 ## Summary
 
 | Category | Status | Coverage | Summary |
 |---|---|---:|---|
 | Accounts | Ported | 100% | Sign-in, vault, imports, groups, presence, account checks |
+| Limiteds | Untested | 0% | Shared inventory and Rolimons code; not run on Linux |
 | Launching | Partial | 65% | Direct Cordial launch works; the game does not always open directly |
 | Launch queue | Partial | 70% | One-at-a-time queue is shared by Play, Home, Servers and recent servers; needs a Linux run |
-| Batches and same server | Partial | 75% | Shared batch engine and same-server picking; new v1.0.0 paths need a Linux run |
+| Batches and same server | Partial | 75% | Shared batch engine and same-server picking; needs a Linux run |
 | Multi-client | Ported | 100% | One Cordial profile per account |
+| Mocktail backend | Partial | 40% | Experimental launcher; multi-instance uses per-account copies, no previews, cookie seeded from the vault |
 | Headless | Partial | 75% | Cage mode, previews and audio disable work; Show restarts, resolution is limited |
 | Previews | Ported | 100% | Cordial devctl screenshots, including headless clients |
 | Rejoin | Ported | 100% | Auto-rejoin/restart verified by closing a client |
 | Servers | Ported | 100% | Server browser, private servers, same-server batches |
+| Browse and details | Untested | 0% | v1.1.0 child webview, game and player details; not exercised under WebKitGTK |
 | FPS cap | Partial | 60% | Passed through `CORDIAL_FLAGS`; some builds/settings still ignore it |
 | Discord | Ported | 100% | Webhook alerts and rich presence tested |
-| Alerts | Partial | 90% | New v1.0.0 alert kinds use the existing Discord path; not yet run on Linux |
+| Alerts | Partial | 90% | Newer batch and client alert kinds use the existing Discord path; not yet run on Linux |
 | Limits | Partial | 95% | Applied to the whole Cordial process family; trim is a no-op |
 | Metrics | Partial | 70% | CPU, memory and disk I/O; no GPU counters |
 | Window controls | Partial | 80% | Hyprland/Sway/X11 focus, micro and tile; free drag resize is compositor-managed |
@@ -46,6 +51,7 @@ Current totals: **15 ported, 21 partial, untested or missing** across 36 areas.
 | Re-authentication | Ported | 100% | Master password; Windows Hello is not available |
 | Self-update | Ported | 100% | Checks the Linux fork release, verifies SHA-256 and restarts |
 | Interface | Ported | 100% | Account tabs, layouts, drag sorting, themes |
+| Online counts | Untested | 0% | v1.1.0 title-bar counts and refresh; shared code, not run on Linux |
 | Island redesign | Ported | 100% | Seen working under WebKitGTK in the v1.0.0 dev run |
 | Languages | Partial | 90% | 18 catalogs; some newer and Linux-only strings fall back to English |
 | Max alts | Partial | 80% | FPS, fair cap, render flags and compositor tiny windows; trim still does not |
@@ -56,8 +62,7 @@ Current totals: **15 ported, 21 partial, untested or missing** across 36 areas.
 | UI sounds | Untested | 90% | Shared frontend, off by default; not run under WebKitGTK |
 | Settings search | Untested | 90% | Shared registry and search frontend; not run after the merge |
 | Vault flow and recovery | Partial | 85% | Shared flow on the Linux device key; needs a run |
-| Macros | Missing | 0% | AutoHotkey v2 and the Windows registry are Windows-only |
-| Bandwidth / QoS | Missing | 0% | Linux backend is a no-op; the UI shows it as unavailable |
+| Bandwidth / QoS | Missing | 0% | Linux backend is a no-op; the UI hides the row and search skips it |
 | Audio mute | Ported | 100% | Uses `pactl` sink-inputs on PulseAudio/PipeWire |
 
 ## Accounts
@@ -71,6 +76,39 @@ Ported.
 - Avatars, presence, Robux, friends, followers, subscriptions and 2-step status.
 - Import from Roblox Account Manager.
 - Per-account FPS cap, Full quality and launch arguments.
+
+## Limiteds
+
+Untested.
+
+- v1.1.0 adds limiteds: count one account's limiteds for its total RAP and its
+  most valuable items, or every account's at once from Home.
+- Counting reads `inventory.roblox.com` with the account's own cookie, one page
+  a second, up to 5,000 items, and keeps the result in the encrypted database.
+- Opt-in **Rolimons values** add value, demand and trend from Rolimons' public
+  item list (`api.rolimons.com`, at most every 30 minutes, off by default).
+- The code is shared and has no Windows dependency, but it has not been run on
+  Linux. Shown at 0% until it is.
+
+## Browse, game and player details
+
+Untested.
+
+- v1.1.0 adds **Browse**: roblox.com inside the RoALT window, signed in as one
+  stored account at a time, with **Popular**, **Playtime**, game pages and
+  profile pages.
+- Browse is a Tauri child webview (`browse.rs`, `Window::add_child`); RoALT
+  builds against Tauri's `unstable` feature for it. On Linux that would be a
+  WebKitGTK child of the main window, which is the untested part.
+- **Game details** and **Player details** are pages inside Browse: players,
+  visits, favourites, likes, server count, age rating, places, passes, badges,
+  and a player's groups, badges, games and limiteds.
+- RoALT keeps Browse on Roblox and refuses Robux-spending requests while
+  **Lock purchases** is on.
+- Not verified under WebKitGTK on Linux. If creating the child webview fails,
+  `browse_open` rejects and the Browse pane shows the error. **Open on
+  roblox.com** is itself Browse, so the external fallback is **Open profile** in
+  the account menu.
 
 ## Launching
 
@@ -87,6 +125,8 @@ Works:
 Caveats:
 
 - Launching does not always open the game directly.
+- When Mocktail is installed, RoALT launches through it instead of Cordial; see
+  the Mocktail section below.
 - The Flatpak/Cordial-shell fallback follows a different path and does not get
   all of RoALT's direct-launch behavior.
 - Sober fallback still exists in the launcher code but is not the supported path.
@@ -119,6 +159,27 @@ Ported.
 - One Cordial profile per account.
 - Several clients at once through separate Cordial processes.
 - Profile isolation for storage and login.
+
+## Mocktail backend (experimental)
+
+Partial.
+
+- RoALT prefers `mocktail` on `PATH`, then `~/.local/bin/mocktail`, then `/usr/bin/mocktail`, and otherwise
+  uses the Cordial path above. `ROALT_LAUNCHER=/usr/bin/cordial-run` forces
+  Cordial when both are installed.
+- Single-instance only: one Roblox client at a time. Mocktail has no
+  per-account profile to separate a second client, so Cordial remains the
+  multi-instance option.
+- No live preview and no dev-control: Mocktail exposes no devctl socket, so
+  Home has no preview frames and the headless screenshot path has nothing to
+  read.
+- Per-account cookie: before a launch RoALT writes the chosen account's cookie
+  from the encrypted vault into the directory named by `MOCKTAIL_AUTH_ROOT`, so
+  the client signs in as that account. That copy sits outside the vault and is
+  not encrypted there; keep the directory private.
+- The switch and the cookie handoff are present, but no signed-in Mocktail
+  launch has been verified on Linux. Shown at 40% until one is, and this is not
+  a drop-in replacement for Cordial.
 
 ## Headless clients
 
@@ -313,7 +374,7 @@ Partial.
 Ported.
 
 - Checks the Linux fork's latest release at startup and every five minutes.
-- Compares four-part Linux tags such as `v0.9.2.1` and `v0.9.2.2`.
+- Compares four-part Linux tags such as `v0.9.2.2` and the expected `v1.1.0.1`.
 - Downloads the `roalt-linux-x86_64` asset and its SHA-256 sidecar.
 - Replaces the running executable and restarts RoALT.
 - The installer script remains the way to install Cordial, Cage and the desktop entry.
@@ -331,23 +392,43 @@ Ported.
 - Performance profiles and the Performance tab.
 - Headless resolution controls (display/window size only).
 
-## Island redesign
+## Online counts and title-bar refresh
 
 Untested.
 
+- v1.0.1 added the online counter; v1.0.2 added the accounts-playing count. Both
+  sit beside the Discord button in the title bar.
+- Every 2 minutes RoALT POSTs a random ID made once per launch and how many
+  Roblox clients it runs to a Cloudflare Worker (`server/online-counter`). The
+  worker answers with RoALTs seen in the last 5 minutes and their clients added
+  up (each ping counts for at most 100 accounts).
+- Off with **Settings › About → Show how many people use RoALT**: nothing is
+  sent and no count is shown. On by default.
+- The ping is shared `reqwest` code (`online.rs`) with no Windows dependency, and
+  the title bar is shared React UI, but neither has been exercised on Linux.
+- v1.0.1 also added the title-bar **Refresh** (`F5`) key beside the layout key;
+  shared frontend, not yet run under WebKitGTK.
+- v1.1.0 made the UI faster: languages and views load lazily and resting in the
+  tray hides the page so its polls and previews stop. The extra WebView2 memory
+  target has no Linux equivalent, so only the page hiding applies here.
+
+## Island redesign
+
+Ported.
+
 - The v1.0.0 island replaces the old title-bar navigation with a pill that holds
   every section and grows launch progress and running clients out of its side.
-- The island is shared React UI and should render under WebKitGTK, but the merge
-  has not been run on Linux yet.
-- Treat the island as present but unverified until a launch and a running-client
-  expansion have been exercised.
+- It was seen working under WebKitGTK in the v1.0.0 dev run.
+- Re-check it after the v1.1.0 merge along with the rest of the shell.
 
 ## Settings search and registry
 
 Untested.
 
-- Settings render from a registry; one search covers Settings, Performance,
-  Discord and Macros and jumps to the matching row.
+- Settings render from a registry; one search covers Settings, Performance and
+  Discord and jumps to the matching row.
+- Rows whose backend is Windows-only are left out on Linux: the bandwidth/QoS
+  row is hidden and search skips it.
 - The registry and search are shared frontend code.
 - Not verified under WebKitGTK after the merge.
 
@@ -378,15 +459,17 @@ Ported.
 - Linux uses `localtime_r` and the same atomic file write and cleanup path as
   Windows. The file remains in the RoALT data folder until its timer or restart.
 
-## Macros
+## Macros (removed upstream)
 
-Missing.
+Not an area. Upstream removed macros in v1.0.1:
 
-- Upstream runs AutoHotkey v2 scripts on chosen clients, with import/export,
-  review and global hotkeys.
-- AutoHotkey is Windows software, and the merged macro runner reads the Windows
-  registry and uses Windows process/job behavior.
-- Macros are not available on Linux.
+- The macros page, the client-menu actions, the macros settings and the backup
+  entries are gone; migration `012_drop_macros.sql` drops the table, and the
+  panic hotkey has the global-shortcut handler to itself.
+- `src-tauri/src/macros.rs` no longer exists upstream, and this fork does not
+  carry a macro runner.
+- There is nothing to port and no Linux gap. The v1.0.0 Linux notes that called
+  macros "Windows-only" are obsolete.
 
 ## Bandwidth / QoS
 
@@ -414,8 +497,8 @@ Partial.
 
 - 18 language catalogs are present.
 - Language switching and right-to-left layout work.
-- Some newer strings, including Linux-only headless strings and v1.0.0 additions,
-  fall back to English until translated.
+- Some newer strings, including Linux-only headless strings and v1.0.0/v1.1.0
+  additions, fall back to English until translated.
 
 ## Max alts
 

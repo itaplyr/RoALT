@@ -62,7 +62,6 @@
   }
   /* Every number that sits beside another lines up digit for digit. */
   table,
-  .num-tab,
   time,
   output {
     font-variant-numeric: tabular-nums;

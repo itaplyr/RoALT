@@ -33,7 +33,6 @@ const paths = {
   download: <path d="M8 2.5v8M4.8 7.3 8 10.5l3.2-3.2M2.5 13.5h11" />,
   upload: <path d="M8 10.5v-8M4.8 5.7 8 2.5l3.2 3.2M2.5 13.5h11" />,
   signin: <path d="M9.5 2.5h2.7a1.3 1.3 0 0 1 1.3 1.3v8.4a1.3 1.3 0 0 1-1.3 1.3H9.5M2.5 8h7.2M7 5l3 3-3 3" />,
-  key: <><circle cx="5" cy="8" r="2.75" /><path d="M7.75 8h5.75v2.4M11 8v1.6" /></>,
   chevron: <path d="M4 6l4 4 4-4" />,
   monitor: <path d="M1.5 8.6h2.6L5.8 4l3 8 1.7-3.4h4" />,
   bell: <><path d="M4 11.5V7a4 4 0 0 1 8 0v4.5l1 1H3z" /><path d="M6.5 14.2h3" /></>,

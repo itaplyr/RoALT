@@ -27,12 +27,6 @@ export function Counted({ k, n }: { k: Key; n: number }) {
   );
 }
 
-/** A menu opened from a button: the keyboard lands on its picked item, else its first. */
-export const focusFirstItem = (id: string) => (open: boolean) => {
-  const el = open ? document.getElementById(id) : null;
-  (el?.querySelector<HTMLElement>("[aria-checked=true]") ?? el?.querySelector<HTMLElement>("[role^=menuitem]:not(:disabled)"))?.focus();
-};
-
 /** The header's one pill. At rest: check, export, add. With rows ticked it morphs into what applies to
  * them; reasons for what won't work show in the line under it, never in a tooltip alone. */
 export function AccountsToolbar({ total, selected, groups, playable, friendable, mainSkipped, checking, befriending, onCheckAll, onCheck, onExport, onAdd, onPlay, onBefriend, onAddToGroup, onRemove, onClear }: {
@@ -212,10 +206,10 @@ export function AccountsToolbar({ total, selected, groups, playable, friendable,
           )}
         />
       </div>
-      <Popover id={GROUP_MENU} anchor={groupMenu.name} placement="below-end" role="menu" label={t("accounts.addToGroup")} onToggle={focusFirstItem(GROUP_MENU)}>
+      <Popover id={GROUP_MENU} anchor={groupMenu.name} placement="below-end" role="menu" label={t("accounts.addToGroup")}>
         {groupItems}
       </Popover>
-      <Popover id={MORE_MENU} anchor={moreMenu.name} placement="below-end" role="menu" label={t("home.more")} onToggle={focusFirstItem(MORE_MENU)}>
+      <Popover id={MORE_MENU} anchor={moreMenu.name} placement="below-end" role="menu" label={t("home.more")}>
         <MenuItem icon="accounts" disabled={!canBefriend} onSelect={befriend}>{t("accounts.befriendEllipsis")}</MenuItem>
         <MenuItem icon="download" onSelect={() => onExport(selected)}>{t("accounts.exportCookiesEllipsis")}</MenuItem>
         <MenuSeparator />

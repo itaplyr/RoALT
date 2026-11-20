@@ -293,9 +293,6 @@
       scale: none;
     }
   }
-  .home-menu-swap {
-    animation: rise var(--dur-base) var(--ease-out) backwards;
-  }
   .home-menu-caps {
     display: flex;
     align-items: center;

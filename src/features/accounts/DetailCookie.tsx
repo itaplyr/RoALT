@@ -81,11 +81,12 @@ export function DetailCookie({ account: a, vaultMode, clipboardSeconds, label }:
           </div>
         )}
       </Morph>
-      <div className="grid grid-cols-2 gap-2">
-        <Button icon={cookie ? "eyeOff" : "eye"} busy={busy === "reveal"} onClick={() => (cookie ? setCookie(null) : start("reveal"))}>
+      {/* Side by side while both labels fit, else one per line (a label never wraps). */}
+      <div className="flex flex-wrap gap-2">
+        <Button icon={cookie ? "eyeOff" : "eye"} className="flex-[1_1_0]" busy={busy === "reveal"} onClick={() => (cookie ? setCookie(null) : start("reveal"))}>
           {cookie ? t("accounts.detail.hide") : t("accounts.detail.reveal")}
         </Button>
-        <Button icon="copy" busy={busy === "copy"} onClick={() => start("copy")}>
+        <Button icon="copy" className="flex-[1_1_0]" busy={busy === "copy"} onClick={() => start("copy")}>
           {t("common.copy")}
         </Button>
       </div>

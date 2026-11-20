@@ -8,7 +8,7 @@ import { Field, Input } from "../../ui/Field";
 import { DUR, EASE, Morph, prefersReducedMotion, SPRING, Swap, TWEEN } from "../../ui/motion";
 import { friendly } from "../../ui/Toast";
 import { getLang, t } from "../../i18n";
-import { MIN_PASSWORD, PasswordField } from "./PasswordDialog";
+import { PasswordField, useNewPassword } from "./PasswordDialog";
 import { publishRecoveryCode } from "./recoveryCode";
 import "./vault.css";
 
@@ -166,11 +166,7 @@ type Slot = "code" | "next" | "confirm" | "form";
 function RecoverForm({ onBack, onRecovered, onFail, onFixed, onOpen }: Card & { onBack: () => void; onRecovered?: (code: string) => void }) {
   const form = useRef<HTMLFormElement>(null);
   const [code, setCode] = useState("");
-  const [nw, setNw] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const [peek, setPeek] = useState(false);
-  // The confirmation is checked once it has been left, then as either field changes.
-  const [left, setLeft] = useState(false);
+  const pw = useNewPassword();
   const [problem, setProblem] = useState<{ at: Slot; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => form.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus(), []);
@@ -189,23 +185,18 @@ function RecoverForm({ onBack, onRecovered, onFail, onFixed, onOpen }: Card & { 
     }
   };
   const errorAt = (at: Slot) => (problem?.at === at ? problem.text : undefined);
-  const mismatch = left && !!confirm && confirm !== nw;
-  const togglePeek = () => setPeek(!peek);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (busy) return;
     if (!code.trim()) return fail("code", t("vault.recovery.enterCode"));
-    if (nw.length < MIN_PASSWORD) return fail("next", t("vault.tooShort", { count: MIN_PASSWORD }));
-    if (nw !== confirm) {
-      setLeft(true);
-      return fail("confirm", t("vault.mismatch"));
-    }
+    const bad = pw.check();
+    if (bad) return fail(...bad);
     setBusy(true);
     setProblem(null);
     onFixed();
     try {
-      const fresh = await api.vaultRecover(code, nw);
+      const fresh = await api.vaultRecover(code, pw.nw);
       // At once: the old code is void now, and the card is about to go.
       if (onRecovered) onRecovered(fresh);
       else publishRecoveryCode(fresh);
@@ -244,27 +235,7 @@ function RecoverForm({ onBack, onRecovered, onFail, onFixed, onOpen }: Card & { 
           />
         )}
       </Field>
-      <PasswordField
-        label={t("vault.newPassword")}
-        value={nw}
-        onChange={edit("next", setNw)}
-        autoComplete="new-password"
-        hint={t("vault.minLength", { count: MIN_PASSWORD })}
-        error={errorAt("next")}
-        withKey
-        peek={peek}
-        onPeek={togglePeek}
-      />
-      <PasswordField
-        label={t("vault.confirm")}
-        value={confirm}
-        onChange={edit("confirm", setConfirm)}
-        onBlur={() => setLeft(true)}
-        autoComplete="new-password"
-        error={errorAt("confirm") ?? (mismatch ? t("vault.mismatch") : undefined)}
-        peek={peek}
-        onPeek={togglePeek}
-      />
+      {pw.fields({ edit, errorAt, withKey: true })}
       {problem?.at === "form" && <p role="alert" className="alert">{problem.text}</p>}
       <div className="flex flex-col gap-2 pt-1">
         <Button type="submit" variant="primary" block busy={busy}>

@@ -4,6 +4,7 @@ import { useSetSettings } from "../../data";
 import { t } from "../../i18n";
 import { NumberField, Switch } from "../../ui/controls";
 import { errorText } from "./kit/rowError";
+import { MocktailNotice } from "./MocktailNotice";
 
 /** Settings this fork keeps that upstream's generated bindings predate. */
 export type LinuxSettings = Settings & {
@@ -70,6 +71,9 @@ export function LinuxLaunchRows({ settings }: { settings: Settings }) {
   const s = settings as LinuxSettings;
   return (
     <>
+      <div className="set-row">
+        <MocktailNotice />
+      </div>
       <LinuxSwitchRow id="headless" label={t("settings.headless")} hint={t("settings.headlessHint")} field="headless" checked={!!s.headless} />
       <LinuxSwitchRow id="keepRunning" label={t("settings.keepRunning")} hint={t("settings.keepRunningHint")} field="keepRunningOnClose" checked={!!s.keepRunningOnClose} />
     </>

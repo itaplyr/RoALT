@@ -46,20 +46,13 @@ const RENDERERS: RowRenderers = {
 /** Each view's island icon, for search's links into it. */
 const VIEW_ICON = Object.fromEntries((Object.keys(SECTION_VIEW) as Section[]).map((s) => [SECTION_VIEW[s], SECTION_ICON[s]])) as Partial<Record<View, IconName>>;
 
-// Sections no longer fold (one screen per area): forget the ones this PC had folded.
-try {
-  localStorage.removeItem("roalt.settingsClosed");
-} catch {
-  // No storage: nothing was kept.
-}
-
 /** What was typed, and what it found then. Found per keystroke, not per render: a row whose words a
  * flow changes (the vault's mode, a new recovery code) stays on screen, its dialog with it. */
 type Find = { q: string; found: HitGroup[] | null };
 const NO_FIND: Find = { q: "", found: null };
 /** Rows whose backend exists only on Windows: Performance leaves them out on this fork, so search
- * must not offer a jump that lands on nothing. */
-const HIDDEN_ON_LINUX = new Set(["bandwidth", "mute"]);
+ * must not offer a jump that lands on nothing. Mute is not here: the Linux fork has `pactl`. */
+const HIDDEN_ON_LINUX = new Set(["bandwidth"]);
 
 /** `area`: the one the island picked (one screen each). */
 export function SettingsView({ area = "launching" }: { area?: SettingsArea }) {

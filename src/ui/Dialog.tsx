@@ -1,4 +1,4 @@
-import { useEffect, useId, useReducer, useRef, type ReactNode } from "react";
+import { useEffect, useId, useReducer, useRef, type DialogHTMLAttributes, type ReactNode, type RefObject } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { IconButton } from "./Button";
 import { isRtl, t } from "../i18n";
@@ -6,6 +6,50 @@ import { DUR, Morph, SPRING, Swap, TWEEN, useReducedMotionFlag } from "./motion"
 
 /** How long .dlg takes to fade out (overlays.css, --dur-dialog-exit), and a little. */
 const FADE_MS = DUR.dialogExit + 90;
+
+/** A native modal <dialog> (Dialog, Drawer): showModal and close follow `open`; Esc and a click on the
+ * backdrop call onClose. `opened` runs right after showModal, to place the focus. Spread the result
+ * on the <dialog>. */
+export function useModal(open: boolean, onClose: () => void, opened: (d: HTMLDialogElement) => void): DialogHTMLAttributes<HTMLDialogElement> & { ref: RefObject<HTMLDialogElement | null> } {
+  const ref = useRef<HTMLDialogElement>(null);
+  const downOnBackdrop = useRef(false);
+  const openedAt = useRef(0);
+  useEffect(() => {
+    const d = ref.current;
+    if (!d) return;
+    if (open && !d.open) {
+      d.showModal();
+      openedAt.current = Date.now();
+      opened(d);
+    }
+    if (!open && d.open) d.close();
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  return {
+    ref,
+    // React passes a nested dialog's cancel and close up the tree: only this one's own count.
+    onCancel: (e) => {
+      if (e.target !== e.currentTarget) return;
+      e.preventDefault();
+      onClose();
+    },
+    onPointerDown: (e) => (downOnBackdrop.current = e.target === e.currentTarget),
+    // A press on the backdrop let go inside is no click on the backdrop.
+    onPointerUp: (e) => (downOnBackdrop.current &&= e.target === e.currentTarget),
+    onClick: (e) => {
+      // Not the second click of the double-click that opened it.
+      if (downOnBackdrop.current && e.target === e.currentTarget && Date.now() - openedAt.current > 400) onClose();
+    },
+    // Should the browser close it anyway while its owner keeps it open (a second Esc closes a dialog
+    // natively, past onCancel): back, and ask the owner.
+    onClose: (e) => {
+      if (e.target !== e.currentTarget) return;
+      if (open && !e.currentTarget.open) {
+        e.currentTarget.showModal();
+        onClose();
+      }
+    },
+  };
+}
 
 /**
  * Native modal <dialog>. Keep it mounted and drive `open`, so CSS can animate it out.
@@ -20,9 +64,6 @@ export function Dialog({ open, onClose, title, width = 440, describedBy, childre
   describedBy?: string;
   children: ReactNode;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
-  const downOnBackdrop = useRef(false);
-  const openedAt = useRef(0);
   const titleId = useId();
   // While it fades out it keeps showing what it showed, whatever its owner has moved on to; then
   // that is let go, so a closed dialog holds on to no typed cookie.
@@ -46,22 +87,15 @@ export function Dialog({ open, onClose, title, width = 440, describedBy, childre
   if (open && !wasOpen.current) opens.current++;
   wasOpen.current = open;
 
-  useEffect(() => {
-    const d = ref.current;
-    if (!d) return;
-    if (open && !d.open) {
-      d.showModal();
-      openedAt.current = Date.now();
-      // showModal would focus the header's close button; prefer the marked or first field.
-      const first = d.querySelector<HTMLElement>("[data-autofocus]") ?? d.querySelector<HTMLElement>("input:not([disabled]):not([type=checkbox]):not([type=radio]), textarea");
-      first?.focus();
-    }
-    if (!open && d.open) d.close();
-  }, [open]);
+  const modal = useModal(open, onClose, (d) => {
+    // showModal would focus the header's close button; prefer the marked or first field.
+    const first = d.querySelector<HTMLElement>("[data-autofocus]") ?? d.querySelector<HTMLElement>("input:not([disabled]):not([type=checkbox]):not([type=radio]), textarea");
+    first?.focus();
+  });
 
   return (
     <dialog
-      ref={ref}
+      {...modal}
       className="dlg"
       style={{ width }}
       aria-labelledby={titleId}
@@ -77,27 +111,6 @@ export function Dialog({ open, onClose, title, width = 440, describedBy, childre
         e.preventDefault();
         onClose();
       }}
-      // React passes a nested dialog's cancel and close up the tree: only this one's own count.
-      onCancel={(e) => {
-        if (e.target !== e.currentTarget) return;
-        e.preventDefault();
-        onClose();
-      }}
-      onPointerDown={(e) => (downOnBackdrop.current = e.target === e.currentTarget)}
-      // A press on the backdrop let go inside is no click on the backdrop.
-      onPointerUp={(e) => (downOnBackdrop.current &&= e.target === e.currentTarget)}
-      onClick={(e) => {
-        // Not the second click of the double-click that opened it.
-        if (downOnBackdrop.current && e.target === e.currentTarget && Date.now() - openedAt.current > 400) onClose();
-      }}
-      // Should the browser close it anyway while its owner keeps it open: back, and ask the owner.
-      onClose={(e) => {
-        if (e.target !== e.currentTarget) return;
-        if (open && !e.currentTarget.open) {
-          e.currentTarget.showModal();
-          onClose();
-        }
-      }}
     >
       <div className="dlg-head">
         {/* The title changes with the step of a flow: it cross-fades as the body slides. */}
@@ -110,9 +123,6 @@ export function Dialog({ open, onClose, title, width = 440, describedBy, childre
     </dialog>
   );
 }
-
-export const DialogBody = ({ className = "", children }: { className?: string; children: ReactNode }) => <div className={`dlg-body ${className}`}>{children}</div>;
-export const DialogFooter = ({ className = "", children }: { className?: string; children: ReactNode }) => <div className={`dlg-foot ${className}`}>{children}</div>;
 
 /** Steps of one flow inside one dialog (confirm, password, result): the dialog springs to each
  * step's height while the step slides in from the side it comes from. Focus moves to the new step's

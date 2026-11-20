@@ -4,7 +4,7 @@ import { api, asError, type AccountSummary, type Profile, type Settings } from "
 import { setAccounts, useAccounts, useInstances, useSetSettings } from "../../data";
 import { fmtNum, t, type Key } from "../../i18n";
 import { Button } from "../../ui/Button";
-import { Dialog, DialogBody, DialogFooter } from "../../ui/Dialog";
+import { Dialog } from "../../ui/Dialog";
 import { Icon } from "../../ui/Icon";
 import { Collapse, riseIn } from "../../ui/motion";
 import { friendly, toast } from "../../ui/Toast";
@@ -24,7 +24,7 @@ function valueText(k: ProfileKey, v: Profile[ProfileKey] | Settings[ProfileKey])
   if (typeof v === "number") {
     if (k === "microWidth" || k === "microHeight") return fmtNum(v);
     if (!v) return t("common.off");
-    return k === "fpsCap" ? t("dashboard.fps", { fps: v }) : k === "trimEveryMin" ? t("settings.minutes", { n: v }) : `${fmtNum(v)} MB`;
+    return k === "fpsCap" ? t("dashboard.fps", { fps: v }) : k === "trimEveryMin" ? t("settings.minutes", { n: v }) : t("monitor.mb", { n: fmtNum(v) });
   }
   if ("msaa" in v) {
     const strip = [[v.graySky, "performance.graySky"], [v.noGrass, "performance.noGrass"], [v.lowestFrm, "performance.lowestFrm"], [v.pauseVoxelizer, "performance.pauseVoxelizer"]] as const;
@@ -36,7 +36,7 @@ function valueText(k: ProfileKey, v: Profile[ProfileKey] | Settings[ProfileKey])
     ];
     return parts.filter(Boolean).join(" · ") || t("performance.robloxDefault");
   }
-  if ("mb" in v) return `${v.mb ? `${fmtNum(v.mb)} MB` : t("common.off")} · ${pct(v.cpuCap)}`;
+  if ("mb" in v) return `${v.mb ? t("monitor.mb", { n: fmtNum(v.mb) }) : t("common.off")} · ${pct(v.cpuCap)}`;
   const b = v.background;
   const trim = b.trimEveryMin === null ? t("common.default") : b.trimEveryMin ? t("settings.minutesShort", { n: b.trimEveryMin }) : t("common.off");
   return `${onOff(v.enabled)} · ${pct(b.cpuCap)} · ${t("settings.efficiency")} ${onOff(b.eco)} · ${trim}`;
@@ -122,7 +122,7 @@ export function ReviewDialog({ profile, settings, facts, onApplied, onClose }: {
 
   return (
     <Dialog open={profile !== null} onClose={onClose} title={t("performance.reviewTitle")} width={500}>
-      <DialogBody className="perf-review-body">
+      <div className="dlg-body perf-review-body">
         <div ref={list} className="flex flex-col gap-4">
           <p className="text-fg-2" data-rise>{t(changes.length ? "performance.reviewIntro" : "performance.profileSame")}</p>
           {changes.length > 0 && (
@@ -152,8 +152,8 @@ export function ReviewDialog({ profile, settings, facts, onApplied, onClose }: {
             <p role="alert" className="alert text-[13px]">{error}</p>
           </Collapse>
         </div>
-      </DialogBody>
-      <DialogFooter>
+      </div>
+      <div className="dlg-foot">
         <Button size="md" onClick={onClose} data-autofocus={!changes.length || undefined}>
           {t(changes.length ? "common.cancel" : "common.close")}
         </Button>
@@ -163,7 +163,7 @@ export function ReviewDialog({ profile, settings, facts, onApplied, onClose }: {
             {t("performance.apply")}
           </Button>
         )}
-      </DialogFooter>
+      </div>
     </Dialog>
   );
 }

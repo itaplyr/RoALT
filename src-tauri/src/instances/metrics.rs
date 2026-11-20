@@ -87,6 +87,10 @@ impl Sampler {
     /// Metrics of the running clients (id, pid, start time, limits as `Tracker::clients`);
     /// a client whose process can't be read is left out.
     pub fn sample(&self, clients: &[(String, u32, u64, Limits)]) -> Vec<ClientMetrics> {
+        // Home and Monitor poll every 2 s: with no client, no PC-wide GPU counter read for nothing.
+        if clients.is_empty() {
+            return Vec::new();
+        }
         let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((until, m)) = cache.as_ref()
             && Instant::now() < *until

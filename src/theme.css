@@ -15,39 +15,22 @@
 @import "./styles/a11y.css";
 @import "./styles/motion.css";
 
-/* Utilities: bg-panel, text-dim, border-line, ... (the legacy names) and the new ones (bg-surface,
-   text-fg-2, border-edge, text-ok ...). Tailwind's own palette is off: colour comes from tokens. */
+/* Utilities: bg-surface, text-fg-2, border-edge, text-ok ... Only the colours in use are mapped;
+   Tailwind's own palette is off: colour comes from tokens. */
 @theme inline {
   --color-*: initial;
-  --color-ground: var(--ground);
   --color-surface: var(--surface-1);
-  --color-surface-2: var(--surface-2);
   --color-surface-3: var(--surface-3);
-  --color-float: var(--float);
   --color-fg: var(--fg);
   --color-fg-2: var(--fg-2);
   --color-fg-3: var(--fg-3);
   --color-edge: var(--edge);
-  --color-on-accent: var(--on-accent);
   --color-ok: var(--ok);
-  --color-info: var(--info);
   --color-attention: var(--attention);
-  --color-bg: var(--bg);
-  --color-panel: var(--panel);
-  --color-raised: var(--raised);
   --color-hover: var(--hover);
   --color-sel: var(--sel);
   --color-line: var(--line);
-  --color-line-strong: var(--line-strong);
-  --color-text: var(--text);
-  --color-dim: var(--dim);
-  --color-accent: var(--accent);
   --color-accent-text: var(--accent-text);
-  --color-blue: var(--blue);
-  --color-orange: var(--orange);
-  --color-err: var(--err);
-  --color-warn: var(--warn);
-  --color-grey: var(--grey);
   --font-sans: var(--font-ui);
   --font-mono: var(--font-code);
 }

@@ -2,18 +2,18 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import "../accounts/accounts.css";
 import { api, type AccountSummary, type Instance } from "../../api";
-import { qk, setAccounts, useAccountInfo, useMetrics, useSettings, useSystemUsage, useVault } from "../../data";
-import { t, tx } from "../../i18n";
+import { browseAs } from "../../app/navigation";
+import { qk, useAccountInfo, useMetrics, useSettings, useSystemUsage, useVault } from "../../data";
+import { t } from "../../i18n";
 import { Skeleton } from "../../ui/Bits";
 import { Button } from "../../ui/Button";
-import { ConfirmDialog } from "../../ui/Dialog";
 import { Meter } from "../../ui/Meter";
 import { Num } from "../../ui/motion";
 import { toast } from "../../ui/Toast";
 import { DetailCookie } from "../accounts/DetailCookie";
-import { PresenceBlock, RecentServers, Section } from "../accounts/DetailOverview";
-import { accountName, ago, Status } from "../accounts/shared";
-import { mb, pct } from "../monitor/MonitorView";
+import { PresenceBlock, RecentServers, Section, StatusLine } from "../accounts/DetailOverview";
+import { accountName, useRemoveAccounts } from "../accounts/shared";
+import { mb, pct } from "../monitor/format";
 import { LimitsDialog } from "./LimitsDialog";
 
 /** The account tab's second column: how the account stands, what its client uses, where it played,
@@ -25,7 +25,6 @@ export function AccountColumn({ account: a, inst }: { account: AccountSummary; i
   const d = info.data?.userId === a.userId ? info.data : undefined;
   const vault = useVault().data;
   const settings = useSettings().data;
-  const [removing, setRemoving] = useState<"ask" | "main" | null>(null);
 
   const validate = useMutation({
     mutationFn: async () => ({ started: Date.now(), list: await api.accountsValidate([a.id]) }),
@@ -36,40 +35,16 @@ export function AccountColumn({ account: a, inst }: { account: AccountSummary; i
       toast(done ? t("accounts.toast.checked", { count: 1 }) : t("accounts.toast.missed", { count: 1 }));
     },
   });
-  const session = useMutation({
-    mutationFn: () => api.accountOpenSession(a.id),
-    onSuccess: () => toast(a.status === "valid" ? t("accounts.detail.sessionOpenedValid") : t("accounts.detail.sessionOpenedOther")),
-  });
-  const remove = useMutation({
-    mutationFn: () => api.accountsRemove([a.id]),
-    onSuccess: () => {
-      setRemoving(null);
-      // Home drops the tab once the account is gone from the list.
-      setAccounts(qc, (list) => list.filter((x) => x.id !== a.id));
-      qc.removeQueries({ queryKey: qk.info(a.id) });
-      toast(t("accounts.toast.removed", { count: 1 }));
-    },
-  });
+  // Home drops the tab once the account is gone from the list.
+  const removing = useRemoveAccounts([a]);
   const checking = validate.isPending;
 
   return (
     <aside className="panel acct-col" aria-label={t("home.acct.label")}>
       <Section label={t("home.acct.status")}>
-        <div className="flex items-center justify-between gap-3 min-h-7">
-          <span className="flex items-center gap-2 min-w-0">
-            <span className="flex-none">
-              <Status status={a.status} checking={checking} swap />
-            </span>
-            <span className="meta truncate">
-              {a.statusCheckedAt ? t("accounts.detail.checked", { when: ago(a.statusCheckedAt) }) : t("accounts.notValidated")}
-            </span>
-          </span>
-          <Button size="sm" variant="ghost" icon="refresh" busy={checking} onClick={() => !checking && validate.mutate()}>
-            {t("accounts.menu.validate")}
-          </Button>
-        </div>
+        <StatusLine account={a} checking={checking} onValidate={() => !checking && validate.mutate()} />
         {(a.status === "invalid" || a.status === "challenged") && (
-          <Button icon="signin" block busy={session.isPending} onClick={() => session.mutate()}>
+          <Button icon="signin" block onClick={() => browseAs(a.id, "login")}>
             {t("accounts.detail.signInAgain")}
           </Button>
         )}
@@ -80,41 +55,19 @@ export function AccountColumn({ account: a, inst }: { account: AccountSummary; i
       <RecentServers account={a} playing={!!inst} />
 
       <Section label={t("home.acct.tools")}>
-        <div className="grid grid-cols-2 gap-2">
-          <Button icon="external" busy={session.isPending} onClick={() => session.mutate()}>
+        {/* Side by side while both labels fit, else one per line (a label never wraps). */}
+        <div className="flex flex-wrap gap-2">
+          <Button icon="globe" className="flex-[1_1_0]" onClick={() => browseAs(a.id)}>
             {t("accounts.menu.openSession")}
           </Button>
-          <Button variant="danger" icon="trash" onClick={() => setRemoving("ask")}>
+          <Button variant="danger" icon="trash" className="flex-[1_1_0]" onClick={() => removing.ask([a.id])}>
             {t("accounts.detail.removeEllipsis")}
           </Button>
         </div>
       </Section>
       {vault && settings && <DetailCookie account={a} vaultMode={vault.mode} clipboardSeconds={settings.clipboardClearSeconds} label={t("accounts.detail.cookie")} />}
 
-      <ConfirmDialog
-        open={removing === "ask"}
-        onClose={() => setRemoving(null)}
-        // The MAIN goes only after a second, explicit confirm.
-        onConfirm={() => (a.main ? setRemoving("main") : remove.mutate())}
-        busy={remove.isPending}
-        title={t("accounts.removeTitle", { count: 1 })}
-        text={
-          <>
-            {tx("accounts.removeOneText", { name: <span className="text-fg font-medium">{accountName(a)}</span> })}
-            {a.main && <p className="alert mt-2">{t("accounts.removeMainWarning", { name: `@${a.username}` })}</p>}
-          </>
-        }
-        confirmLabel={t("common.remove")}
-      />
-      <ConfirmDialog
-        open={removing === "main"}
-        onClose={() => setRemoving(null)}
-        onConfirm={() => remove.mutate()}
-        busy={remove.isPending}
-        title={t("accounts.removeMainTitle")}
-        text={t("accounts.removeMainConfirm", { name: `@${a.username}` })}
-        confirmLabel={t("common.remove")}
-      />
+      {removing.dialogs}
     </aside>
   );
 }

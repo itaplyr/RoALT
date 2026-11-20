@@ -1,28 +1,14 @@
-import { useEffect, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useEffect, type KeyboardEvent, type PointerEvent } from "react";
 import { isRtl, t } from "../i18n";
+import { useStored } from "./stored";
 
 const KEY = "roalt.width.";
 
 /** A panel width the user can drag, remembered per panel (a per-viewer convenience). */
 export function usePanelWidth(id: string, initial: number, min: number, max: number) {
   const clamp = (w: number) => Math.round(Math.min(max, Math.max(min, w)));
-  const [width, set] = useState(() => {
-    try {
-      const saved = Number(localStorage.getItem(KEY + id));
-      return saved ? clamp(saved) : initial;
-    } catch {
-      return initial;
-    }
-  });
-  const setWidth = (w: number) => {
-    const next = clamp(w);
-    set(next);
-    try {
-      localStorage.setItem(KEY + id, String(next));
-    } catch {
-      // Only a convenience.
-    }
-  };
+  const [width, set] = useStored(KEY + id, (s) => (Number(s) ? clamp(Number(s)) : initial), String);
+  const setWidth = (w: number) => set(clamp(w));
   return { width, setWidth, reset: () => setWidth(initial), min, max };
 }
 
@@ -75,7 +61,7 @@ export function Divider({ panel, side, label }: {
       onPointerDown={drag}
       onDoubleClick={panel.reset}
       onKeyDown={key}
-      className="relative z-10 w-0 flex-none outline-none cursor-col-resize before:absolute before:inset-y-0 before:-start-[3px] before:w-[6px] before:content-[''] hover:before:bg-line-strong focus-visible:before:bg-accent-text"
+      className="relative z-10 w-0 flex-none outline-none cursor-col-resize before:absolute before:inset-y-0 before:-start-[3px] before:w-[6px] before:content-[''] hover:before:bg-edge focus-visible:before:bg-accent-text"
     />
   );
 }

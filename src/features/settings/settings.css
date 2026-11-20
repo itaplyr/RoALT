@@ -1,4 +1,4 @@
-/* Settings' screen, and the settings kit's rows (Performance, Discord and Macros draw them too). */
+/* Settings' screen, and the settings kit's rows (Performance and Discord draw them too). */
 @layer views {
   .set-page {
     max-width: 840px;
@@ -300,26 +300,5 @@
     inset-inline: 14px;
     height: 1px;
     background: var(--line);
-  }
-
-  /* While locked there is no island: the public-network block is a slim pill under the title bar. */
-  .set-public-pill {
-    flex: none;
-    align-self: center;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 8px;
-    padding-block: 7px;
-    padding-inline: 12px 16px;
-    border-radius: var(--r-pill);
-    background: color-mix(in srgb, var(--attention) 8%, var(--surface-1));
-    outline: 1px solid var(--line);
-    outline-offset: -1px;
-    color: var(--fg-2);
-    font-size: var(--fs-small);
-  }
-  .set-public-pill > svg {
-    color: var(--attention);
   }
 }

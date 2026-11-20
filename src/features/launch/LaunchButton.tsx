@@ -5,6 +5,7 @@ import { announce, overlayOpen } from "../../ui/a11y";
 import { Kbd } from "../../ui/Bits";
 import { Icon, type IconName } from "../../ui/Icon";
 import { Collapse, LAYOUT_IDS, SPRING, Swap, TWEEN, useReducedMotionFlag } from "../../ui/motion";
+import { signal } from "../../ui/signal";
 import { holdIsland, launchActivityId, launchStep, useLaunchActivityId, useLaunchStep } from "./launchQueue";
 import "./launch.css";
 
@@ -16,15 +17,11 @@ type Flight = { key: number; rect: DOMRect; text: string; gone: boolean };
 let flight: Flight | null = null;
 let hosts = 0;
 let flights = 0;
-const flightSubs = new Set<() => void>();
+const { subscribe: subscribeFlight, notify: flightChanged } = signal();
 function setFlight(f: Flight | null) {
   flight = f;
-  flightSubs.forEach((s) => s());
+  flightChanged();
 }
-const subscribeFlight = (f: () => void) => {
-  flightSubs.add(f);
-  return () => void flightSubs.delete(f);
-};
 
 /** Hands the pill to LaunchFlight; false when none is mounted. */
 function fly(rect: DOMRect, text: string) {

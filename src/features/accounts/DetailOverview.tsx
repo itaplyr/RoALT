@@ -3,15 +3,18 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, asError, type AccountInfo, type AccountPatch, type AccountSummary, type Group, type Instance, type Presence, type ServerVisit } from "../../api";
+import { browseAs } from "../../app/navigation";
 import { groupColor, qk, useAccountInfo, useBulk, useInstances, useMultiStatus, useUpdateAccount } from "../../data";
-import { fmtDate, fmtList, fmtNum, t, type Key } from "../../i18n";
+import { fmtDate, fmtList, t, type Key } from "../../i18n";
 import { Chip, Disclosure, Skeleton } from "../../ui/Bits";
 import { Button } from "../../ui/Button";
 import { Switch } from "../../ui/controls";
 import { Morph } from "../../ui/motion";
+import { num, StatGrid, type Stat } from "../../ui/StatGrid";
 import { friendly, toast, toastError } from "../../ui/Toast";
 import { launchBlocked, launchOne, useLaunchStep } from "../launch/launchQueue";
 import { STATES } from "../launch/Running";
+import { Limiteds } from "./Limiteds";
 import { accountAge, ago, formatDate, PresenceStatus, Status, SWATCHES } from "./shared";
 
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -45,6 +48,28 @@ export function Row({ label, hint, children }: { label: string; hint?: ReactNode
   );
 }
 
+/** The sign-in status, when it was last checked, and a re-check (none without `onValidate`). */
+export function StatusLine({ account: a, checking, onValidate }: { account: AccountSummary; checking: boolean; onValidate?: () => void }) {
+  return (
+    <div className="flex items-center justify-between gap-3 min-h-7">
+      <span className="flex items-center gap-2 min-w-0">
+        {/* The status keeps its word; only the time beside it gives way. */}
+        <span className="flex-none">
+          <Status status={a.status} checking={checking} swap />
+        </span>
+        <span className="meta truncate">
+          {a.statusCheckedAt ? t("accounts.detail.checked", { when: ago(a.statusCheckedAt) }) : t("accounts.notValidated")}
+        </span>
+      </span>
+      {onValidate && (
+        <Button size="sm" variant="ghost" icon="refresh" busy={checking} onClick={onValidate}>
+          {t("accounts.menu.validate")}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 /** The account at a glance: its sign-in and what to do about it, where it is, where it was, and how
  * it is organised. Roblox's own details fold away. */
 export function DetailOverview({ account: a, groups, checking, instance, onValidate, onLaunch, onRemove }: {
@@ -60,10 +85,6 @@ export function DetailOverview({ account: a, groups, checking, instance, onValid
   const info = useAccountInfo(a.id);
   // Only info that belongs to this Roblox user (local ids can be reused after a removal).
   const d = info.data?.userId === a.userId ? info.data : undefined;
-  const session = useMutation({
-    mutationFn: () => api.accountOpenSession(a.id),
-    onSuccess: () => toast(a.status === "valid" ? t("accounts.detail.sessionOpenedValid") : t("accounts.detail.sessionOpenedOther")),
-  });
   const infoError = info.isError && !d && (
     <div className="flex flex-col items-start gap-3">
       <p role="alert" className="alert">{friendly(asError(info.error))}</p>
@@ -76,22 +97,7 @@ export function DetailOverview({ account: a, groups, checking, instance, onValid
   return (
     <>
       <Section>
-        <div className="flex items-center justify-between gap-3 min-h-7">
-          <span className="flex items-center gap-2 min-w-0">
-            {/* The status keeps its word; only the time beside it gives way. */}
-            <span className="flex-none">
-              <Status status={a.status} checking={checking} swap />
-            </span>
-            <span className="meta truncate">
-              {a.statusCheckedAt ? t("accounts.detail.checked", { when: ago(a.statusCheckedAt) }) : t("accounts.notValidated")}
-            </span>
-          </span>
-          {a.status !== "unknown" && (
-            <Button size="sm" variant="ghost" icon="refresh" busy={checking} onClick={onValidate}>
-              {t("accounts.menu.validate")}
-            </Button>
-          )}
-        </div>
+        <StatusLine account={a} checking={checking} onValidate={a.status !== "unknown" ? onValidate : undefined} />
         {instance ? (
           <div className="flex items-center justify-between gap-3">
             <span className="flex items-center gap-2 min-w-0 text-fg-2">
@@ -114,7 +120,7 @@ export function DetailOverview({ account: a, groups, checking, instance, onValid
             {t("accounts.menu.validate")}
           </Button>
         ) : (
-          <Button icon="signin" block busy={session.isPending} onClick={() => session.mutate()}>
+          <Button icon="signin" block onClick={() => browseAs(a.id, "login")}>
             {t("accounts.detail.signInAgain")}
           </Button>
         )}
@@ -175,7 +181,8 @@ export function PresenceBlock({ p }: { p: Presence | null }) {
 
 /** The servers this account's clients reached, newest first; a public one can be joined again. */
 export function RecentServers({ account: a, playing }: { account: AccountSummary; playing: boolean }) {
-  const history = useQuery({ queryKey: qk.serverHistory(a.id), queryFn: () => api.serverHistory(a.id), staleTime: 0, refetchInterval: 15_000 });
+  // instances://changed refreshes it; the slow poll catches a visit saved without an instance change (a teleport's end).
+  const history = useQuery({ queryKey: qk.serverHistory(a.id), queryFn: () => api.serverHistory(a.id), staleTime: 0, refetchInterval: 60_000 });
   // With multi-instance off a launch would end the client that runs.
   const multi = useMultiStatus().data;
   const batch = useBulk().data;
@@ -376,6 +383,7 @@ function RobloxDetails({ account: a, d, loading, failed, fetching }: { account: 
       </div>
       {d && d.unavailable.length > 0 && <p className="meta">{t("accounts.detail.unavailable", { parts: fmtList(d.unavailable.map(partName)) })}</p>}
       {d ? <Info d={d} /> : loading && <InfoSkeleton />}
+      <Limiteds account={a} />
       <p className="meta">{t("accounts.detail.addedOn", { date: formatDate(a.createdAt) })}</p>
     </div>
   );
@@ -401,29 +409,10 @@ function Info({ d }: { d: AccountInfo }) {
           </span>
         ))}
       </div>
-      <dl className="grid grid-cols-3 gap-x-3 gap-y-3">
-        {stats.map(([k, v, title]) => (
-          <div key={k} className="min-w-0">
-            <dt className="text-[12px] text-fg-3 truncate">{t(k)}</dt>
-            <dd className="mono text-[14px] text-fg font-medium truncate" title={v === null ? t(NO_ANSWER) : title}>
-              {v ?? "–"}
-            </dd>
-          </div>
-        ))}
-      </dl>
+      <StatGrid stats={stats} />
       {d.description.trim() && <About text={d.description} />}
     </>
   );
-}
-
-/** Label, value (null = no answer), tooltip. */
-type Stat = [Key, string | null, string?];
-
-/** Big counts shrink to "1.2M" with the exact number as the tooltip. */
-function num(k: Key, n: number | null): Stat {
-  if (n === null) return [k, null];
-  if (n < 100_000) return [k, fmtNum(n)];
-  return [k, fmtNum(n, { notation: "compact", maximumFractionDigits: 1 }), fmtNum(n)];
 }
 
 const TONE = { on: "var(--fg)", warn: "var(--attention)" } as const;

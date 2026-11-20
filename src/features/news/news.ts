@@ -2,6 +2,8 @@ import { useSyncExternalStore } from "react";
 import type { NewsItem, NewsSource } from "../../api";
 import { useNews, useRobloxClient } from "../../data";
 import { t } from "../../i18n";
+import { signal } from "../../ui/signal";
+import { json, readStored, writeStored } from "../../ui/stored";
 
 /** A News row: the backend's, or the Roblox client update RoALT already knows of (`source` "client"). */
 export type FeedItem = Omit<NewsItem, "source" | "url"> & { source: NewsSource | "client"; url: string | null; unread: boolean };
@@ -14,34 +16,22 @@ const FRESH_MS = 14 * 24 * 60 * 60_000;
 
 /** Read items by id; on this PC only. Without storage they last until RoALT closes. */
 let seen: string[] = (() => {
-  try {
-    const v: unknown = JSON.parse(localStorage.getItem(SEEN) ?? "null");
-    return Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : [];
-  } catch {
-    return [];
-  }
+  const v = json(readStored(SEEN));
+  return Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : [];
 })();
 let seenSet = new Set(seen);
-const subs = new Set<() => void>();
+const { subscribe, notify } = signal();
 
 export function markRead(ids: string[]) {
   const fresh = ids.filter((id) => !seenSet.has(id));
   if (!fresh.length) return;
   seen = [...seen, ...fresh].slice(-KEEP);
   seenSet = new Set(seen);
-  try {
-    localStorage.setItem(SEEN, JSON.stringify(seen));
-  } catch {
-    // No storage: kept until RoALT closes.
-  }
-  subs.forEach((f) => f());
+  writeStored(SEEN, JSON.stringify(seen));
+  notify();
 }
 
-const useSeen = () =>
-  useSyncExternalStore(
-    (f) => (subs.add(f), () => void subs.delete(f)),
-    () => seenSet,
-  );
+const useSeen = () => useSyncExternalStore(subscribe, () => seenSet);
 
 /** Within FRESH_MS; `YYYY-MM` counts from the month's first day. An empty date (the client) is fresh. */
 const isFresh = (published: string, now: number) => !published || now - Date.parse(published) < FRESH_MS;

@@ -358,36 +358,11 @@
     fill: none;
     stroke-linecap: round;
   }
-  /* Older markup: a bare circle in the dial's colour. */
-  .dial:not(:has(.dial-track)) svg {
-    stroke: currentColor;
-    stroke-width: 4;
-  }
   .dial .dial-track {
     stroke: var(--surface-3);
   }
   .dial .dial-value {
     stroke: currentColor;
-  }
-  /* One of a batch row's four steps (ticket, run, join, in game); .step-live is the one under way
-     (half filled, so it stays distinct without motion). */
-  .step {
-    height: 6px;
-    border-radius: var(--r-pill);
-    background: var(--surface-3);
-    overflow: hidden;
-  }
-  .step-done {
-    background: var(--ok);
-  }
-  .step-live {
-    background: linear-gradient(90deg, var(--info) 50%, var(--surface-3) 50%);
-  }
-  :root[dir="rtl"] .step-live {
-    background: linear-gradient(-90deg, var(--info) 50%, var(--surface-3) 50%);
-  }
-  .step-fail {
-    background: var(--attention);
   }
 
   /* Disclosures open to their height (interpolate-size, :root in base). Every <details> gets it. */

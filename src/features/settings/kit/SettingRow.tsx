@@ -1,9 +1,8 @@
 import "../settings.css";
 import { createContext, useContext, useId, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { motion } from "motion/react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "../../../api";
-import { qk, useSetSettings, useSettings, useVault } from "../../../data";
+import { useQueryClient } from "@tanstack/react-query";
+import { qk, useBackgroundUrl, useSetSettings, useSettings, useVault } from "../../../data";
 import { t } from "../../../i18n";
 import { Icon } from "../../../ui/Icon";
 import { Collapse, SPRING } from "../../../ui/motion";
@@ -25,7 +24,7 @@ export function useCtx(): Ctx {
   // Views mount only once the settings and the vault are loaded (App).
   const s = useSettings().data!;
   const vault = useVault().data!;
-  const background = !!useQuery({ queryKey: qk.background, queryFn: api.backgroundGet, staleTime: Infinity }).data?.byteLength;
+  const background = !!useBackgroundUrl();
   return { s, vault, background };
 }
 

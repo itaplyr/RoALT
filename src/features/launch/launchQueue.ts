@@ -5,6 +5,8 @@ import { useEffect, useSyncExternalStore, type Dispatch, type SetStateAction } f
 import { api, asError, type AccountSummary, type BulkProgress, type BulkStage, type Instance, type LaunchInfo, type LaunchTarget, type MultiInstanceStatus, type SameServer, type Settings } from "../../api";
 import { dismissBulk, qk, queryClient, useAccounts, useBulk, useInstances } from "../../data";
 import { fmtNum, t, type Key } from "../../i18n";
+import { signal } from "../../ui/signal";
+import { readStored, writeStored } from "../../ui/stored";
 import { friendly, toast, toastError } from "../../ui/Toast";
 import { accountName } from "../accounts/shared";
 import { describeTarget, resolveTarget, type Draft } from "./target";
@@ -18,19 +20,9 @@ const LAUNCH_ERRORS: Record<string, Key> = {
 
 /** The account launched last, which Play picks until something else is picked. */
 export function lastLaunchAccount() {
-  try {
-    return Number(localStorage.getItem(LAST_KEY)) || null;
-  } catch {
-    return null;
-  }
+  return Number(readStored(LAST_KEY)) || null;
 }
-function remember(id: number) {
-  try {
-    localStorage.setItem(LAST_KEY, String(id));
-  } catch {
-    // Only a convenience.
-  }
-}
+const remember = (id: number) => writeStored(LAST_KEY, String(id));
 
 /** Why a launch can't start now: launches go one at a time (a running batch blocks single
  * launches too), and several accounts need multi-instance. Null when it can. */
@@ -70,16 +62,11 @@ type Local = { id: string; rows: Row[]; target: LaunchTarget | null; running: bo
 type State = { step: string | null; fps: number; local: Local | null; cancelling: string | null; arriving: boolean };
 
 let state: State = { step: null, fps: 0, local: null, cancelling: null, arriving: false };
-const subs = new Set<() => void>();
+const { subscribe, notify } = signal();
 function set(patch: Partial<State>) {
   state = { ...state, ...patch };
-  subs.forEach((f) => f());
+  notify();
 }
-const subscribe = (f: () => void) => {
-  subs.add(f);
-  return () => void subs.delete(f);
-};
-const useStore = () => useSyncExternalStore(subscribe, () => state);
 
 /** A launch from before the vault locked stops touching anything (resetLaunches bumps it). */
 let gen = 0;
@@ -97,7 +84,8 @@ const stopRest = (id: string, from: number, stopped: string | null) =>
 const clearLocal = (id: string) => state.local?.id === id && set({ local: null });
 const bulk = () => queryClient.getQueryData<BulkProgress | null>(qk.bulk);
 
-type Job = { account: AccountSummary; where: Where; fpsCap?: number | null };
+/** `moveFrom`: the account's playing client, closed first (`api.instanceMove`). */
+type Job = { account: AccountSummary; where: Where; fpsCap?: number | null; moveFrom?: string };
 
 /** Launches one after another, each with its own target. A refusal stops the rest, and so do a
  * cancelled launch, a lock, a batch that started meanwhile (the tray starts them) and Cancel. */
@@ -118,7 +106,7 @@ async function runLocal(jobs: Job[]) {
   });
   let favourite = false;
   try {
-    for (const [n, { account: a, where, fpsCap }] of jobs.entries()) {
+    for (const [n, { account: a, where, fpsCap, moveFrom }] of jobs.entries()) {
       if (!current()) return;
       const running = bulk();
       const busy = !!running && !running.done;
@@ -142,7 +130,8 @@ async function runLocal(jobs: Job[]) {
         timer = window.setTimeout(() => step(t("launch.step.starting")), 800);
         // Its client is the account's first one that starts after this (a bootstrapper changes the pid).
         setRow(id, n, { at: Date.now() });
-        const info = await api.launch(a.id, target, favOf(where) ?? undefined, fpsCap);
+        const fav = favOf(where) ?? undefined;
+        const info = moveFrom ? await api.instanceMove(moveFrom, target, fav, fpsCap) : await api.launch(a.id, target, fav, fpsCap);
         if (!current()) return;
         launched(a, info);
         setRow(id, n, { stage: { kind: "starting" } });
@@ -174,8 +163,9 @@ async function runLocal(jobs: Job[]) {
 }
 
 /** One account (Play, a Home tab, Play again, Rejoin). `fpsCap`: this launch's own (Play passes
- * sessionFps(), Play again the client's own); none: the account's, else the default. */
-export const launchOne = (account: AccountSummary, where: Where, fpsCap?: number | null) => runLocal([{ account, where, fpsCap }]);
+ * sessionFps(), Play again the client's own); none: the account's, else the default. `moveFrom`:
+ * its playing client, which goes first (asked by useMoveConfirm). */
+export const launchOne = (account: AccountSummary, where: Where, fpsCap?: number | null, moveFrom?: string) => runLocal([{ account, where, fpsCap, moveFrom }]);
 
 /** One after another, each account to its own target (Home's "Play with N", Play all again): a batch
  * has one target. The backend keeps the launch delay between them. `fpsCap`: as launchOne's. */
@@ -307,11 +297,13 @@ export function useLaunchActivityId() {
  * lands). A launch from here that gets every client in game clears itself after 4 s; one with a
  * failure, and a batch, stay until dismissed. */
 export function useLaunchActivity(): LaunchActivity | null {
-  const s = useStore();
+  // Only the fields read here: the FPS cap and the step text don't re-render the consumers.
+  const local = useSyncExternalStore(subscribe, () => state.local);
+  const arriving = useSyncExternalStore(subscribe, () => state.arriving);
+  const cancelling = useSyncExternalStore(subscribe, () => state.cancelling);
   const p = useBulk().data;
   const instances = useInstances().data;
   const accounts = useAccounts().data;
-  const local = s.local;
   const batch = shown(p, !!local);
   const byId = new Map(accounts?.map((a) => [a.id, a]));
   const own = (r: { accountId: number; userId: number }) => {
@@ -361,12 +353,12 @@ export function useLaunchActivity(): LaunchActivity | null {
     return () => clearTimeout(timer);
   }, [settled]);
 
-  if (s.arriving || (!batch && !local)) return null;
+  if (arriving || (!batch && !local)) return null;
   const target = batch ? batch.target : local!.target;
   const look = target && describeTarget(target);
   const several = !!batch || rows.length > 1;
   const summary = batch
-    ? [look!.kind, batch.sameServer === "pickFirst" ? t("launch.batch.sameServer") : batch.sameServer === "followFirst" ? t("launch.batch.followingFirst") : batch.sameServer === "off" ? null : t("launch.batch.spread"), t("launch.batch.seconds", { s: fmtNum(batch.delayMs / 1000) })]
+    ? [look!.kind, batch.sameServer === "pickFirst" ? t("launch.batch.sameServer") : batch.sameServer === "followFirst" ? t("launch.batch.followingFirst") : batch.sameServer === "off" ? null : t("launch.batch.spread"), t("settings.durSeconds", { s: fmtNum(batch.delayMs / 1000) })]
         .filter(Boolean)
         .join(" · ")
     : rows.length === 1 && look ? look.detail : "";
@@ -383,7 +375,7 @@ export function useLaunchActivity(): LaunchActivity | null {
     note: batch ? batch.note : null,
     rest: rows.filter((r) => (r.stage.kind === "cancelled" || (r.stage.kind === "failed" && !r.instanceId)) && r.account?.status === "valid").map((r) => r.accountId),
     current: rows.find((r) => UNDER_WAY.has(r.stage.kind)) ?? rows.find((r) => r.stage.kind === "queued") ?? null,
-    cancelling: batch ? s.cancelling === batch.batchId : local!.cancel,
+    cancelling: batch ? cancelling === batch.batchId : local!.cancel,
     cancel: () => {
       if (!batch) return local && patchLocal(local.id, () => ({ cancel: true }));
       const id = batch.batchId;

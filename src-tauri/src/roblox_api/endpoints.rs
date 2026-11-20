@@ -48,6 +48,35 @@ pub const PLACE_UNIVERSE: &str = "https://apis.roblox.com/universes/v1/places/{}
 pub const PLACE_ICONS: &str =
     "https://thumbnails.roblox.com/v1/places/gameicons?placeIds={}&returnPolicy=PlaceHolder&size=150x150&format=Png&isCircular=false";
 
+// Browse's Popular (no cookie): the Charts' lists, and game icons by universe.
+pub const EXPLORE_SORTS: &str = "https://apis.roblox.com/explore-api/v1/get-sorts?sessionId={}&device=computer";
+pub const GAME_ICONS: &str = "https://thumbnails.roblox.com/v1/games/icons?universeIds={}&returnPolicy=PlaceHolder&size=150x150&format=Png&isCircular=false";
+
+// A game's details (no cookie, verified 2026-11-08). Paging is appended by the caller: passes
+// `&pageToken=`, badges and collectibles `&cursor=`. (games.roblox.com's own game-passes list is gone: 404.)
+pub const GAME_VOTES: &str = "https://games.roblox.com/v1/games/votes?universeIds={}";
+pub const GAME_PASSES: &str = "https://apis.roblox.com/game-passes/v1/universes/{}/game-passes?passView=Full&pageSize=100";
+pub const PASS_ICONS: &str = "https://thumbnails.roblox.com/v1/game-passes?gamePassIds={}&size=150x150&format=Png";
+pub const GAME_BADGES: &str = "https://badges.roblox.com/v1/universes/{}/badges?limit=100&sortOrder=Asc";
+pub const BADGE_ICONS: &str = "https://thumbnails.roblox.com/v1/badges/icons?badgeIds={}&size=150x150&format=Png";
+/// An account's limiteds, one row per copy, with their RAP (`recentAveragePrice`). Sent with the
+/// account's own cookie: it sees a private inventory, and the limit is per user, not per address.
+pub const COLLECTIBLES: &str = "https://inventory.roblox.com/v1/users/{}/assets/collectibles?limit=100&sortOrder=Asc";
+/// More of a game (no cookie, verified 2026-11-08): its age rating (POST `{universeId}`), its
+/// universe (`isArchived`) and places, and the group that owns it (7 a minute: only inside the
+/// cached `game_stats`).
+pub const AGE_RATING: &str = "https://apis.roblox.com/experience-guidelines-api/experience-guidelines/get-age-recommendation";
+pub const UNIVERSE: &str = "https://develop.roblox.com/v1/universes/{}";
+pub const UNIVERSE_PLACES: &str = "https://develop.roblox.com/v1/universes/{}/places?limit=100";
+pub const GROUP: &str = "https://groups.roblox.com/v1/groups/{}";
+
+// A player's profile (no cookie, verified 2026-11-08). Their badge list, Premium and username
+// history need a cookie or allow 1 call a minute: not asked.
+pub const USER_GROUPS: &str = "https://groups.roblox.com/v2/users/{}/groups/roles";
+pub const ROBLOX_BADGES: &str = "https://accountinformation.roblox.com/v1/users/{}/roblox-badges";
+/// `limit` must be 10, 25 or 50.
+pub const USER_GAMES: &str = "https://games.roblox.com/v2/users/{}/games?accessFilter=Public&limit=50&sortOrder=Desc";
+
 /// `template` with its `{}` replaced by `value`.
 pub fn fill(template: &str, value: impl std::fmt::Display) -> String {
     template.replacen("{}", &value.to_string(), 1)

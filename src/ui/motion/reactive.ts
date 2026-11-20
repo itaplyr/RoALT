@@ -104,10 +104,11 @@ export function installReactive() {
         leaning = btn;
       }
       const card = e.target.closest<HTMLElement>(".home-card");
-      if (card) {
+      if (card && !prefersReducedMotion()) {
         const p = local(card, e);
-        card.style.setProperty("--mx", `${p.x}px`);
-        card.style.setProperty("--my", `${p.y}px`);
+        // From the centre, where the light sits until the pointer moves.
+        card.style.setProperty("--mx", `${p.x - p.w / 2}px`);
+        card.style.setProperty("--my", `${p.y - p.h / 2}px`);
       }
     },
     { passive: true },

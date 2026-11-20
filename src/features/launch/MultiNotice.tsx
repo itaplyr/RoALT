@@ -4,17 +4,10 @@ import { api, type MultiInstanceStatus } from "../../api";
 import { qk, useMultiStatus } from "../../data";
 import { t } from "../../i18n";
 import { ConfirmDialog } from "../../ui/Dialog";
+import { readStored, writeStored } from "../../ui/stored";
 import { toastError } from "../../ui/Toast";
 
 const NOTICE_KEY = "roalt.multiInstanceNotice";
-
-function noticeSeen() {
-  try {
-    return localStorage.getItem(NOTICE_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
 
 /** Turns multi-instance on or off. The first time it is turned on, Roblox's stance on several
  * clients is shown first; render `dialog` next to the switch. */
@@ -28,17 +21,13 @@ export function useMultiToggle(onStatus?: (s: MultiInstanceStatus) => void, onEr
       qc.invalidateQueries({ queryKey: qk.settings });
       onStatus?.(s);
     }, onError);
-  const toggle = (enabled: boolean) => (enabled && !noticeSeen() ? setAsking(true) : void set(enabled));
+  const toggle = (enabled: boolean) => (enabled && readStored(NOTICE_KEY) !== "1" ? setAsking(true) : void set(enabled));
   const dialog = (
     <ConfirmDialog
       open={asking}
       onClose={() => setAsking(false)}
       onConfirm={() => {
-        try {
-          localStorage.setItem(NOTICE_KEY, "1");
-        } catch {
-          // Shown again next time; harmless.
-        }
+        writeStored(NOTICE_KEY, "1");
         setAsking(false);
         void set(true);
       }}

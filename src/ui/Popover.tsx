@@ -1,4 +1,4 @@
-import { useId, useLayoutEffect, useRef, type CSSProperties, type MouseEvent, type ReactNode } from "react";
+import { useId, useLayoutEffect, useRef, type CSSProperties, type MouseEvent, type ReactNode, type RefObject } from "react";
 import { isRtl } from "../i18n";
 import { Icon, type IconName } from "./Icon";
 import { Kbd } from "./Bits";
@@ -10,13 +10,11 @@ export function useAnchor() {
   return { name, style: { anchorName: name } as CSSProperties };
 }
 
-type Placement = "below-start" | "below-end" | "below-center" | "above-start" | "above-end";
+type Placement = "below-start" | "below-end" | "above-start";
 const AREA: Record<Placement, string> = {
   "below-start": "block-end span-inline-end",
   "below-end": "block-end span-inline-start",
-  "below-center": "block-end",
   "above-start": "block-start span-inline-end",
-  "above-end": "block-start span-inline-start",
 };
 
 /** A popover (menu, picker, small form) anchored to its trigger; it opens from the trigger's side.
@@ -51,9 +49,12 @@ export function Popover({ id, anchor, placement = "below-start", role, label, cl
         // A menu opens on its checked item, else its first: the arrows start from there.
         const menu = e.currentTarget;
         if (open && role === "menu")
-          requestAnimationFrame(() =>
-            (menu.querySelector<HTMLElement>("[role^=menuitem][aria-checked=true]:not(:disabled)") ?? menu.querySelector<HTMLElement>(".menu-item:not(:disabled), [role^=menuitem]:not(:disabled)"))?.focus({ preventScroll: true }),
-          );
+          requestAnimationFrame(() => {
+            const item = menu.querySelector<HTMLElement>("[role^=menuitem][aria-checked=true]:not(:disabled)") ?? menu.querySelector<HTMLElement>(".menu-item:not(:disabled), [role^=menuitem]:not(:disabled)");
+            item?.focus({ preventScroll: true });
+            // In a long menu the checked item may sit below its fold; the page itself must not scroll.
+            item?.scrollIntoView({ block: "nearest" });
+          });
         onToggle?.(open);
       }}
     >
@@ -117,41 +118,53 @@ export const MenuSeparator = () => <div role="separator" className="menu-sep" />
 export const MenuLabel = ({ children }: { children: ReactNode }) => <div className="menu-label">{children}</div>;
 
 /** A menu at the pointer (right-click) or at an element's corner (the Menu key). Stays inside the
- * window, focuses its first item, and gives the focus back to `at.from` when it closes. */
-export function ContextMenu({ at, label, onClose, children }: {
-  at: { x: number; y: number; from: HTMLElement } | null;
+ * window, focuses its first item, and gives the focus back to `at.from` when it closes, unless a click
+ * took it somewhere else. With `at.beside` (the left edge of the key that opened it, `at.x` its right
+ * edge) it opens beside that key, not over it. */
+export function ContextMenu({ at, label, className = "", style, ref, onClose, children }: {
+  at: { x: number; y: number; from: HTMLElement; beside?: number } | null;
   label: string;
+  className?: string;
+  style?: CSSProperties;
+  ref?: RefObject<HTMLDivElement | null>;
   onClose: () => void;
   children: ReactNode;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
+  const own = useRef<HTMLDivElement>(null);
+  const box = ref ?? own;
   useLayoutEffect(() => {
-    const el = ref.current;
+    const el = box.current;
     if (!el || !at) return;
     el.style.left = `${at.x}px`;
     el.style.top = `${at.y}px`;
     el.showPopover();
     const r = el.getBoundingClientRect();
-    el.style.left = `${Math.max(8, Math.min(at.x, innerWidth - r.width - 8))}px`;
-    el.style.top = `${Math.max(8, at.y + r.height > innerHeight - 8 ? at.y - r.height : at.y)}px`;
+    if (at.beside === undefined) {
+      el.style.left = `${Math.max(8, Math.min(at.x, innerWidth - r.width - 8))}px`;
+      el.style.top = `${Math.max(8, at.y + r.height > innerHeight - 8 ? at.y - r.height : at.y)}px`;
+    } else {
+      // On the side the text starts from: left of the key, or right of it right to left.
+      el.style.left = `${isRtl() ? Math.min(at.x + 6, innerWidth - r.width - 4) : Math.max(4, at.beside - r.width - 6)}px`;
+      el.style.top = `${Math.max(4, Math.min(at.y, innerHeight - r.height - 4))}px`;
+    }
     el.querySelector<HTMLElement>("[role^=menuitem]:not(:disabled)")?.focus();
-  }, [at]);
+  }, [at]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div
-      ref={ref}
+      ref={box}
       popover="auto"
       role="menu"
       aria-label={label}
-      className="menu"
+      className={`menu ${className}`}
       dir={isRtl() ? "rtl" : "ltr"}
       data-tauri-drag-region="false"
-      style={{ position: "fixed", margin: 0, positionArea: "none" } as CSSProperties}
+      style={{ position: "fixed", margin: 0, positionArea: "none", ...style } as CSSProperties}
       onKeyDown={menuKeys}
       onToggle={(e) => {
-        if ((e as unknown as ToggleEvent).newState === "closed") {
-          at?.from.focus({ preventScroll: true });
-          onClose();
-        }
+        if ((e as unknown as ToggleEvent).newState !== "closed") return;
+        const f = document.activeElement;
+        if (!f || f === document.body || e.currentTarget.contains(f)) at?.from.focus({ preventScroll: true });
+        onClose();
       }}
     >
       {at && children}

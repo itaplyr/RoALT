@@ -81,6 +81,87 @@
     padding: 0 22px 20px;
   }
 
+  /* A drawer (`Drawer`): a modal <dialog> docked to the end side. It slides in on the slow spring and
+     out on the short exit; reduced motion, it only fades. */
+  .drawer {
+    --from: calc(100% + 16px);
+    position: fixed;
+    inset: 8px;
+    inset-inline-start: auto;
+    width: min(760px, calc(100vw - 48px));
+    height: auto;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: var(--r-xl);
+    background: var(--float);
+    color: var(--fg);
+    box-shadow: var(--shadow-dialog);
+    overflow: hidden;
+    opacity: 0;
+    translate: var(--from) 0;
+    transition:
+      opacity var(--dur-exit) var(--ease-in),
+      translate var(--dur-exit) var(--ease-in),
+      overlay var(--dur-exit) allow-discrete,
+      display var(--dur-exit) allow-discrete;
+  }
+  :root[dir="rtl"] .drawer {
+    --from: calc(-100% - 16px);
+  }
+  :root[data-rm] .drawer {
+    --from: 0px;
+  }
+  .drawer[open] {
+    opacity: 1;
+    translate: 0 0;
+    transition:
+      opacity var(--dur-fast) var(--ease-out),
+      translate var(--dur-spring-slow) var(--spring),
+      overlay var(--dur-fast) allow-discrete,
+      display var(--dur-fast) allow-discrete;
+  }
+  .drawer::backdrop {
+    background: transparent;
+    transition:
+      background-color var(--dur-exit) var(--ease-out),
+      overlay var(--dur-exit) allow-discrete,
+      display var(--dur-exit) allow-discrete;
+  }
+  .drawer[open]::backdrop {
+    background: var(--backdrop);
+  }
+  @starting-style {
+    .drawer[open] {
+      opacity: 0;
+      translate: var(--from) 0;
+    }
+    .drawer[open]::backdrop {
+      background: transparent;
+    }
+  }
+  .drawer-body {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+  .drawer-main {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 0 22px;
+  }
+  .drawer-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 10px;
+    padding: 16px 22px 20px;
+  }
+
   /* Popover menu anchored to its trigger (opens below by default; flips when there's no room). */
   .menu {
     inset: auto;

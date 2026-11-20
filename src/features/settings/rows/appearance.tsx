@@ -1,9 +1,9 @@
-import { useEffect, useId, useState } from "react";
+import { useId, useState } from "react";
 import { motion } from "motion/react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { open as openFile } from "@tauri-apps/plugin-dialog";
 import { api } from "../../../api";
-import { qk } from "../../../data";
+import { qk, useBackgroundUrl } from "../../../data";
 import { t, type Key } from "../../../i18n";
 import { rovingKeys } from "../../../ui/a11y";
 import { Button } from "../../../ui/Button";
@@ -75,25 +75,13 @@ export function AccentRow() {
   );
 }
 
-/** The picture as a small thumbnail, from the bytes the theme already holds. */
-function useImageUrl(bytes: ArrayBuffer | undefined) {
-  const [url, setUrl] = useState<string | null>(null);
-  useEffect(() => {
-    if (!bytes?.byteLength) return setUrl(null);
-    const u = URL.createObjectURL(new Blob([bytes]));
-    setUrl(u);
-    return () => URL.revokeObjectURL(u);
-  }, [bytes]);
-  return url;
-}
-
 /** Choose a picture, or with one set: its thumbnail, Change… and Remove. How much the theme covers it
  * is the sub-row under this one (the registry's backgroundDim). */
 function BackgroundControls() {
   const row = useRow();
   const qc = useQueryClient();
-  const bytes = useQuery({ queryKey: qk.background, queryFn: api.backgroundGet, staleTime: Infinity }).data;
-  const url = useImageUrl(bytes);
+  // The thumbnail is the theme's own URL: no second copy of the picture.
+  const url = useBackgroundUrl();
   const [busy, setBusy] = useState(false);
   const has = row.ctx.background;
   const run = (p: Promise<unknown>) => {

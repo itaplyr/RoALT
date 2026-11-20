@@ -16,4 +16,8 @@ fpsCap?: number, fullQuality?: boolean,
 /**
  * `Some(true)` also unmarks the previous MAIN.
  */
-main?: boolean, };
+main?: boolean, 
+/**
+ * Replaces the account's own FFlags (`launcher::flags::check` rules); empty: none.
+ */
+customFlags?: { [key in string]: string }, };
