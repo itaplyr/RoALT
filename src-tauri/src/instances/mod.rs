@@ -9,10 +9,10 @@ pub mod afk;
 pub mod afk;
 
 #[cfg(windows)]
-mod audio;
+pub(crate) mod audio;
 #[cfg(not(windows))]
 #[path = "audio_linux.rs"]
-mod audio;
+pub(crate) mod audio;
 
 #[cfg(windows)]
 mod autopsy;
@@ -23,7 +23,7 @@ mod autopsy;
 #[cfg(windows)]
 mod capture;
 #[cfg(windows)]
-mod gpu;
+pub mod gpu;
 
 #[cfg(windows)]
 pub mod limits;
@@ -64,6 +64,9 @@ pub mod resize;
 pub mod resize;
 
 #[cfg(windows)]
+pub mod thumbs;
+
+#[cfg(windows)]
 pub mod window;
 #[cfg(not(windows))]
 #[path = "window_linux.rs"]
@@ -72,6 +75,6 @@ pub mod window;
 mod tracker;
 
 pub mod rejoin;
-pub use tracker::{Tracker, Transition, auth_failed, challenged, closed, hung, layout_batch_done, unexpected, wrong_account};
+pub use tracker::{LOG_SKEW_SECS, Tracker, Transition, auth_failed, challenged, closed, hung, layout_batch_done, unexpected, wrong_account};
 #[cfg(windows)]
 pub use tracker::frame_size;

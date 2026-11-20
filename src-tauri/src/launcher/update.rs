@@ -259,8 +259,9 @@ async fn production_version(s: &App) -> Option<String> {
 /// about runs the foreground installer, which closes every running client. So: production's build
 /// with an empty `channel:`, as they always agree. Over a bootstrapper,
 /// or with the version unknown, what `client::find` says, as is. Production's build missing: the
-/// client found, asked for production, updates itself (`update_hold` kept it from closing others).
-pub async fn launch_client(s: &App) -> Result<(client::ClientExe, bool)> {
+/// client found, asked for production, updates itself (`update_hold` kept it from closing others):
+/// the third value.
+pub async fn launch_client(s: &App) -> Result<(client::ClientExe, bool, bool)> {
     let exe = client::find()?;
     let managed = client::managed_by_bootstrapper(&exe);
     let live = if managed { None } else { production_version(s).await };
@@ -273,10 +274,11 @@ pub async fn launch_client(s: &App) -> Result<(client::ClientExe, bool)> {
         client::handler(),
     );
     // Asked for production without having it: this client updates itself into a new folder.
-    if chosen.1 && live.as_deref().is_some_and(|v| client::installed_build(v).is_none()) {
+    let updates = chosen.1 && live.as_deref().is_some_and(|v| client::installed_build(v).is_none());
+    if updates {
         log::warn!("Roblox's live version isn't installed: the updated client won't have this launch's graphics flags, which go in the old version's folder");
     }
-    Ok(chosen)
+    Ok((chosen.0, chosen.1, updates))
 }
 
 /// `launch_client`'s choice (pure but for `installed`).
@@ -306,9 +308,11 @@ pub fn client(s: &App) -> RobloxClient {
     }
 }
 
-/// `client`, sent as `roblox://client` when it changed since last time.
+/// `client`, sent as `roblox://client` when it changed since last time. First, RoALT takes
+/// Roblox's links back if it should hold them (`links::reclaim`): an install rewrites them.
 pub fn publish(app: &AppHandle) -> RobloxClient {
     let s = app.state::<App>();
+    super::links::reclaim(&s);
     let c = client(&s);
     let mut sent = lock(&s.update.sent);
     if sent.as_ref() != Some(&c) {

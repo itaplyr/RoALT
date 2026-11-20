@@ -14,8 +14,8 @@ import { Renderers, SettingRow, type RowRenderers } from "../settings/kit/Settin
 import { SettingSection } from "../settings/kit/SettingSection";
 import { DISCORD_ENTRIES } from "./entries";
 
-/** Discord's rows of one group, in the order entries.ts gives them. */
-const ids = (group?: Key) => DISCORD_ENTRIES.filter((e) => ("group" in e.place ? e.place.group : undefined) === group).map((e) => e.id);
+/** Discord's top-level rows of one group, in the order entries.ts gives them (child rows draw under their parent). */
+const ids = (group?: Key) => DISCORD_ENTRIES.filter((e) => !e.parent && ("group" in e.place ? e.place.group : undefined) === group).map((e) => e.id);
 
 type Busy = "save" | "test" | "remove" | null;
 

@@ -24,7 +24,7 @@ export function Island({ model, live }: { model: IslandModel; live?: ReactNode }
   const [first] = useState(() => !inflated);
 
   // A new place on screen folds any open group, as does a press outside the island.
-  const current = [...model.main, ...model.groups.flatMap((g) => g.children)].find((l) => l.current)?.id;
+  const current = [...model.main, ...model.groups.flatMap((g) => g.children), ...model.end].find((l) => l.current)?.id;
   useEffect(() => setOpen(null), [current]);
   useEffect(() => {
     if (!open) return;
@@ -123,7 +123,7 @@ export function Island({ model, live }: { model: IslandModel; live?: ReactNode }
             const leaf = model.main.find((l) => l.id === id)!;
             const i = model.main.indexOf(leaf);
             return (
-              <span key={id} className="island-slot">
+              <span key={id} className="island-slot" data-section={id}>
                 <Item leaf={leaf} drag={drag} enter={first ? i : null} />
               </span>
             );
@@ -138,6 +138,11 @@ export function Island({ model, live }: { model: IslandModel; live?: ReactNode }
             onOpen={() => setOpen(g.id)}
             onClose={close}
           />
+        ))}
+        {model.end.map((leaf, i) => (
+          <span key={leaf.id} className="island-slot" data-section={leaf.id}>
+            <Item leaf={leaf} enter={first ? model.main.length + model.groups.length + i : null} />
+          </span>
         ))}
         {live}
       </div>
@@ -173,7 +178,8 @@ const enterProps = (i: number | null) =>
 /** A tile's name with the numbers it shows (its count, its badge): those are aria-hidden. */
 const named = (leaf: IslandLeaf) => [leaf.label, leaf.count, leaf.badge || undefined].filter((x) => x !== undefined).join(", ");
 
-function Item({ leaf, drag, enter }: { leaf: IslandLeaf; drag: DragProps; enter: number | null }) {
+/** `drag`: none for a tile with a fixed place. */
+function Item({ leaf, drag, enter }: { leaf: IslandLeaf; drag?: DragProps; enter: number | null }) {
   return (
     <motion.button
       type="button"
@@ -209,7 +215,7 @@ function Group({ group, open, enter, onOpen, onClose }: {
   const pillId = useId();
   const pill = useRef<HTMLDivElement>(null);
   const current = group.children.find((c) => c.current);
-  const icon = group.keepIcon ? group.icon : (current?.icon ?? group.icon);
+  const icon = current?.icon ?? group.icon;
 
   // Opened: the focus goes to the current child, else the first.
   useEffect(() => {
@@ -264,8 +270,7 @@ function Group({ group, open, enter, onOpen, onClose }: {
               data-ghost
               aria-expanded={false}
               aria-current={current ? "page" : undefined}
-              aria-label={current && !group.keepIcon ? `${group.label}: ${current.label}` : group.label}
-              aria-description={current && group.keepIcon ? current.label : undefined}
+              aria-label={current ? `${group.label}: ${current.label}` : group.label}
               data-tip={current ? undefined : group.label}
               tabIndex={-1}
               onClick={onOpen}

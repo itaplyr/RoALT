@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "RoALT",
-  "version": "1.1.0",
+  "version": "1.3.0",
   "identifier": "com.inspectsoftware.roalt",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: blob: https://*.rbxcdn.com; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src ipc: http://ipc.localhost; frame-ancestors 'none'"
+      "csp": "default-src 'self'; img-src 'self' data: blob: https://*.rbxcdn.com; style-src 'self' 'unsafe-inline'; font-src 'self' data:; media-src 'self'; connect-src ipc: http://ipc.localhost; frame-ancestors 'none'"
     }
   },
   "bundle": {

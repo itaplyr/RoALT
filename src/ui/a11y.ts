@@ -28,6 +28,9 @@ export function Announcer() {
   );
 }
 
+/** What can take the keyboard focus. */
+export const FOCUSABLE = ":is(button, input, select, textarea, a[href], [tabindex]:not([tabindex='-1'])):not(:disabled)";
+
 /** Whether a dialog or a popover (not a passive one, the tooltip) is open: shortcuts wait then. */
 export const overlayOpen = () => !!document.querySelector("dialog[open], [popover]:popover-open:not([data-passive])");
 

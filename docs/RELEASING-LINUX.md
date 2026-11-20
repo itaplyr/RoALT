@@ -11,15 +11,18 @@ Examples:
 ```text
 v0.9.2.1
 v0.9.2.2
-v1.1.0.1
+v1.3.0.1
 ```
 
-- `0.9.2` / `1.1.0` is the upstream RoALT version.
+- `0.9.2` / `1.3.0` is the upstream RoALT version.
 - `.1`, `.2`, ... are Linux-fork releases for that upstream version.
-- The latest Linux tag is `v0.9.2.2` (upstream `0.9.2`). Upstream has since
-  released `v1.1.0`, which this fork has merged; the next Linux release starts
-  at `v1.1.0.1`.
+- The latest Linux tag in this repository is `v0.9.2.2` (upstream `0.9.2`).
+  Upstream has since released `v1.3.0`, which this fork has merged; the next
+  Linux release starts at `v1.3.0.1`.
 - Four-part tags never collide with upstream's three-part tags.
+
+The current tree is upstream version `1.3.0` with `LINUX_REVISION = 1`, so a
+release cut now is `v1.3.0.1`.
 
 The app version shown in Settings is computed from `Cargo.toml` plus
 `LINUX_REVISION` in `src-tauri/src/self_update_linux.rs`. `Cargo.toml`,
@@ -43,8 +46,8 @@ The app version shown in Settings is computed from `Cargo.toml` plus
 6. Tag and push:
 
    ```bash
-   git tag v1.1.0.1
-   git push fork v1.1.0.1
+   git tag v1.3.0.1
+   git push fork v1.3.0.1
    ```
 
 The **Release Linux** workflow builds the binary and creates a draft release with:
@@ -61,11 +64,17 @@ four-part Linux tags.
 
 ## Release notes
 
-- Mocktail is experimental. Describe it as a single-instance, vault-seeded
-  alternative to Cordial; never as a drop-in replacement, and never as a
-  multi-instance path. Say that no signed-in launch is verified yet.
-- Cordial remains the supported multi-instance launcher, so multi-client claims
-  belong to Cordial only.
+- Mocktail is experimental. Upstream Mocktail is single-instance by policy;
+  RoALT's Multi-instance setting copies the launcher per account and isolates
+  auth, cache, state and Android data. Describe that as an experimental path,
+  never as a drop-in replacement and never as verified: no signed-in Mocktail
+  launch has been tested. Say that plainly.
+- Cordial remains the tested multi-instance launcher, so multi-client claims
+  belong to Cordial. Do not describe Mocktail as the multi-instance default.
+- Clips, Trades, Outfits, owning or buying private servers and the Friend
+  requests view were removed upstream in v1.3.0. Do not list them as missing
+  Linux features; joining private servers by link and the Servers › Private tab
+  remain.
 
 ## Auto-update
 

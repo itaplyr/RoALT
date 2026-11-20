@@ -5,6 +5,7 @@ import { t } from "../../i18n";
 import { ContextMenu, MenuCheckItem, MenuItem, MenuLabel, MenuSeparator } from "../../ui/Popover";
 import { toast, toastError } from "../../ui/Toast";
 import { launchOne, useLaunchStep } from "../launch/launchQueue";
+import { copyRoaltLink } from "../launch/target";
 import { mb } from "../monitor/format";
 
 const CAPS = [0, 50, 25, 10, 5];
@@ -42,6 +43,8 @@ export function ClientMenu({ at, account, onClose, afkOn, closing, onLimits, onC
     if (gone && ref.current?.matches(":popover-open")) ref.current.hidePopover();
   }, [gone]);
 
+  // Its server, once the log named it: what a RoALT link can share.
+  const server = i?.placeId && i.jobId ? ({ kind: "server", placeId: i.placeId, jobId: i.jobId } as const) : null;
   const tiny = { w: settings?.microWidth ?? 320, h: settings?.microHeight ?? 240 };
   const show = (what: WindowShow) => i && api.instanceShow(i.id, what).catch(toastError);
   const limits = (patch: Partial<Limits>) => i && api.instanceSetLimits(i.id, { ...i.limits, ...patch }).catch(toastError);
@@ -66,7 +69,9 @@ export function ClientMenu({ at, account, onClose, afkOn, closing, onLimits, onC
           ) : (
             <MenuItem icon="minimize" onSelect={() => void show("minimize")}>{t("dashboard.minimize")}</MenuItem>
           )}
+          <MenuCheckItem checked={i.held} onChange={(on) => api.instanceTakeControl(i.id, on).catch(toastError)}>{t("dashboard.takeControl")}</MenuCheckItem>
           <MenuItem icon="grid" onSelect={() => void micro()}>{i.micro ? t("dashboard.normalSize") : t("dashboard.microWindow", tiny)}</MenuItem>
+          {server && <MenuItem icon="link" onSelect={() => copyRoaltLink(server)}>{t("share.copyLink")}</MenuItem>}
           <MenuSeparator />
           <MenuItem icon="refresh" onSelect={() => void trim()}>{t("dashboard.trimMemory")}</MenuItem>
           <div role="group" aria-label={t("dashboard.cpuLimit")} className="home-menu-caps">
@@ -86,7 +91,7 @@ export function ClientMenu({ at, account, onClose, afkOn, closing, onLimits, onC
             ))}
           </div>
           <MenuCheckItem checked={i.limits.eco} onChange={(eco) => void limits({ eco })}>{t("dashboard.efficiencyMode")}</MenuCheckItem>
-          <MenuCheckItem checked={i.antiAfk} onChange={(on) => api.instanceSetAntiAfk(i.id, on).catch(toastError)}>
+          <MenuCheckItem checked={i.antiAfk && !i.held} disabled={i.held} onChange={(on) => api.instanceSetAntiAfk(i.id, on).catch(toastError)}>
             {afkOn ? t("dashboard.antiAfk") : t("dashboard.antiAfkOff")}
           </MenuCheckItem>
           <MenuItem icon="sliders" onSelect={() => onLimits(i.id)}>{t("home.limits")}</MenuItem>

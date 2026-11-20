@@ -7,6 +7,10 @@ on:
   release:
     types: [released]
 
+# The job's own token only reads; publishing uses WINGET_TOKEN.
+permissions:
+  contents: read
+
 jobs:
   publish:
     runs-on: windows-latest
@@ -16,7 +20,8 @@ jobs:
       - name: Skipped without WINGET_TOKEN
         if: env.HAS_TOKEN != 'true'
         run: echo "WINGET_TOKEN isn't set; not publishing to winget."
-      - uses: vedantmgoyal9/winget-releaser@main
+      # Pinned to a commit: this action is handed WINGET_TOKEN, and a branch can change under it.
+      - uses: vedantmgoyal9/winget-releaser@b7370d4d152efdce803a26cc6ca9eee58cb2ad54 # v2
         if: env.HAS_TOKEN == 'true'
         with:
           identifier: inspectsoftware.RoALT

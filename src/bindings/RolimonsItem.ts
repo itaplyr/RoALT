@@ -3,7 +3,11 @@
 /**
  * What Rolimons says about a limited (`rolimons::parse`).
  */
-export type RolimonsItem = { 
+export type RolimonsItem = { name: string, 
+/**
+ * Robux, Rolimons' copy of Roblox's RAP; None: none.
+ */
+rap: number | null, 
 /**
  * Robux; None: not valued.
  */

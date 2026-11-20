@@ -29,9 +29,11 @@ use crate::error::{AppError, Result};
 use crate::vault::Secret;
 use types::{
     AgeRecommendation, AuthenticatedUser, BadgePage, CollectiblePage, Data, FriendOnline, FriendStatus, FriendStatusRow, Game, GameDetails, GroupRoleRow,
-    GroupRow, Holding, IdPage, Listed, PassPage, Presences, PrivateServerList, Profiles, RobloxBadgeRow, ServerList, ShareLinkResolution, ShareLinkV2,
-    SocialCounts, Thumbnails, TwoStepConfig, UniverseRow, UserDetails, UserGamePage, UserPresence, VipServerResponse, VoteRow,
+    GroupRow, Holding, IdPage, Listed, PassPage, Presences, PrivateServerList, Profiles, RobloxBadgeRow, ServerList,
+    ShareLinkResolution, ShareLinkV2, SocialCounts, Thumbnails, TwoStepConfig, UniverseRow, UserDetails, UserGamePage,
+    UserPresence, VoteRow,
 };
+use crate::model::{RobuxKind, RobuxTotals, RobuxTransaction};
 
 /// Called with `(account_id, new cookie)` when Roblox rotates a stored account's cookie.
 pub type RotationSink = Arc<dyn Fn(i64, Secret) + Send + Sync>;
@@ -265,6 +267,19 @@ impl Client {
     /// (root place id, game name). Unknown universes are absent.
     pub async fn universe_root_places(&self, universe_ids: &[i64]) -> Result<HashMap<i64, (i64, String)>> {
         Ok(self.games(universe_ids).await?.into_iter().map(|g| (g.universe_id, (g.root_place_id, g.name))).collect())
+    }
+
+    /// `POST gamejoin.roblox.com/v1/join-game {placeId}` (cookie + CSRF): true when Roblox answers
+    /// status 12, "You don't have permission to join this game" (error 524 in the client), as it
+    /// does for a sub-place of a game with direct access turned off. No client joins from this;
+    /// a seat Roblox may hold for the answer lapses.
+    pub async fn join_refused(&self, account_id: i64, cookie: &Secret, place_id: i64) -> Result<bool> {
+        const UNAUTHORIZED: i64 = 12;
+        let url = endpoints::JOIN_GAME;
+        let attempt = uuid::Uuid::new_v4().to_string();
+        let body = serde_json::json!({ "placeId": place_id, "isTeleport": false, "gameJoinAttemptId": attempt });
+        let (_, bytes, _) = self.request(Method::POST, url, url, Some(&body), account_id, Some(cookie)).await?;
+        Ok(field::<i64>(json(&bytes)?, "status")? == UNAUTHORIZED)
     }
 
     /// `POST users.roblox.com/v1/usernames/users {usernames ≤200, excludeBannedUsers:true}`
@@ -675,6 +690,17 @@ impl Client {
         Ok(out)
     }
 
+    /// `GET thumbnails.roblox.com/v1/assets?assetIds=..` (no cookie, `ASSET_THUMBS`): asset id →
+    /// image URL for `Completed` pictures.
+    pub async fn asset_thumbnails(&self, asset_ids: &[i64]) -> Result<HashMap<i64, String>> {
+        let mut out = HashMap::new();
+        for chunk in valid_ids(asset_ids).chunks(100) {
+            let url = endpoints::fill(endpoints::ASSET_THUMBS, csv(chunk));
+            sort_thumbnails(self.get(endpoints::ASSET_THUMBS, &url, 0, None).await?, &mut out);
+        }
+        Ok(out)
+    }
+
     /// `GET games.roblox.com/v1/games/{placeId}/private-servers?cursor=..` with the account's
     /// cookie (Roblox only answers signed in). Lenient parsing: `data[]` rows with `vipServerId`,
     /// `name`, `owner{id,name}`, `playing`, `maxPlayers`, `id` (job id, may be absent),
@@ -728,87 +754,30 @@ impl Client {
         })
     }
 
-    /// `GET games.roblox.com/v1/vip-servers/{id}` as its owner (403 for anyone else). Lenient;
-    /// the answer's join secrets are never read.
-    pub async fn vip_server(&self, account_id: i64, cookie: &Secret, vip_server_id: i64) -> Result<crate::model::PrivateServerSettings> {
-        let route = endpoints::VIP_SERVER;
-        let r: VipServerResponse = self.get(route, &endpoints::fill(route, vip_server_id), account_id, Some(cookie)).await?;
-        Ok(settings_of(vip_server_id, r))
-    }
-
-    /// `PATCH /v1/vip-servers/{id} {name, active, newJoinCode}` and
-    /// `PATCH …/permissions {friendsAllowed, usersToAdd, usersToRemove}` with only the parts
-    /// `patch` sets; neither is sent when it has none, so an empty patch makes no call. A name
-    /// that trims to nothing is refused first. Callers re-read with `vip_server`.
-    pub async fn vip_server_update(
-        &self,
-        account_id: i64,
-        cookie: &Secret,
-        vip_server_id: i64,
-        patch: &crate::model::PrivateServerPatch,
-    ) -> Result<()> {
-        let mut server = serde_json::Map::new();
-        if let Some(name) = &patch.name {
-            server.insert("name".into(), server_name(name)?.into());
-        }
-        if let Some(active) = patch.active {
-            server.insert("active".into(), active.into());
-        }
-        if patch.new_join_code == Some(true) {
-            server.insert("newJoinCode".into(), true.into());
-        }
-        let mut permissions = serde_json::Map::new();
-        if let Some(friends) = patch.friends_allowed {
-            permissions.insert("friendsAllowed".into(), friends.into());
-        }
-        for (key, ids) in [("usersToAdd", &patch.users_to_add), ("usersToRemove", &patch.users_to_remove)] {
-            let ids = valid_ids(ids.as_deref().unwrap_or_default());
-            if !ids.is_empty() {
-                permissions.insert(key.into(), ids.into());
+    /// The account's newest 25 Robux transactions of one kind (`TRANSACTIONS`).
+    pub async fn transactions(&self, account_id: i64, cookie: &Secret, user_id: i64, kind: RobuxKind) -> Result<Vec<RobuxTransaction>> {
+        let route = endpoints::TRANSACTIONS;
+        let url = endpoints::fill(route, user_id) + kind.path();
+        let page: types::TransactionPage = self.get(route, &url, account_id, Some(cookie)).await?;
+        let row = |t: types::TransactionRow| {
+            let details = t.details.unwrap_or_default();
+            RobuxTransaction {
+                created: t.created,
+                amount: t.currency.and_then(|c| c.amount).unwrap_or(0.0).round() as i64,
+                what: details.name.or(details.place.and_then(|p| p.name)).unwrap_or_default(),
+                who: t.agent.and_then(|a| a.name).unwrap_or_default(),
+                pending: t.is_pending.unwrap_or(false),
             }
-        }
-        for (route, body) in [(endpoints::VIP_SERVER, server), (endpoints::VIP_SERVER_PERMISSIONS, permissions)] {
-            if !body.is_empty() {
-                let url = endpoints::fill(route, vip_server_id);
-                self.request(Method::PATCH, route, &url, Some(&Value::Object(body)), account_id, Some(cookie)).await?;
-            }
-        }
-        Ok(())
+        };
+        Ok(page.data.unwrap_or_default().into_iter().map(row).collect())
     }
 
-    /// `PATCH /v1/vip-servers/{id}/subscription {active, price}`: auto-renew on (spends `price`
-    /// Robux a month) or off. `price` is what the owner was shown.
-    pub async fn vip_server_subscription(&self, account_id: i64, cookie: &Secret, vip_server_id: i64, active: bool, price: i64) -> Result<()> {
-        let route = endpoints::VIP_SERVER_SUBSCRIPTION;
-        let body = serde_json::json!({ "active": active, "price": price });
-        self.request(Method::PATCH, route, &endpoints::fill(route, vip_server_id), Some(&body), account_id, Some(cookie)).await.map(|_| ())
-    }
-
-    /// `POST /v1/games/vip-servers/{universeId} {name, expectedPrice, isPurchaseConfirmed:true,
-    /// idempotencyKey}`: buys a private server (spends Robux). Roblox refuses, charging nothing,
-    /// when `expected_price` isn't the real price. A blank name or a key that isn't a UUID is
-    /// refused first. The answer (it holds the join secrets) isn't read: a 2xx is the purchase.
-    pub async fn vip_server_buy(
-        &self,
-        account_id: i64,
-        cookie: &Secret,
-        universe_id: i64,
-        name: &str,
-        expected_price: i64,
-        idempotency_key: &str,
-    ) -> Result<()> {
-        let name = server_name(name)?;
-        if !crate::launcher::target::is_uuid(idempotency_key) {
-            return Err(AppError::Internal("bad idempotency key".into()));
-        }
-        let route = endpoints::VIP_SERVER_CREATE;
-        let body = serde_json::json!({
-            "name": name,
-            "expectedPrice": expected_price,
-            "isPurchaseConfirmed": true,
-            "idempotencyKey": idempotency_key,
-        });
-        self.request(Method::POST, route, &endpoints::fill(route, universe_id), Some(&body), account_id, Some(cookie)).await.map(|_| ())
+    /// What came in, went out and is pending in the account's last month (`TRANSACTION_TOTALS`).
+    pub async fn transaction_totals(&self, account_id: i64, cookie: &Secret, user_id: i64) -> Result<RobuxTotals> {
+        let route = endpoints::TRANSACTION_TOTALS;
+        let t: types::TransactionTotals = self.get(route, &endpoints::fill(route, user_id), account_id, Some(cookie)).await?;
+        let whole = |v: Option<f64>| v.map(|v| v.round() as i64);
+        Ok(RobuxTotals { incoming: whole(t.incoming_robux_total), outgoing: whole(t.outgoing_robux_total), pending: whole(t.pending_robux_total) })
     }
 
     /// `GET clientsettingscdn.roblox.com/v2/client-version/WindowsPlayer` (no cookie) → the live
@@ -945,7 +914,7 @@ impl Client {
                     "Pick an account to sort by Recommended or Best latency: Roblox only does that for a signed-in account."
                 )));
             }
-            let e = vip_refusal(route, status, &headers, &bytes).unwrap_or_else(|| classify(status, &headers, &bytes));
+            let e = classify(status, &headers, &bytes);
             log::warn!("{route}: HTTP {status}, code {:?}: {e}", error_code(&bytes));
             if status == StatusCode::FORBIDDEN {
                 // Whose refusal it is (the API's or a CDN's page), without the body.
@@ -969,7 +938,7 @@ impl Client {
             AppError::Internal("bad Roblox URL".into())
         };
         let mut u = Url::parse(url).map_err(bad)?;
-        let web = matches!(u.host_str(), Some("auth.roblox.com" | "apis.roblox.com"));
+        let web = matches!(u.host_str(), Some("auth.roblox.com" | "apis.roblox.com" | "gamejoin.roblox.com"));
         if let Some(base) = &self.base {
             u = Url::parse(&format!("{base}{}", &u[url::Position::BeforePath..])).map_err(bad)?;
         }
@@ -1088,31 +1057,6 @@ fn classify(status: StatusCode, headers: &HeaderMap, body: &[u8]) -> AppError {
     }
 }
 
-/// Roblox's own text for a refused private-server call (a wrong price, alts that aren't friends).
-/// Unlike `classify` it quotes the body: these requests hold only a name, a price and user ids.
-fn vip_refusal(route: &str, status: StatusCode, headers: &HeaderMap, body: &[u8]) -> Option<AppError> {
-    let vip = [endpoints::VIP_SERVER, endpoints::VIP_SERVER_PERMISSIONS, endpoints::VIP_SERVER_SUBSCRIPTION, endpoints::VIP_SERVER_CREATE];
-    if !vip.contains(&route) || !status.is_client_error() || status == StatusCode::UNAUTHORIZED || headers.contains_key(CHALLENGE) {
-        return None;
-    }
-    // A 403 on the server itself means not the owner: left as "HTTP 403" for `owner_error` to word.
-    if status == StatusCode::FORBIDDEN && (route == endpoints::VIP_SERVER || route == endpoints::VIP_SERVER_SUBSCRIPTION) {
-        return None;
-    }
-    let message = serde_json::from_slice::<Value>(body).ok().and_then(|v| {
-        let e = v.get("errors").and_then(|e| e.get(0)).unwrap_or(&v);
-        let m: String = e.get("message")?.as_str()?.chars().filter(|c| !c.is_control()).take(200).collect();
-        Some(m.trim().to_owned()).filter(|m| !m.is_empty())
-    });
-    match message {
-        Some(why) => Some(AppError::Invalid(tr!("Roblox refused this: {why}", why = why))),
-        None if route == endpoints::VIP_SERVER_CREATE => {
-            Some(AppError::Invalid(tr!("Roblox refused the purchase and charged nothing: check the price on the game's page.")))
-        }
-        None => None,
-    }
-}
-
 /// `(code, subcode)` of `{errors:[{..}]}` or a flat `{code, ..}` body. Bare strings,
 /// `{Error: ..}` and empty bodies have none.
 fn error_code(body: &[u8]) -> Option<(i64, i64)> {
@@ -1154,39 +1098,6 @@ fn client_version_of(body: &[u8]) -> Result<String> {
     } else {
         log::debug!("client version: unexpected clientVersionUpload {:?}", v.chars().take(64).collect::<String>());
         Err(unreadable())
-    }
-}
-
-/// A private server's name, trimmed; empty is refused.
-fn server_name(name: &str) -> Result<&str> {
-    Some(name.trim()).filter(|n| !n.is_empty()).ok_or_else(|| AppError::Invalid(tr!("A private server needs a name.")))
-}
-
-fn settings_of(vip_server_id: i64, r: VipServerResponse) -> crate::model::PrivateServerSettings {
-    let (sub, perms) = (r.subscription, r.permissions);
-    let allowed_users = perms
-        .as_ref()
-        .and_then(|p| p.users.as_ref())
-        .into_iter()
-        .flatten()
-        .filter_map(|u| {
-            Some(crate::model::AllowedUser {
-                user_id: u.id?,
-                username: u.name.clone().unwrap_or_default(),
-                display_name: u.display_name.clone().unwrap_or_default(),
-            })
-        })
-        .collect();
-    crate::model::PrivateServerSettings {
-        vip_server_id,
-        name: r.name.unwrap_or_default(),
-        active: r.active.unwrap_or_default(),
-        friends_allowed: perms.as_ref().and_then(|p| p.friends_allowed).unwrap_or_default(),
-        allowed_users,
-        renews: sub.as_ref().and_then(|s| s.active).unwrap_or_default(),
-        expired: sub.as_ref().and_then(|s| s.expired).unwrap_or_default(),
-        expires: sub.as_ref().and_then(|s| s.expiration_date.clone()),
-        price: sub.and_then(|s| s.price),
     }
 }
 

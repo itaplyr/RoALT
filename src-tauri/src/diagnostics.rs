@@ -24,8 +24,9 @@ pub fn redact(line: &str) -> Option<String> {
         return None;
     }
     let mut out = mask_user_folder(line);
-    out = mask_after(&out, "userid:");
-    out = mask_after(&out, "sid:");
+    for key in ["userid:", "userid=", "user_id:", "user_id=", "sid:"] {
+        out = mask_after(&out, key);
+    }
     Some(mask_uuids(&mask_ipv4(&mask_queries(&out))))
 }
 
@@ -51,12 +52,18 @@ fn find_ascii_ci(text: &str, key: &str) -> Option<usize> {
     text.as_bytes().windows(key.len()).position(|w| w.eq_ignore_ascii_case(key.as_bytes()))
 }
 
-/// `C:\Users\name\x` to `C:\Users\…\x`, for every such path.
+/// `C:\Users\name\x` and `C:/Users/name/x` to `…`, for every such path.
 fn mask_user_folder(line: &str) -> String {
+    let mut out = mask_user_folder_sep(line, r"\users\");
+    out = mask_user_folder_sep(&out, "/users/");
+    out
+}
+
+fn mask_user_folder_sep(line: &str, needle: &str) -> String {
     let (mut out, mut rest) = (String::new(), line);
     // Only as far as the next match: the whole line for every match is quadratic on a long one.
-    while let Some(i) = find_ascii_ci(rest, r"\users\") {
-        let (head, tail) = rest.split_at(i + r"\users\".len());
+    while let Some(i) = find_ascii_ci(rest, needle) {
+        let (head, tail) = rest.split_at(i + needle.len());
         out.push_str(head);
         // `{:?}` doubles the backslashes.
         let sep = tail.len() - tail.trim_start_matches(['\\', '/']).len();
@@ -193,8 +200,9 @@ mod tests {
             assert_eq!(redact(bad), None, "{bad}");
         }
         assert_eq!(redact(r"load C:\Users\Marco\AppData\Local\Roblox\x.log").unwrap(), r"load C:\Users\…\AppData\Local\Roblox\x.log");
+        assert_eq!(redact("load C:/Users/Marco/AppData/Local/Roblox/x.log").unwrap(), "load C:/Users/…/AppData/Local/Roblox/x.log");
         assert_eq!(redact(r"a C:\USERS\Bob\x b C:\Users\Amy").unwrap(), r"a C:\USERS\…\x b C:\Users\…");
-        assert_eq!(redact("load time userid:123456, sid:abc-def, place 7").unwrap(), "load time userid:…, sid:…, place 7");
+        assert_eq!(redact("load time userid:123456, userid=789, sid:abc-def, place 7").unwrap(), "load time userid:…, userid=…, sid:…, place 7");
         assert_eq!(redact("GET https://games.roblox.com/v1/x?id=5&t=abc failed").unwrap(), "GET https://games.roblox.com/v1/x?… failed");
         assert_eq!(redact("Joining at 128.116.1.2 now").unwrap(), "Joining at x.x.x.x now");
         assert_eq!(redact("client 0.745.0.7451137 started").unwrap(), "client 0.745.0.7451137 started", "a version stays");

@@ -22,6 +22,9 @@ use crate::model::{ClientMetrics, Limits, SystemUsage};
 /// views' 2 s, so a poll arriving a hair early gets a new sample instead of waiting for the next.
 const CACHE: Duration = Duration::from_millis(1900);
 const MB: f64 = 1024.0 * 1024.0;
+/// GPU use is read this seldom once it has values: the PC-wide counters (every engine of every
+/// process) cost a weak PC real CPU time, and a 10 s average is as telling.
+const GPU_CACHE: Duration = Duration::from_secs(10);
 
 /// How long a sample that took `read` is reused: many clients make the counters slow, and this
 /// keeps them from reading all the time.
@@ -60,13 +63,15 @@ pub struct Sampler {
     cache: Mutex<Option<(Instant, Vec<ClientMetrics>)>>,
     /// Opened on the first sample; stays None where Windows has no such counters.
     gpu: Mutex<Option<Option<Gpu>>>,
+    /// The last GPU reading and when, for `GPU_CACHE`.
+    gpu_read: Mutex<Option<(Instant, Usage)>>,
     /// For `system`.
     system: Mutex<Option<SystemSample>>,
 }
 
 impl Sampler {
     pub fn new() -> Sampler {
-        Sampler { last: Mutex::new(HashMap::new()), cache: Mutex::new(None), gpu: Mutex::new(None), system: Mutex::new(None) }
+        Sampler { last: Mutex::new(HashMap::new()), cache: Mutex::new(None), gpu: Mutex::new(None), gpu_read: Mutex::new(None), system: Mutex::new(None) }
     }
 
     /// How busy the whole PC is, reused for `CACHE`; None if Windows doesn't say.
@@ -109,10 +114,18 @@ impl Sampler {
         // After opening the GPU counters, which can take seconds once: the cache lasts from here.
         // Not from the end of the read: a poll every 2 s would then keep finding it still fresh.
         let began = Instant::now();
-        let usage = match gpu {
-            Some(g) => g.read(),
-            None => Usage { pct: None, mem_mb: None },
-        };
+        let mut gpu_read = self.gpu_read.lock().unwrap_or_else(|e| e.into_inner());
+        // Until it has values (the first read has no rate yet), as often as the rest; at once for a
+        // client it doesn't know, which would read as using no GPU.
+        let known = |u: &Usage| u.pct.as_ref().is_some_and(|m| clients.iter().all(|c| m.contains_key(&c.1)));
+        if !gpu_read.as_ref().is_some_and(|(at, u)| at.elapsed() < if known(u) { GPU_CACHE } else { CACHE }) {
+            let usage = match gpu {
+                Some(g) => g.read(),
+                None => Usage { pct: None, mem_mb: None },
+            };
+            *gpu_read = Some((Instant::now(), usage));
+        }
+        let usage = &gpu_read.as_ref().expect("read above").1;
         // What the rates are measured from: when these values were read.
         let now = Instant::now();
         // A process using nothing has no counter instance: 0, when the counters answered at all.

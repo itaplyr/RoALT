@@ -548,44 +548,6 @@ pub struct PrivateServerList {
     pub game_join_restricted: Option<bool>,
 }
 
-/// `GET games.roblox.com/v1/vip-servers/{id}` as its owner sees it. Unrecorded signed in, so
-/// everything is optional. Its `joinCode` and `link` are join secrets and have no field here, so
-/// they are never read; no `Debug` all the same.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct VipServerResponse {
-    pub name: Option<String>,
-    pub active: Option<bool>,
-    pub subscription: Option<VipSubscription>,
-    pub permissions: Option<VipPermissions>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct VipSubscription {
-    /// Auto-renew is on.
-    pub active: Option<bool>,
-    pub expired: Option<bool>,
-    pub expiration_date: Option<String>,
-    pub price: Option<i64>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct VipPermissions {
-    pub friends_allowed: Option<bool>,
-    pub users: Option<Vec<VipUser>>,
-}
-
-/// A player the owner allowed in. Rows without `id` are dropped by the caller.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct VipUser {
-    pub id: Option<i64>,
-    pub name: Option<String>,
-    pub display_name: Option<String>,
-}
-
 /// Rows without `vipServerId` are dropped by the caller. `accessCode` is a join secret.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -598,4 +560,55 @@ pub struct PrivateServerRow {
     /// The job id while it runs.
     pub id: Option<String>,
     pub access_code: Option<String>,
+}
+
+/// `transaction-records/v1/users/{id}/transactions`: one page. Unrecorded signed in: all optional.
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TransactionPage {
+    pub data: Option<Vec<TransactionRow>>,
+}
+
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TransactionRow {
+    /// ISO 8601.
+    pub created: Option<String>,
+    pub is_pending: Option<bool>,
+    /// The other side: a player, a group or Roblox.
+    pub agent: Option<Named>,
+    pub details: Option<TransactionDetails>,
+    pub currency: Option<TransactionCurrency>,
+}
+
+/// Anything with a name, of which only the name is read.
+#[derive(Deserialize, Debug, Default)]
+#[serde(default)]
+pub struct Named {
+    pub name: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Default)]
+#[serde(default)]
+pub struct TransactionDetails {
+    /// The item or pass.
+    pub name: Option<String>,
+    /// The game it was sold in.
+    pub place: Option<Named>,
+}
+
+#[derive(Deserialize, Debug, Default)]
+#[serde(default)]
+pub struct TransactionCurrency {
+    /// Negative when spent. A float in case Roblox sends one.
+    pub amount: Option<f64>,
+}
+
+/// `.../transaction-totals?transactionType=summary`: the three totals RoALT shows.
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TransactionTotals {
+    pub incoming_robux_total: Option<f64>,
+    pub outgoing_robux_total: Option<f64>,
+    pub pending_robux_total: Option<f64>,
 }

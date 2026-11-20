@@ -7,11 +7,10 @@ type Axis = "width" | "height" | "both";
 
 /** A box that follows its content's natural size on a spring: the island growing a label, a group
  * opening, a toolbar swapping its buttons, a dialog changing step. The first size is set without
- * animating; reduced motion jumps. `clip` keeps what doesn't fit yet hidden (focus rings survive:
+ * animating; reduced motion jumps. What doesn't fit yet is clipped (focus rings survive:
  * overflow-clip-margin). Width needs content that sets its own width (it is laid out max-content). */
-export function Morph({ axis = "width", clip = true, transition = SPRING.size, className, style, innerClassName, children }: {
+export function Morph({ axis = "width", transition = SPRING.size, className, style, innerClassName, children }: {
   axis?: Axis;
-  clip?: boolean;
   transition?: Transition;
   className?: string;
   style?: CSSProperties;
@@ -58,8 +57,8 @@ export function Morph({ axis = "width", clip = true, transition = SPRING.size, c
         display: inline ? "inline-flex" : "block",
         width: axis === "height" ? undefined : width,
         height: axis === "width" ? undefined : height,
-        overflow: clip ? "clip" : undefined,
-        overflowClipMargin: clip ? 4 : undefined,
+        overflow: "clip",
+        overflowClipMargin: 4,
         flex: "none",
         maxWidth: "100%",
         ...style,

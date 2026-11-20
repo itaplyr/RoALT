@@ -1,4 +1,5 @@
 import type { AccountSummary, Profile, Settings } from "../../api";
+import type { PresetRooms } from "../../bindings/PresetRooms";
 import type { RenderFlags } from "../../bindings/RenderFlags";
 import { fmtList, t, type Key } from "../../i18n";
 import { accountName } from "../accounts/shared";
@@ -51,6 +52,13 @@ export const PRESETS: readonly Preset[] = [
   },
 ];
 
+/** The best-looking preset whose rough room fits `want` clients; Max alts when none does. Roblox
+ * defaults' full graphics are left out on an integrated GPU. */
+export function recommend(rooms: PresetRooms, want: number, integrated: boolean): keyof PresetRooms {
+  if (!integrated && rooms.defaults >= want) return "defaults";
+  return rooms.balanced >= want ? "balanced" : "maxAlts";
+}
+
 /** A setting a profile can carry (the preview rate is this PC's, not a setting). */
 export type ProfileKey = Exclude<keyof Profile, "previewFps">;
 
@@ -81,6 +89,17 @@ export const isApplied = (p: Profile, s: Settings) => KEYS.every((k) => p[k] == 
 
 /** The profile names at least one setting. */
 export const named = (p: Profile) => KEYS.some((k) => p[k] != null);
+
+/** What every client shares (a share of the cores, one memory threshold and trim): an account's
+ * own profile leaves these to Settings, as `performance::per_client` does. */
+export const SHARED: readonly ProfileKey[] = ["memThrottle", "trimEveryMin", "autoSpread", "fairCap"];
+
+/** The part of `p` an account can have of its own. */
+export const perClient = (p: Profile): Profile =>
+  Object.fromEntries(Object.entries(p).filter(([k]) => k !== "previewFps" && !SHARED.includes(k as ProfileKey)));
+
+/** The preset an account's own profile is, if it is one. */
+export const presetOf = (p: Profile) => PRESETS.find((x) => KEYS.every((k) => same(perClient(x.profile)[k] ?? null, p[k] ?? null)));
 
 /** The accounts with an FPS cap of their own, in words; empty with none. */
 export const ownCaps = (accounts: AccountSummary[]) => fmtList(accounts.filter((a) => a.fpsCap).map((a) => `${accountName(a)} (${a.fpsCap})`));

@@ -1,21 +1,28 @@
-import { useId, useState } from "react";
+import { useId, useRef, useState, type FormEvent } from "react";
 import { motion } from "motion/react";
 import { useQueryClient } from "@tanstack/react-query";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { open as openFile } from "@tauri-apps/plugin-dialog";
-import { api } from "../../../api";
+import { api, type Settings } from "../../../api";
+import type { Look } from "../../../bindings/Look";
+import { ADVANCED, BUILTINS, builtinOf, lookTokens, PARTS, partLabel, readShared, type Builtin, type Part, type Shared } from "../../../app/look";
 import { qk, useBackgroundUrl } from "../../../data";
 import { t, type Key } from "../../../i18n";
 import { rovingKeys } from "../../../ui/a11y";
-import { Button } from "../../../ui/Button";
+import { Disclosure } from "../../../ui/Bits";
+import { Button, IconButton } from "../../../ui/Button";
 import { Segmented, Switch } from "../../../ui/controls";
+import { ConfirmDialog, Dialog } from "../../../ui/Dialog";
+import { Field } from "../../../ui/Field";
 import { Icon } from "../../../ui/Icon";
 import { Collapse, lid, Morph, setMotionPreference, SPRING, Swap, useMotionPreference } from "../../../ui/motion";
+import { fromCode, toCode } from "../../../ui/shareCode";
 import { playSound, previewSound, setSoundPreferences, useSoundPreferences } from "../../../ui/sounds";
 import { useRow } from "../kit/rowError";
 import { SettingRow } from "../kit/SettingRow";
 
 /** The presets after Monochrome (""): the fill and its name. Any other colour comes from the picker. */
-const ACCENTS: [string, Key][] = [
+export const ACCENTS: [string, Key][] = [
   ["#c6f432", "settings.accent.lime"],
   ["#ff4fd8", "settings.accent.neon"],
   ["#f48fb8", "settings.accent.sakura"],
@@ -72,6 +79,270 @@ export function AccentRow() {
     <SettingRow id="accent">
       <AccentPicker />
     </SettingRow>
+  );
+}
+
+/** Dark, Light, System or the user's own colours. Custom with none yet starts on what shows. */
+function ThemePicker() {
+  const { ctx, write } = useRow();
+  const s = ctx.s;
+  const pick = (theme: Settings["theme"]) => {
+    if (theme === s.theme) return;
+    const fresh = theme === "custom" && !Object.keys(s.look.colors).length;
+    const base = document.documentElement.dataset.theme === "light" ? "light" : "dark";
+    void write(fresh ? { theme, look: { base, colors: {} } } : { theme });
+  };
+  return (
+    <Segmented
+      label={t("settings.theme")}
+      value={s.theme}
+      onChange={pick}
+      options={[
+        { value: "dark" as const, label: t("settings.themeDark") },
+        { value: "light" as const, label: t("settings.themeLight") },
+        { value: "system" as const, label: t("settings.themeSystem") },
+        { value: "custom" as const, label: t("settings.themeCustom") },
+      ]}
+    />
+  );
+}
+
+export function ThemeRow() {
+  return (
+    <SettingRow id="theme">
+      <ThemePicker />
+    </SettingRow>
+  );
+}
+
+/** Colours the user made (not one of the built-in themes as it came): worth asking before they go. */
+const ownLook = (s: Settings) => s.theme === "custom" && Object.keys(s.look.colors).length > 0 && !builtinOf(s.look);
+
+/** Replacing the user's own colours asks first; anything else just applies. Render `dialog`. */
+function useReplace() {
+  const { ctx } = useRow();
+  const [pending, setPending] = useState<(() => void) | null>(null);
+  const replace = (apply: () => void) => (ownLook(ctx.s) ? setPending(() => apply) : apply());
+  const dialog = (
+    <ConfirmDialog
+      open={!!pending}
+      onClose={() => setPending(null)}
+      onConfirm={() => {
+        pending?.();
+        setPending(null);
+      }}
+      title={t("look.replaceTitle")}
+      text={t("look.replaceText")}
+      confirmLabel={t("look.replace")}
+      safe
+    />
+  );
+  return { replace, dialog };
+}
+
+/** A theme's colours, accent and corners, switched to Custom. */
+const patchOf = (x: { look: Look; accent: string; corners: number }) => ({ theme: "custom" as const, look: x.look, accent: x.accent, corners: x.corners });
+
+function ThemeChips() {
+  const { ctx, write } = useRow();
+  const { replace, dialog } = useReplace();
+  const current = ctx.s.theme === "custom" ? builtinOf(ctx.s.look) : null;
+  const use = (b: Builtin) => replace(() => void write(patchOf(b)));
+  return (
+    <div role="group" aria-label={t("look.themes")} className="flex flex-wrap justify-end gap-1.5">
+      {BUILTINS.map((b) => (
+        <button key={b.id} type="button" className="chip" aria-pressed={current?.id === b.id} onClick={() => use(b)}>
+          <span aria-hidden="true" className="look-dots">
+            {[b.look.colors.ground, b.look.colors.fg, b.accent].map((c, i) => (
+              <i key={i} style={{ background: c }} />
+            ))}
+          </span>
+          {t(b.label)}
+        </button>
+      ))}
+      {dialog}
+    </div>
+  );
+}
+
+export function ThemesRow() {
+  return (
+    <SettingRow id="themes">
+      <ThemeChips />
+    </SettingRow>
+  );
+}
+
+/** One part's colour: its swatch (the system picker), its name, and a reset once it was picked. */
+function PartSwatch({ id, value, picked, onPick, onReset }: {
+  id: Part;
+  value: string;
+  picked: boolean;
+  onPick: (id: Part, colour: string) => void;
+  onReset: (id: Part) => void;
+}) {
+  const name = t(partLabel(id));
+  return (
+    <div className="look-part">
+      <label className="swatch set-custom look-swatch" style={{ background: value }}>
+        <span className="sr-only">{name}</span>
+        <input type="color" value={value} onChange={(e) => onPick(id, e.target.value)} />
+      </label>
+      <span className="look-name">{name}</span>
+      {picked && <IconButton icon="refresh" size="sm" label={t("look.resetPart", { part: name })} onClick={() => onReset(id)} />}
+    </div>
+  );
+}
+
+/** How long the picker must rest before its colour is saved. */
+const SAVE_AFTER_MS = 300;
+
+/** The parts in plain words, the rest behind Advanced, what the look is built on, and Reset all. */
+function LookEditor() {
+  const { ctx, write } = useRow();
+  const qc = useQueryClient();
+  const look = ctx.s.look;
+  const shown = lookTokens(look).colors;
+  // A pick still waiting for the picker to rest. Not cleared on unmount: leaving Settings mid-drag still saves it.
+  const pending = useRef(0);
+  const save = (next: Look) => {
+    clearTimeout(pending.current);
+    void write({ look: next });
+  };
+  // The screen follows the picker at once (the cached settings, as a save would show them); the save
+  // waits for it to rest. A refused save puts the cache back (useSetSettings).
+  const pick = (id: Part, c: string) => {
+    const colour = c.toLowerCase();
+    const without = { ...look.colors };
+    delete without[id];
+    // The colour it shows unpicked is no pick: a cancelled picker puts that one back.
+    const colors = lookTokens({ ...look, colors: without }).colors[id] === colour ? without : { ...without, [id]: colour };
+    const next = { ...look, colors };
+    qc.setQueryData<Settings>(qk.settings, (s) => (s ? { ...s, look: next } : s));
+    clearTimeout(pending.current);
+    pending.current = window.setTimeout(() => void write({ look: next }), SAVE_AFTER_MS);
+  };
+  const onReset = (id: Part) => {
+    const colors = { ...look.colors };
+    delete colors[id];
+    save({ ...look, colors });
+  };
+  const swatch = (id: Part) => <PartSwatch key={id} id={id} value={look.colors[id] ?? shown[id]} picked={id in look.colors} onPick={pick} onReset={onReset} />;
+  return (
+    <div className="look-editor">
+      <div className="look-parts">{PARTS.map(swatch)}</div>
+      <Disclosure summary={t("look.advanced")} className="look-advanced">
+        <div className="look-parts">{ADVANCED.map(swatch)}</div>
+      </Disclosure>
+      <div className="flex flex-wrap items-center gap-2">
+        <Segmented
+          label={t("look.base")}
+          value={look.base}
+          onChange={(base) => save({ ...look, base })}
+          options={[
+            { value: "dark" as const, label: t("settings.themeDark") },
+            { value: "light" as const, label: t("settings.themeLight") },
+          ]}
+        />
+        <Button size="md" variant="ghost" icon="refresh" disabled={!Object.keys(look.colors).length} onClick={() => save({ ...look, colors: {} })}>
+          {t("look.resetAll")}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+export function LookRow() {
+  return <SettingRow id="look" below={<LookEditor />} />;
+}
+
+/** The theme as a code to copy, and someone else's to paste. */
+const THEME_CODE = "RoALT-THEME:";
+function LookShare() {
+  const { ctx, write, setResult, fail } = useRow();
+  const { replace, dialog } = useReplace();
+  const [pasting, setPasting] = useState(false);
+  const s = ctx.s;
+  const copy = () => {
+    const shared: Shared = { v: 1, base: s.look.base, colors: s.look.colors, accent: s.accent, corners: s.corners };
+    writeText(toCode(THEME_CODE, JSON.stringify(shared))).then(() => setResult(t("look.codeCopied")), fail);
+  };
+  return (
+    <span className="flex flex-wrap justify-end gap-2">
+      <Button size="md" onClick={copy}>{t("look.copyCode")}</Button>
+      <Button size="md" aria-haspopup="dialog" onClick={() => setPasting(true)}>{t("look.pasteCode")}</Button>
+      <PasteTheme
+        open={pasting}
+        onClose={() => setPasting(false)}
+        onTheme={(x) => {
+          setPasting(false);
+          replace(() => void write(patchOf({ look: { base: x.base, colors: x.colors }, accent: x.accent, corners: x.corners })));
+        }}
+      />
+      {dialog}
+    </span>
+  );
+}
+
+export function LookShareRow() {
+  return (
+    <SettingRow id="lookShare">
+      <LookShare />
+    </SettingRow>
+  );
+}
+
+function PasteTheme({ open, onClose, onTheme }: { open: boolean; onClose: () => void; onTheme: (x: Shared) => void }) {
+  const [code, setCode] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [wasOpen, setWasOpen] = useState(open);
+  // Closed, it forgets what was pasted.
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    if (!open) {
+      setCode("");
+      setError(null);
+    }
+  }
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    const json = fromCode(THEME_CODE, code);
+    const theme = json === null ? null : readShared(json);
+    if (!theme) return setError(t("look.badCode"));
+    onTheme(theme);
+  };
+  return (
+    <Dialog open={open} onClose={onClose} title={t("look.pasteTitle")}>
+      <form onSubmit={submit}>
+        <div className="dlg-body">
+          <Field label={t("look.pasteLabel")} error={error}>
+            {({ id, describedBy, invalid }) => (
+              <textarea
+                id={id}
+                className="field mono text-xs"
+                rows={4}
+                value={code}
+                onChange={(e) => {
+                  setCode(e.target.value);
+                  setError(null);
+                }}
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                placeholder={`${THEME_CODE}…`}
+                aria-invalid={invalid || undefined}
+                aria-describedby={describedBy}
+              />
+            )}
+          </Field>
+        </div>
+        <div className="dlg-foot">
+          <Button size="md" onClick={onClose}>{t("common.cancel")}</Button>
+          <Button size="md" type="submit" variant="primary" disabled={!code.trim()}>{t("look.apply")}</Button>
+        </div>
+      </form>
+    </Dialog>
   );
 }
 

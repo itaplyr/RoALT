@@ -1,18 +1,20 @@
 {
   "name": "roalt",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.3.0",
   "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && node scripts/check-i18n.mjs && vite build",
+    "build": "tsc --noEmit && node scripts/check-i18n.mjs && node scripts/check-ipc.mjs && vite build",
     "build:demo": "vite build --mode demo --base ./ --outDir dist-demo",
     "i18n:check": "node scripts/check-i18n.mjs",
+    "ipc:check": "node scripts/check-ipc.mjs",
     "typecheck": "tsc --noEmit",
     "test:sounds": "node --experimental-strip-types scripts/test-sounds.mjs",
     "test:news": "node --experimental-strip-types scripts/test-news.mjs",
     "test:liquid": "node --experimental-strip-types scripts/test-liquid.mjs",
+    "test:look": "node --experimental-strip-types scripts/test-look.mjs",
     "tauri": "tauri",
     "bindings": "cargo test --manifest-path src-tauri/Cargo.toml export_bindings"
   },

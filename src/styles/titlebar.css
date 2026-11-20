@@ -7,6 +7,7 @@
     z-index: 30;
     flex: none;
     height: var(--titlebar-h);
+    background: var(--titlebar);
     display: grid;
     /* The ends keep their own width; the island gets what is left between them (centred while it
        fits), so it never runs over the tools. */
@@ -100,6 +101,22 @@
     }
     .online-count,
     .online-count-sep {
+      display: none;
+    }
+  }
+  /* Donate: a labelled pill, its menu holds Robux and coffee. */
+  .wc.title-donate {
+    width: auto;
+    grid-auto-flow: column;
+    align-items: center;
+    gap: 6px;
+    padding-inline: 10px 8px;
+    font-size: 13px;
+    font-weight: 500;
+  }
+  /* Hidden where the island needs the room (its own breakpoint); Donate stays in the app menu. */
+  @container titlebar (width < 1180px) {
+    .wc.title-donate {
       display: none;
     }
   }

@@ -76,3 +76,22 @@
     color: var(--fg-3);
   }
 }
+
+/* Playtime by day: a bar a day, as tall as its share of the busiest day shown; a day without play
+   is a stub on the baseline. */
+.playtime-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 96px;
+}
+.playtime-bar {
+  flex: 1 1 0;
+  min-width: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--accent);
+}
+.playtime-bar[data-empty] {
+  height: 2px;
+  background: var(--line);
+}

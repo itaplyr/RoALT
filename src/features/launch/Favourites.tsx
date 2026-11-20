@@ -1,21 +1,43 @@
 import { useEffect, useId, useLayoutEffect, useReducer, useRef, useState, type CSSProperties, type FormEvent, type RefObject } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, asError, type AccountSummary, type Favourite, type LaunchTarget } from "../../api";
-import { qk, useFavourites } from "../../data";
-import { t, tx } from "../../i18n";
-import { Skeleton } from "../../ui/Bits";
+import { api, asError, type AccountSummary, type Favourite, type LaunchTarget, type SameServer } from "../../api";
+import type { FavouriteOptions } from "../../bindings/FavouriteOptions";
+import { groupColor, qk, useFavourites, useGame, useGroups } from "../../data";
+import { t, tx, type Key } from "../../i18n";
+import { Chip, Skeleton } from "../../ui/Bits";
 import { Button, IconButton } from "../../ui/Button";
-import { Switch } from "../../ui/controls";
+import { OffOrNumberField, Switch } from "../../ui/controls";
 import { ConfirmDialog, Dialog } from "../../ui/Dialog";
-import { Field, Input } from "../../ui/Field";
+import { Field, Input, Select } from "../../ui/Field";
 import { Icon } from "../../ui/Icon";
 import { Collapse, riseIn, useFlip, useFreshItems } from "../../ui/motion";
 import { MenuItem, MenuSeparator, Popover } from "../../ui/Popover";
+import { RANGES } from "../../ui/ranges";
 import { friendly, toast, toastError } from "../../ui/Toast";
 import { reordered } from "../dashboard/homeLayout";
 import { useGridDrag } from "../dashboard/useGridDrag";
 import { AccountPicker } from "./AccountPicker";
+import { copyRoaltLink, roaltLink, targetPlace } from "./target";
 import "./launch.css";
+
+/** A favourite's game icon; the star while RoALT doesn't know its game (or it names none). */
+export function FavIcon({ target, size }: { target: LaunchTarget; size: number }) {
+  const url = useGame(targetPlace(target)).data?.iconUrl;
+  return url ? (
+    <img src={url} alt="" width={size} height={size} className="fav-icon" loading="lazy" />
+  ) : (
+    <Icon name="star" size={Math.min(size, 14)} fill className="flex-none" />
+  );
+}
+
+/** The ways a favourite's accounts spread over servers, as Play names them. */
+const SPREADS: readonly (readonly [SameServer, Key])[] = [
+  ["ownPrivate", "launch.spreadOwn"],
+  ["randomPublic", "launch.spreadRandom"],
+  ["closest", "launch.spreadClosest"],
+  ["mostFull", "servers.orderMostFull"],
+  ["mostEmpty", "servers.orderMostEmpty"],
+];
 
 const MENU = "fav-menu";
 const menu = () => document.getElementById(MENU);
@@ -117,7 +139,7 @@ export function FavouritesRow({ accounts, active, onPick }: {
             }}
           >
             <button type="button" className="chip launch-fav-pick" aria-pressed={active === f.id} onClick={() => onPick(f)} {...drag.item(f.name)}>
-              <Icon name="star" size={13} fill />
+              <FavIcon target={f.target} size={18} />
               <span className="truncate max-w-[240px]">{f.name}</span>
             </button>
             <IconButton
@@ -149,6 +171,9 @@ export function FavouritesRow({ accounts, active, onPick }: {
         >
           {t("launch.fav.edit")}
         </MenuItem>
+        {menuFor && roaltLink(menuFor.target) && (
+          <MenuItem icon="link" onSelect={() => copyRoaltLink(menuFor.target)}>{t("share.copyLink")}</MenuItem>
+        )}
         <MenuSeparator />
         <MenuItem icon="trash" danger disabled={remove.isPending} onSelect={() => setDeleting(menuFor)}>
           {t("launch.fav.deleteConfirm")}
@@ -178,19 +203,31 @@ export function FavouritesRow({ accounts, active, onPick }: {
   );
 }
 
+/** The accounts a favourite launches: its own, then the members of its groups as they are now, each
+ * once (as the backend's `favourite_accounts`). */
+export const favouriteAccountIds = (f: Favourite, accounts: AccountSummary[]) => [
+  ...new Set([...f.accountIds, ...accounts.filter((a) => a.groupIds.some((g) => f.options.groupIds.includes(g))).map((a) => a.id)]),
+];
+
 /** Saves a new favourite (no `initial.id`) or edits one; the target comes from `resolve`. */
 export function FavouriteDialog({ open, onClose, accounts, initial, resolve, onSaved }: {
   open: boolean;
   onClose: () => void;
   accounts: AccountSummary[];
-  initial: { id?: number; name: string; accountIds: number[]; inTray: boolean };
+  initial: { id?: number; name: string; accountIds: number[]; inTray: boolean; options?: FavouriteOptions };
   resolve: () => Promise<LaunchTarget>;
   onSaved?: (f: Favourite) => void;
 }) {
   const qc = useQueryClient();
   const [name, setName] = useState("");
   const [ids, setIds] = useState<number[]>([]);
+  const groups = useGroups().data ?? [];
+  const [groupIds, setGroupIds] = useState<number[]>([]);
   const [tray, setTray] = useState(false);
+  // How it launches: "" is as a favourite always did (no particular way), 0 no cap of its own.
+  const [servers, setServers] = useState<SameServer | "">("");
+  const [fps, setFps] = useState(0);
+  const [hotkey, setHotkey] = useState("");
   const [nameError, setNameError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -199,7 +236,11 @@ export function FavouriteDialog({ open, onClose, accounts, initial, resolve, onS
     if (!open) return;
     setName(initial.name);
     setIds(initial.accountIds);
+    setGroupIds(initial.options?.groupIds ?? []);
     setTray(initial.inTray);
+    setServers(initial.options?.sameServer ?? "");
+    setFps(initial.options?.fpsCap ?? 0);
+    setHotkey(initial.options?.hotkey ?? "");
     setNameError(null);
     setError(null);
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -214,7 +255,9 @@ export function FavouriteDialog({ open, onClose, accounts, initial, resolve, onS
     try {
       const target = await resolve();
       const accountIds = accounts.filter((a) => ids.includes(a.id)).map((a) => a.id);
-      const f = await api.favouriteSave({ id: initial.id, name: n, target, accountIds, inTray: tray });
+      // A group deleted since isn't kept.
+      const options: FavouriteOptions = { groupIds: groupIds.filter((id) => groups.some((g) => g.id === id)), hotkey: hotkey.trim(), sameServer: servers || null, fpsCap: fps || null };
+      const f = await api.favouriteSave({ id: initial.id, name: n, target, accountIds, inTray: tray, options });
       qc.invalidateQueries({ queryKey: qk.favourites });
       toast(initial.id ? t("launch.fav.saved", { name: f.name }) : t("launch.fav.added", { name: f.name }));
       onSaved?.(f);
@@ -251,10 +294,46 @@ export function FavouriteDialog({ open, onClose, accounts, initial, resolve, onS
             <AccountPicker variant="list" accounts={accounts} picked={ids} onPicked={setIds} label={t("launch.fav.defaultAccounts")} />
             <span className="text-xs text-fg-3">{t("launch.fav.picksFirst")}</span>
           </div>
+          {groups.length > 0 && (
+            <div className="flex flex-col gap-1.5">
+              <span aria-hidden="true" className="label">{t("accounts.groups.title")}</span>
+              <div role="group" aria-label={t("accounts.groups.title")} className="flex flex-wrap gap-1.5">
+                {groups.map((g) => (
+                  <Chip key={g.id} small pressed={groupIds.includes(g.id)} dot={groupColor(g)} onClick={() => setGroupIds((now) => (now.includes(g.id) ? now.filter((x) => x !== g.id) : [...now, g.id]))}>
+                    <span className="max-w-[160px] truncate">{g.name}</span>
+                  </Chip>
+                ))}
+              </div>
+              <span className="text-xs text-fg-3">{t("launch.fav.groupsHint")}</span>
+            </div>
+          )}
+          {/* What a click on Home, the tray or its key launches it with; picking it in Play sets them there. */}
+          <label className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+            <span>{t("launch.findServer")}</span>
+            <Select
+              aria-label={t("launch.findServer")}
+              value={servers}
+              onChange={(v) => setServers(v as SameServer | "")}
+              options={[
+                { value: "", label: t("common.default") },
+                ...(["pickFirst", "followFirst"] as const).map((v) => ({ value: v, label: `${t("launch.sameServer")}: ${t(v === "pickFirst" ? "launch.pickServer" : "launch.followFirst")}` })),
+                ...SPREADS.map(([v, label]) => ({ value: v, label: `${t("launch.spread")}: ${t(label)}` })),
+              ]}
+            />
+          </label>
+          <div className="flex items-center justify-between gap-3">
+            <span aria-hidden="true">{t("settings.fpsCap")}</span>
+            <OffOrNumberField label={t("settings.fpsCap")} value={fps} range={RANGES.fpsCap} unit={t("accounts.detail.fpsUnit")} short="FPS" onCommit={setFps} />
+          </div>
           <div className="flex items-center justify-between gap-3">
             <span aria-hidden="true">{t("launch.fav.showInTray")}</span>
             <Switch label={t("launch.fav.showInTray")} checked={tray} onChange={setTray} />
           </div>
+          <Field label={t("launch.fav.hotkey")} hint={t("settings.globalKeyHint")}>
+            {(f) => (
+              <Input id={f.id} aria-describedby={f.describedBy} autoComplete="off" spellCheck={false} placeholder={t("settings.placeholderOff")} maxLength={40} value={hotkey} onChange={(e) => setHotkey(e.target.value)} />
+            )}
+          </Field>
           <Collapse open={!!error}>
             <p role="alert" className="alert">{error}</p>
           </Collapse>

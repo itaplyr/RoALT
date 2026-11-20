@@ -25,6 +25,8 @@ type FormProps = {
   currentLabel?: string;
   nextLabel?: string;
   cancelLabel?: string;
+  /** Minimum length for `next` (defaults to `MIN_PASSWORD`). */
+  minLength?: number;
   /** What a wrong password says, when it isn't the vault's (a backup's own password, say). */
   wrongText?: string;
 };
@@ -34,7 +36,7 @@ type Slot = "current" | "next" | "confirm" | "form";
 
 /** A new password and its confirmation (this form's and the recovery card's), with the form's one
  * show/hide key. The form keeps its own problems: `fields` takes its edit and errorAt. */
-export function useNewPassword() {
+export function useNewPassword(minLength = MIN_PASSWORD) {
   const [nw, setNw] = useState("");
   const [confirm, setConfirm] = useState("");
   const [peek, setPeek] = useState(false);
@@ -49,7 +51,7 @@ export function useNewPassword() {
     clear: () => (setNw(""), setConfirm("")),
     /** Too short, or not the same twice: where to say so, and what. */
     check: (): ["next" | "confirm", string] | null => {
-      if (nw.length < MIN_PASSWORD) return ["next", t("vault.tooShort", { count: MIN_PASSWORD })];
+      if (nw.length < minLength) return ["next", t("vault.tooShort", { count: minLength })];
       if (nw === confirm) return null;
       setLeft(true);
       return ["confirm", t("vault.mismatch")];
@@ -67,7 +69,7 @@ export function useNewPassword() {
           value={nw}
           onChange={edit("next", setNw)}
           autoComplete="new-password"
-          hint={t("vault.minLength", { count: MIN_PASSWORD })}
+          hint={t("vault.minLength", { count: minLength })}
           error={errorAt("next")}
           withKey={withKey}
           autoFocus={autoFocus}
@@ -97,12 +99,12 @@ export function useNewPassword() {
  * state: they go once used, and when it unmounts.
  */
 export function PasswordForm({
-  text, submitLabel, onSubmit, onDone, onCancel, onBusy, wrongText,
+  text, submitLabel, onSubmit, onDone, onCancel, onBusy, wrongText, minLength,
   current = false, next = false, currentLabel = t("settings.masterPassword"), nextLabel = t("vault.newPassword"), cancelLabel = t("common.cancel"),
 }: FormProps) {
   const form = useRef<HTMLFormElement>(null);
   const [cur, setCur] = useState("");
-  const pw = useNewPassword();
+  const pw = useNewPassword(minLength);
   const [problem, setProblem] = useState<{ at: Slot; text: string } | null>(null);
   const [shakes, setShakes] = useState(0);
   const [busy, setBusyState] = useState(false);

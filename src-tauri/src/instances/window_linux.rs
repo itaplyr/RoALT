@@ -108,10 +108,14 @@ pub fn thumbnail_socket(socket: &Path, max_w: u32) -> Option<(Thumb, bool)> {
 static SEQ: AtomicU32 = AtomicU32::new(1);
 
 /// The newest frame Cordial can provide. A headless client has no host window, so its profile is
-/// found from the process command line and the dev-control socket does the rest.
-pub fn preview(pid: Option<u32>, max_w: u32) -> Preview {
+/// found from the process command line and the dev-control socket does the rest. `max_w`: None
+/// (previews Off, between stills) asks for no new picture.
+pub fn preview(pid: Option<u32>, max_w: Option<u32>) -> Preview {
     let Some(pid) = pid else {
         return Preview { status: Status::NoWindow, hidden: false, shot: None };
+    };
+    let Some(max_w) = max_w else {
+        return Preview { status: Status::Pending, hidden: hidden_of(pid), shot: None };
     };
     let Some(user) = super::process::profile_of(pid) else {
         return Preview { status: Status::NoWindow, hidden: false, shot: None };

@@ -152,7 +152,7 @@ export function HomeToolbar({ running, fold, detailed, onDetailed }: { running: 
   const closeAll = () => {
     setClosing(true);
     api
-      .instancesCloseAll(false)
+      .instancesCloseAll()
       .catch(toastError)
       .finally(() => {
         setClosing(false);

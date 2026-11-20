@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { open as openFile, save as saveFile } from "@tauri-apps/plugin-dialog";
 import { api, asError, type ConflictPolicy, type ImportReport } from "../../../api";
-import { qk } from "../../../data";
+import { qk, useAccounts } from "../../../data";
 import { fmtNum, t, tx } from "../../../i18n";
 import { announce } from "../../../ui/a11y";
 import { Skeleton } from "../../../ui/Bits";
@@ -104,6 +104,10 @@ function ImportResult({ report, onDone }: { report: ImportReport; onDone: () => 
           </div>
         ))}
       </dl>
+      {/* Only when they were asked for and the backup had some. */}
+      {report.settings != null && (
+        <p className={report.settings ? "text-fg-2" : "alert"}>{t(report.settings ? "settings.importSettingsDone" : "settings.importSettingsFailed")}</p>
+      )}
       <div className="flex justify-end">
         <Button variant="primary" onClick={onDone} data-autofocus>{t("common.done")}</Button>
       </div>
@@ -114,7 +118,13 @@ function ImportResult({ report, onDone }: { report: ImportReport; onDone: () => 
 /** One backup file into RoALT: its password and what to do with accounts already here, then the
  * report, in one dialog. */
 function ImportFlow({ path, onClose }: { path: string | null; onClose: () => void }) {
+  const qc = useQueryClient();
   const [policy, setPolicy] = useState<ConflictPolicy>("skip");
+  // The backup's settings replace this PC's: asked for, and offered ticked only on a RoALT with
+  // no accounts yet (a new PC), where there is nothing of its own to lose.
+  const empty = useAccounts().data?.length === 0;
+  const [withSettings, setWithSettings] = useState<boolean | null>(null);
+  const settings = withSettings ?? empty;
   const [report, setReport] = useState<ImportReport | null>(null);
   const [busy, setBusy] = useState(false);
   const got = useRef<ImportReport | null>(null);
@@ -139,6 +149,13 @@ function ImportFlow({ path, onClose }: { path: string | null; onClose: () => voi
                       onChange={setPolicy}
                     />
                   </div>
+                  <label className="flex items-start gap-2.5">
+                    <input type="checkbox" className="cb mt-0.5" checked={settings} onChange={(e) => setWithSettings(e.target.checked)} />
+                    <span className="flex flex-col min-w-0">
+                      <span className="font-medium">{t("settings.importSettings")}</span>
+                      <span className="text-[13px] text-fg-2">{t("settings.importSettingsHint")}</span>
+                    </span>
+                  </label>
                 </div>
               }
               submitLabel={t("settings.import")}
@@ -147,7 +164,9 @@ function ImportFlow({ path, onClose }: { path: string | null; onClose: () => voi
               // A file that doesn't open may be damaged, not only locked with another password.
               wrongText={t("settings.importWrongPassword")}
               onSubmit={async ({ current }) => {
-                got.current = await api.backupImport(path, current, policy);
+                got.current = await api.backupImport(path, current, policy, settings);
+                // Restored settings (and the webhook) are what every view should show now.
+                if (got.current.settings) void qc.invalidateQueries();
               }}
               onDone={() => setReport(got.current)}
               onCancel={close}
@@ -190,6 +209,7 @@ function BackupActions() {
         currentLabel={t("settings.masterPassword")}
         next
         nextLabel={t("settings.backupPassword")}
+        minLength={12}
         onSubmit={async ({ current, next }) => {
           const date = new Date().toISOString().slice(0, 10);
           const path = await saveFile({ defaultPath: `RoALT-backup-${date}.roalt`, filters: backupFilter() });

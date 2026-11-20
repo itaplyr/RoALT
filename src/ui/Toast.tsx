@@ -53,10 +53,13 @@ const FRIENDLY: Record<string, Key> = {
   notFound: "ui.error.notFound",
   crypto: "ui.error.crypto",
   storage: "ui.error.storage",
+  roblox: "ui.error.roblox",
+  internal: "ui.error.internal",
 };
 
-/** User-facing text for an IPC error. Backend messages are already safe and user-facing. */
+/** User-facing text for an IPC error. Raw Roblox / OS errors stay in roalt.log; the UI speaks plain language. */
 export function friendly(e: ErrorPayload): string {
+  if (e.kind === "roblox" && e.code === "forbidden") return t("ui.error.forbidden");
   const k = FRIENDLY[e.kind];
   return k ? t(k) : e.message || t("ui.error.generic");
 }

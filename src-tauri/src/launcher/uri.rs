@@ -105,6 +105,7 @@ pub fn mobile_join_url(join: &Join) -> Option<String> {
 // Only the Windows Browse webview feeds this back in; Linux has no equivalent hook yet.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn target_of_player_uri(uri: &str) -> Option<crate::model::LaunchTarget> {
+    use super::target::is_uuid;
     use crate::model::LaunchTarget as T;
     let rest = uri.get(..14).filter(|p| p.eq_ignore_ascii_case("roblox-player:")).map(|_| &uri[14..])?;
     let encoded = rest.split('+').find_map(|part| part.strip_prefix("placelauncherurl:"))?;
@@ -121,11 +122,14 @@ pub fn target_of_player_uri(uri: &str) -> Option<crate::model::LaunchTarget> {
     let id = |k: &str| get(k)?.parse::<i64>().ok().filter(|n| *n > 0);
     match get("request")?.as_str() {
         "RequestGame" => Some(T::Place { place_id: id("placeId")?, launch_data: get("launchData") }),
-        "RequestGameJob" => Some(T::Server { place_id: id("placeId")?, job_id: get("gameId")? }),
+        // Any web page can send one (`commands::open_link`): ids and codes in Roblox's own shapes only.
+        "RequestGameJob" => Some(T::Server { place_id: id("placeId")?, job_id: get("gameId").filter(|j| is_uuid(j))? }),
         "RequestPrivateGame" => match (get("accessCode"), get("linkCode")) {
-            (Some(access_code), _) => Some(T::PrivateAccess { place_id: id("placeId")?, access_code }),
-            (None, Some(link_code)) => Some(T::PrivateLink { place_id: id("placeId")?, link_code }),
-            (None, None) => None,
+            (Some(access_code), _) if is_uuid(&access_code) => Some(T::PrivateAccess { place_id: id("placeId")?, access_code }),
+            (None, Some(link_code)) if link_code.len() <= 64 && link_code.bytes().all(|b| b.is_ascii_digit()) => {
+                Some(T::PrivateLink { place_id: id("placeId")?, link_code })
+            }
+            _ => None,
         },
         "RequestFollowUser" => Some(T::FollowUser { user_id: id("userId")? }),
         _ => None,
@@ -230,9 +234,14 @@ mod tests {
         let back = |join: Join| target_of_player_uri(player_uri(&ticket, 1, &launch(&join), false).expose());
         assert_eq!(back(Join::Game { place_id: 1818, launch_data: Some("a b+c".into()) }), Some(T::Place { place_id: 1818, launch_data: Some("a b+c".into()) }));
         assert_eq!(back(Join::Game { place_id: 7, launch_data: None }), Some(T::Place { place_id: 7, launch_data: None }));
-        assert_eq!(back(Join::Job { place_id: 7, job_id: "abc-def".into() }), Some(T::Server { place_id: 7, job_id: "abc-def".into() }));
+        let uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        assert_eq!(back(Join::Job { place_id: 7, job_id: uuid.into() }), Some(T::Server { place_id: 7, job_id: uuid.into() }));
         assert_eq!(back(Join::Private { place_id: 7, link_code: Some("123".into()), access_code: None }), Some(T::PrivateLink { place_id: 7, link_code: "123".into() }));
-        assert_eq!(back(Join::Private { place_id: 7, link_code: None, access_code: Some("g".into()) }), Some(T::PrivateAccess { place_id: 7, access_code: "g".into() }));
+        assert_eq!(back(Join::Private { place_id: 7, link_code: None, access_code: Some(uuid.into()) }), Some(T::PrivateAccess { place_id: 7, access_code: uuid.into() }));
+        // Not Roblox's shapes: refused, as any web page can send these.
+        assert_eq!(back(Join::Job { place_id: 7, job_id: "abc-def".into() }), None);
+        assert_eq!(back(Join::Private { place_id: 7, link_code: Some("12x".into()), access_code: None }), None);
+        assert_eq!(back(Join::Private { place_id: 7, link_code: None, access_code: Some("g".into()) }), None);
         assert_eq!(back(Join::Follow { user_id: 99 }), Some(T::FollowUser { user_id: 99 }));
         let evil = "roblox-player:1+launchmode:play+placelauncherurl:https%3A%2F%2Fevil.com%2FGame%2FPlaceLauncher.ashx%3Frequest%3DRequestGame%26placeId%3D1";
         for bad in ["https://www.roblox.com/", "roblox-player:1+launchmode:play", evil, "roblox-player:1+placelauncherurl:not%20a%20url"] {

@@ -2,7 +2,7 @@ import { useRef, useState, type MouseEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
 import { api, type AccountSummary, type Instance } from "../../api";
-import { qk, useMetrics, useSystemUsage } from "../../data";
+import { qk, useGroups, useMetrics, useSystemUsage, withGroupDefaults } from "../../data";
 import { isRtl, t } from "../../i18n";
 import { Button, IconButton } from "../../ui/Button";
 import { Icon } from "../../ui/Icon";
@@ -49,6 +49,7 @@ function tagsOf(i: Instance, a: AccountSummary | undefined, afkOn: boolean, defa
   const own = i.limits;
   const on = i.appliedLimits;
   const tags: Tag[] = [];
+  if (i.held) tags.push({ label: t("dashboard.held"), tip: t("dashboard.heldHint") });
   if (a?.fullQuality) tags.push({ label: t("accounts.detail.fullQuality"), tip: t("accounts.detail.fullQualityHint") });
   // Only once the cap is on: it may have been refused.
   if (i.throttled && on.cpuCap !== null) tags.push({ label: t("dashboard.throttled"), tip: t("dashboard.throttledHint"), tone: "attention" });
@@ -177,7 +178,9 @@ export function ClientCard({ inst: i, account: a, detailed, width, menuOpen, onS
   now: number;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
-  const { status, painted, ageS } = useThumbnail(i.id, canvas, fps);
+  // A pill or the open menu is over the picture (set below, once they are known).
+  const covered = useRef(false);
+  const { status, painted, ageS } = useThumbnail(i.id, canvas, fps, covered);
   const [inside, setInside] = useState(false);
   // Launches go one at a time: while one starts, Play again says what it is doing.
   const step = useLaunchStep();
@@ -191,7 +194,7 @@ export function ClientCard({ inst: i, account: a, detailed, width, menuOpen, onS
   const pictureNote = status === "minimized" ? t("dashboard.minimized")
     : status === "noWindow" ? t("dashboard.noWindow")
     : status === "pending" ? t("dashboard.waitingPicture")
-    : status === "unsupported" ? t("dashboard.noPreview")
+    : status === "unsupported" ? t(fps === 0 ? "dashboard.previewsOff" : "dashboard.noPreview")
     : "";
   // The one thing to know, by priority; a client in game with a live picture needs no pill.
   const pill: Pill | null = closing ? { tone: "neutral", label: t("launch.running.closing"), pulse: true }
@@ -200,7 +203,10 @@ export function ClientCard({ inst: i, account: a, detailed, width, menuOpen, onS
     : painted && pictureNote ? { tone: "neutral", label: pictureNote, tip: hidden ? t("dashboard.lastPictureHint") : undefined }
     : ageS !== null ? { tone: "neutral", label: t("dashboard.pictureAge", { s: ageS }), tip: t("dashboard.pictureAgeHint") }
     : null;
-  const tags = detailed ? tagsOf(i, a, afkOn, defaultFps) : [];
+  covered.current = !!pill || menuOpen;
+  // As run: Full quality or an FPS cap may come from its groups.
+  const groups = useGroups().data;
+  const tags = detailed ? tagsOf(i, a && withGroupDefaults(a, groups ?? []), afkOn, defaultFps) : [];
   const show = () => api.instanceShow(i.id, "focus").catch(toastError);
   const minimize = () => api.instanceShow(i.id, hidden ? "restore" : "minimize").catch(toastError);
   const menuFrom = (e: MouseEvent<HTMLElement>) => {

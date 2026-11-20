@@ -1,9 +1,0 @@
-{
-  "errors": [
-    {
-      "code": 0,
-      "message": "Allowed values: 10, 25, 50, 100",
-      "field": "limit"
-    }
-  ]
-}

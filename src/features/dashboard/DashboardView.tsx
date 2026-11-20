@@ -14,7 +14,6 @@ import { AccountTabs } from "./AccountTabs";
 import { cardFlex, ClientCard, clientName, type GripProps } from "./ClientCard";
 import { ClientMenu, closeKey, type MenuAt } from "./ClientMenu";
 import { EndedPanel } from "./Ended";
-import { ValueTotal } from "./ValueTotal";
 import { homeSorted, reordered, useHomeDetailed, useHomeSizes, type HomeTabs } from "./homeLayout";
 import { HomeToolbar, type Fold } from "./HomeToolbar";
 import { LimitsDialog } from "./LimitsDialog";
@@ -272,7 +271,6 @@ function Overview({ accounts, home, extra, onAdd, onImport, onAccounts, onPickFa
         />
       )}
       <EndedPanel accounts={accounts} />
-      <ValueTotal accounts={accounts} />
     </>
   );
 }

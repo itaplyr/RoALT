@@ -48,6 +48,18 @@
     line-height: 1.45;
     list-style: disc;
   }
+  .news-sponsor {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 16px 24px;
+    color: var(--fg);
+    text-align: start;
+    transition: background-color var(--dur-fast) var(--ease-out);
+  }
+  .news-sponsor:hover {
+    background: var(--hover);
+  }
   .news-feed {
     display: flex;
     flex-direction: column;

@@ -10,9 +10,9 @@ import { toast, toastError } from "../../ui/Toast";
 import { isRunning, uptime } from "../launch/Running";
 import { mb } from "../monitor/format";
 
-const CAPS = [0, 50, 25, 10, 5];
+export const CAPS = [0, 50, 25, 10, 5];
 /** -1: the default from Settings; 0: never. */
-const TRIMS = [-1, 0, 5, 15, 30, 60];
+export const TRIMS = [-1, 0, 5, 15, 30, 60];
 /** Logical processors a mask can name (JS numbers hold 53 bits exactly). */
 const CORES = Math.min(53, navigator.hardwareConcurrency || 1);
 // Not bit operators: those cut numbers to 32 bits.
@@ -31,7 +31,17 @@ export function LimitsDialog({ instanceId, name, onClose }: { instanceId: string
 }
 
 function LimitsBody({ inst }: { inst: Instance }) {
+  const all = useInstances().data ?? [];
+  const runningCount = all.filter(isRunning).length;
   const set = (patch: Partial<Limits>) => api.instanceSetLimits(inst.id, { ...inst.limits, ...patch }).catch(toastError);
+  const [applyingAll, setApplyingAll] = useState(false);
+  const applyAll = () => {
+    setApplyingAll(true);
+    api
+      .instancesApplyLimits(inst.limits)
+      .then((count) => toast(t("launch.limits.appliedAll", { count })), toastError)
+      .finally(() => setApplyingAll(false));
+  };
   const afk = useSettings().data?.antiAfk;
   const [trimming, setTrimming] = useState(false);
   const s = useSettings().data;
@@ -120,6 +130,15 @@ function LimitsBody({ inst }: { inst: Instance }) {
         </span>
         <Switch label={t("launch.limits.antiAfkClient")} checked={inst.antiAfk} onChange={(on) => api.instanceSetAntiAfk(inst.id, on).catch(toastError)} />
       </div>
+      <p className="text-xs text-fg-3">{t("launch.limits.kept")}</p>
+      {runningCount > 1 && (
+        <div className="flex items-center justify-between gap-2 pt-1">
+          <span className="text-xs text-fg-2">{t("launch.limits.applyAllHint")}</span>
+          <button type="button" className="btn btn-sm" disabled={applyingAll} onClick={applyAll}>
+            {t("launch.limits.applyAll", { count: runningCount })}
+          </button>
+        </div>
+      )}
       <Disclosure summary={t("settings.moreAbout", { label: t("monitor.limits") })} className="home-limits-help">
         {t("launch.limits.help")}
       </Disclosure>

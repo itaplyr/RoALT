@@ -24,4 +24,9 @@ reason: string | null, placeId: number | null,
 /**
  * Its client log was found ("Open log"); the path itself stays in the backend.
  */
-hasLog: boolean, };
+hasLog: boolean, 
+/**
+ * What the autopsy made of it (`autopsy::Verdict::code`); none before it is done, and for an
+ * end RoALT made itself.
+ */
+verdict: string | null, };

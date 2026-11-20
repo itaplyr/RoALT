@@ -1,16 +1,18 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { api, asError, type AccountSummary, type Profile, type Settings } from "../../api";
-import { setAccounts, useAccounts, useInstances, useSetSettings } from "../../data";
-import { fmtNum, t, type Key } from "../../i18n";
+import { api, asError, type AccountSummary, type Group, type Profile, type Settings } from "../../api";
+import { qk, setAccounts, useAccounts, useGroups, useInstances, useRunAccounts, useSetSettings } from "../../data";
+import { fmtList, fmtNum, t, type Key } from "../../i18n";
 import { Button } from "../../ui/Button";
+import { Segmented } from "../../ui/controls";
 import { Dialog } from "../../ui/Dialog";
 import { Icon } from "../../ui/Icon";
 import { Collapse, riseIn } from "../../ui/motion";
 import { friendly, toast } from "../../ui/Toast";
-import { setPreviewFps, storedFps, type PreviewFps } from "../dashboard/previewFps";
+import { fpsLabel, setPreviewFps, storedFps, type PreviewFps } from "../dashboard/previewFps";
+import { AccountPicker } from "../launch/AccountPicker";
 import { isLive } from "../launch/Running";
-import { FACTS_SHOWN, KEYS, LABELS, ownCaps, PRESETS, same, type ProfileKey } from "./presets";
+import { FACTS_SHOWN, KEYS, LABELS, named, ownCaps, perClient, PRESETS, same, SHARED, type ProfileKey } from "./presets";
 
 const MODE_NAMES = { d3d11: "Direct3D 11", vulkan: "Vulkan", opengl: "OpenGL" } as const;
 const onOff = (on: boolean) => t(on ? "common.on" : "common.off");
@@ -55,60 +57,99 @@ export function ReviewDialog({ profile, settings, facts, onApplied, onClose }: {
   const qc = useQueryClient();
   const set = useSetSettings({ quiet: true });
   const accounts = useAccounts().data ?? [];
+  const groups = useGroups().data ?? [];
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Compared with what was there when it opened: Apply writes the cache before the save answers
   // (data.ts), and the list must not empty under the busy Apply.
-  const [base, setBase] = useState(() => ({ settings, accounts, fps: storedFps() }));
+  const [base, setBase] = useState(() => ({ settings, accounts, groups, fps: storedFps() }));
   const [shownFor, setShownFor] = useState(profile);
+  // Every account (Settings), or only the picked ones (each keeps the profile as its own).
+  const [scope, setScope] = useState<"all" | "chosen">("all");
+  const [picked, setPicked] = useState<number[]>([]);
   const list = useRef<HTMLDivElement>(null);
   if (shownFor !== profile) {
     setShownFor(profile);
-    setBase({ settings, accounts, fps: storedFps() });
+    setBase({ settings, accounts, groups, fps: storedFps() });
     setError(null);
+    setScope("all");
+    setPicked([]);
   }
   const s = base.settings;
+  const chosen = scope === "chosen";
+  const own = profile ? perClient(profile) : {};
+  const targets = base.accounts.filter((a) => picked.includes(a.id));
   // The rows arrive one after another as the dialog opens.
   useLayoutEffect(() => {
     if (profile) list.current?.querySelectorAll("[data-rise]").forEach((el, i) => riseIn(el, i));
-  }, [profile]);
+  }, [profile, scope]);
 
-  const changes = profile
-    ? KEYS.filter((k) => profile[k] != null && !same(profile[k], s[k])).map((k) => ({ label: t(LABELS[k]), from: valueText(k, s[k]), to: valueText(k, profile[k]) }))
-    : [];
+  // For chosen accounts: everything it gives them, whatever each has now.
+  const changes = !profile
+    ? []
+    : chosen
+      ? KEYS.filter((k) => own[k] != null).map((k) => ({ label: t(LABELS[k]), from: "", to: valueText(k, own[k]) }))
+      : KEYS.filter((k) => profile[k] != null && !same(profile[k], s[k])).map((k) => ({ label: t(LABELS[k]), from: valueText(k, s[k]), to: valueText(k, profile[k]) }));
   const fps = profile?.previewFps as PreviewFps | undefined;
-  if (fps != null && fps !== base.fps) changes.push({ label: t("dashboard.previewFps"), from: t("dashboard.fps", { fps: base.fps }), to: t("dashboard.fps", { fps }) });
+  if (!chosen && fps != null && fps !== base.fps) changes.push({ label: t("dashboard.previewFps"), from: fpsLabel(base.fps), to: fpsLabel(fps) });
   // A profile's FPS cap is what its clients get: an account's own looser one would win over it at launch.
   const cap = profile?.fpsCap;
-  const clearing = typeof cap === "number" ? base.accounts.filter((a) => a.fpsCap && (cap === 0 || a.fpsCap > cap)) : [];
+  const looser = (c: number | null) => typeof cap === "number" && !!c && (cap === 0 || c > cap);
+  const clearing = (chosen ? targets : base.accounts).filter((a) => looser(a.fpsCap));
   if (clearing.length) changes.push({ label: t("performance.accountCaps"), from: ownCaps(clearing), to: t("performance.capsCleared") });
+  // A group's cap wins over Settings' too, but not over a chosen account's own profile.
+  const clearingGroups = chosen ? [] : base.groups.filter((g) => looser(g.defaults.fpsCap));
+  if (clearingGroups.length) changes.push({ label: t("performance.groupCaps"), from: fmtList(clearingGroups.map((g) => `${g.name} (${g.defaults.fpsCap})`)), to: t("performance.capsCleared") });
   // Windows change now; what a client reads at its start waits for its next launch.
-  const running = (useInstances().data ?? []).filter(isLive);
+  const running = (useInstances().data ?? []).filter((i) => isLive(i) && (!chosen || picked.includes(i.accountId)));
   // One still loading gets these when it reaches a game.
-  const reshape = running.filter((i) => i.state === "inGame" && !accounts.find((a) => a.id === i.accountId)?.fullQuality);
-  // Only when this turns them on: a client since brought back stays so when nothing changes.
-  const makeTiny = !!profile?.tinyOnLaunch && !s.tinyOnLaunch;
-  const hide = !!profile?.minimizeOnLaunch && !s.minimizeOnLaunch;
-  if (reshape.length && (makeTiny || hide)) changes.push({ label: t("performance.runningClients"), from: "", to: t("performance.runningNow") });
+  const asRun = useRunAccounts() ?? [];
+  const reshape = running.filter((i) => i.state === "inGame" && !asRun.find((a) => a.id === i.accountId)?.fullQuality);
+  // Only when this turns them on: a client since brought back stays so when nothing changes. An
+  // account's own profile decides for its clients, so applying to all leaves those alone.
+  const turnsOn = (accountId: number, k: "tinyOnLaunch" | "minimizeOnLaunch") => {
+    const had = base.accounts.find((a) => a.id === accountId)?.profile?.[k];
+    return !!profile?.[k] && (chosen ? !(had ?? s[k]) : !s[k] && had == null);
+  };
+  const makeTiny = reshape.filter((i) => !i.micro && turnsOn(i.accountId, "tinyOnLaunch"));
+  const hide = reshape.filter((i) => turnsOn(i.accountId, "minimizeOnLaunch"));
+  if (makeTiny.length || hide.length) changes.push({ label: t("performance.runningClients"), from: "", to: t("performance.runningNow") });
   // What its card had no room for.
   const notes = [...(PRESETS.find((p) => p.profile === profile)?.facts().slice(FACTS_SHOWN) ?? []), ...(facts ?? [])];
-  const nextLaunch = (["fpsCap", "lowGraphics", "lighterRendering", "renderFlags"] as const).some((k) => profile?.[k] !== undefined && !same(profile[k], s[k]));
+  // What chosen accounts can't have of their own.
+  const shared = chosen && profile ? SHARED.filter((k) => profile[k] != null) : [];
+  if (shared.length) notes.push(t("performance.sharedStay", { list: fmtList(shared.map((k) => t(LABELS[k]))) }));
+  const nextLaunch = (["fpsCap", "lowGraphics", "lighterRendering", "renderFlags"] as const).some((k) => profile?.[k] !== undefined && (chosen || !same(profile[k], s[k])));
+  const ready = changes.length > 0 && (!chosen || targets.length > 0);
 
   async function apply() {
-    if (!profile || busy) return;
+    if (!profile || busy || !ready) return;
     setBusy(true);
     setError(null);
     const cleared = new Map<number, AccountSummary>();
+    const clearedGroups = new Map<number, Group>();
     try {
-      const { previewFps, ...patch } = profile;
-      const next = await set.mutateAsync(patch);
-      onApplied?.(next);
-      for (const a of clearing) {
-        const saved = await api.accountUpdate(a.id, { fpsCap: 0 });
-        cleared.set(saved.id, saved);
+      if (chosen) {
+        for (const a of targets) {
+          const saved = await api.accountUpdate(a.id, { profile: own, ...(clearing.includes(a) ? { fpsCap: 0 } : {}) });
+          cleared.set(saved.id, saved);
+        }
+      } else {
+        const { previewFps, ...patch } = profile;
+        const next = await set.mutateAsync(patch);
+        onApplied?.(next);
+        for (const a of clearing) {
+          const saved = await api.accountUpdate(a.id, { fpsCap: 0 });
+          cleared.set(saved.id, saved);
+        }
+        for (const g of clearingGroups) {
+          const saved = await api.groupSave({ id: g.id, name: g.name, color: g.color ?? undefined, defaults: { ...g.defaults, fpsCap: null } });
+          clearedGroups.set(saved.id, saved);
+        }
+        // 0 is Off.
+        if (previewFps != null) setPreviewFps(previewFps as PreviewFps);
       }
-      if (previewFps) setPreviewFps(previewFps as PreviewFps);
-      await Promise.allSettled(reshape.flatMap((i) => [...(makeTiny && !i.micro ? [api.instanceMicro(i.id, true)] : []), ...(hide ? [api.instanceShow(i.id, "minimize")] : [])]));
+      await Promise.allSettled([...makeTiny.map((i) => api.instanceMicro(i.id, true)), ...hide.map((i) => api.instanceShow(i.id, "minimize"))]);
       toast(t(running.length && nextLaunch ? "performance.appliedRelaunch" : "performance.applied"));
       onClose();
     } catch (e) {
@@ -116,6 +157,7 @@ export function ReviewDialog({ profile, settings, facts, onApplied, onClose }: {
     } finally {
       // One cache write for all of them, the ones saved before a failure too: each redraws every account list.
       if (cleared.size) setAccounts(qc, (all) => all.map((x) => cleared.get(x.id) ?? x));
+      if (clearedGroups.size) qc.setQueryData<Group[]>(qk.groups, (all) => all?.map((x) => clearedGroups.get(x.id) ?? x));
       setBusy(false);
     }
   }
@@ -124,6 +166,16 @@ export function ReviewDialog({ profile, settings, facts, onApplied, onClose }: {
     <Dialog open={profile !== null} onClose={onClose} title={t("performance.reviewTitle")} width={500}>
       <div className="dlg-body perf-review-body">
         <div ref={list} className="flex flex-col gap-4">
+          {base.accounts.length > 0 && (
+            <Segmented
+              label={t("performance.applyTo")}
+              value={scope}
+              options={[{ value: "all", label: t("performance.scopeAll") }, { value: "chosen", label: t("performance.scopeChosen"), disabled: !named(own) }]}
+              onChange={setScope}
+              className="self-center"
+            />
+          )}
+          {chosen && <AccountPicker variant="list" accounts={base.accounts} picked={picked} onPicked={setPicked} label={t("performance.scopeChosen")} />}
           <p className="text-fg-2" data-rise>{t(changes.length ? "performance.reviewIntro" : "performance.profileSame")}</p>
           {changes.length > 0 && (
             <ul className="perf-diff">
@@ -159,7 +211,7 @@ export function ReviewDialog({ profile, settings, facts, onApplied, onClose }: {
         </Button>
         {changes.length > 0 && (
           // aria-disabled: disabled would drop the focus, and leave it nowhere after an error.
-          <Button size="md" variant="primary" busy={busy} aria-disabled={busy || undefined} onClick={() => void apply()} data-autofocus>
+          <Button size="md" variant="primary" busy={busy} aria-disabled={busy || !ready || undefined} onClick={() => void apply()} data-autofocus>
             {t("performance.apply")}
           </Button>
         )}

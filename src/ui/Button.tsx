@@ -7,13 +7,12 @@ const SIZE: Record<Size, string> = { lg: "", md: "btn-sm", sm: "btn-xs" };
 const VARIANT: Record<Variant, string> = { primary: "btn-primary", secondary: "", ghost: "btn-ghost", danger: "btn-danger" };
 
 /** A pill button. `busy` keeps the label (and the width) and spins an icon beside it. */
-export function Button({ variant = "secondary", size = "lg", icon, iconEnd, busy, pressed, block, className = "", children, ref, ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & {
+export function Button({ variant = "secondary", size = "lg", icon, iconEnd, busy, block, className = "", children, ref, ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: Variant;
   size?: Size;
   icon?: IconName;
   iconEnd?: IconName;
   busy?: boolean;
-  pressed?: boolean;
   block?: boolean;
   ref?: Ref<HTMLButtonElement>;
 }) {
@@ -23,7 +22,6 @@ export function Button({ variant = "secondary", size = "lg", icon, iconEnd, busy
       ref={ref}
       type="button"
       className={`btn ${VARIANT[variant]} ${SIZE[size]} ${block ? "btn-block" : ""} ${className}`}
-      aria-pressed={pressed}
       aria-busy={busy || undefined}
       data-busy={busy || undefined}
       {...rest}
@@ -38,11 +36,10 @@ export function Button({ variant = "secondary", size = "lg", icon, iconEnd, busy
 const ICON_SIZE: Record<Size, string> = { lg: "w-10 h-10", md: "", sm: "w-7 h-7" };
 
 /** A round icon-only button. `label` is its accessible name and its tooltip; `shortcut` shows in it. */
-export function IconButton({ icon, label, size = "md", pressed, shortcut, className = "", iconSize, ref, ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & {
+export function IconButton({ icon, label, size = "md", shortcut, className = "", iconSize, ref, ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & {
   icon: IconName;
   label: string;
   size?: Size;
-  pressed?: boolean;
   shortcut?: string;
   iconSize?: number;
   ref?: Ref<HTMLButtonElement>;
@@ -53,7 +50,6 @@ export function IconButton({ icon, label, size = "md", pressed, shortcut, classN
       type="button"
       className={`wc ${ICON_SIZE[size]} ${className}`}
       aria-label={label}
-      aria-pressed={pressed}
       data-tip={label}
       data-tip-kbd={shortcut}
       {...rest}

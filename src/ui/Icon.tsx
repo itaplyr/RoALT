@@ -19,9 +19,11 @@ const paths = {
   plus: <path d="M8 3v10M3 8h10" />,
   chat: <path d="M3.6 3h8.8A1.6 1.6 0 0 1 14 4.6v5.3a1.6 1.6 0 0 1-1.6 1.6H7.3l-2.8 2.3v-2.3h-.9A1.6 1.6 0 0 1 2 9.9V4.6A1.6 1.6 0 0 1 3.6 3z" />,
   heart: <path d="M8 13.4 2.9 8.5a3.1 3.1 0 0 1 4.4-4.4l.7.7.7-.7a3.1 3.1 0 0 1 4.4 4.4z" />,
+  coffee: <path d="M3 6.5h8V10a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3zM11 7.5h.8a1.7 1.7 0 0 1 0 3.4H11M5.5 2.5V4M8.5 2.5V4" />,
   refresh: <><path d="M2.7 8a5.3 5.3 0 0 1 9.4-3.3M13.3 2.6v3h-3" /><path d="M13.3 8a5.3 5.3 0 0 1-9.4 3.3M2.7 13.4v-3h3" /></>,
   star: <path d="M8 1.9l1.85 3.85 4.25.55-3.1 2.95.8 4.2L8 11.4l-3.8 2.05.8-4.2-3.1-2.95 4.25-.55z" />,
   copy: <><rect x="5.5" y="5.5" width="8" height="8" rx="1.8" /><path d="M10.5 5.5V4.3a1.8 1.8 0 0 0-1.8-1.8H4.3a1.8 1.8 0 0 0-1.8 1.8v4.4a1.8 1.8 0 0 0 1.8 1.8h1.2" /></>,
+  link: <path d="M6.9 9.1a2.6 2.6 0 0 0 3.7 0l2.3-2.3a2.6 2.6 0 0 0-3.7-3.7l-.8.8M9.1 6.9a2.6 2.6 0 0 0-3.7 0L3.1 9.2a2.6 2.6 0 0 0 3.7 3.7l.8-.8" />,
   external: <path d="M9.5 2.5h4v4M13.5 2.5 7.6 8.4M12 9.6v2.6a1.3 1.3 0 0 1-1.3 1.3H3.8a1.3 1.3 0 0 1-1.3-1.3V5.3A1.3 1.3 0 0 1 3.8 4h2.6" />,
   eye: <><path d="M1.5 8s2.4-4.6 6.5-4.6S14.5 8 14.5 8s-2.4 4.6-6.5 4.6S1.5 8 1.5 8z" /><circle cx="8" cy="8" r="2" /></>,
   eyeOff: <><path d="M6.4 3.6A6.3 6.3 0 0 1 8 3.4c4.1 0 6.5 4.6 6.5 4.6a11 11 0 0 1-1.6 2.2M10.1 11.9a6 6 0 0 1-2.1.7C3.9 12.6 1.5 8 1.5 8a11.2 11.2 0 0 1 2.6-3.1" /><path d="M2.5 2.5l11 11" /></>,
@@ -88,8 +90,8 @@ export type IconName = keyof typeof paths;
 /** Icons that point along the reading direction mirror right to left. */
 const MIRRORED = new Set<IconName>(["back", "signin"]);
 
-export function Icon({ name, size = 16, fill = false, className, flipRtl }: { name: IconName; size?: number; fill?: boolean; className?: string; flipRtl?: boolean }) {
-  const flip = (flipRtl ?? MIRRORED.has(name)) && isRtl();
+export function Icon({ name, size = 16, fill = false, className }: { name: IconName; size?: number; fill?: boolean; className?: string }) {
+  const flip = MIRRORED.has(name) && isRtl();
   return (
     <svg
       width={size}

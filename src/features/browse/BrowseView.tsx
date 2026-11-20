@@ -2,20 +2,22 @@ import "./browse.css";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api, type AccountSummary, type BrowseBlocked, type BrowsePage, type BrowsePlay } from "../../api";
-import type { BrowseRequest } from "../../app/navigation";
-import { useSettings } from "../../data";
+import { playTarget, requestNavigation, type BrowseRequest } from "../../app/navigation";
+import { useGame, useSettings } from "../../data";
 import { t, type Key } from "../../i18n";
 import { Button, IconButton } from "../../ui/Button";
 import { Segmented } from "../../ui/controls";
 import { Input, Select } from "../../ui/Field";
-import type { IconName } from "../../ui/Icon";
 import { readStored, writeStored } from "../../ui/stored";
 import { Tabs } from "../../ui/Tabs";
 import { toast, toastError } from "../../ui/Toast";
 import { accountName, Avatar } from "../accounts/shared";
+import { FavouriteDialog } from "../launch/Favourites";
 import { launchOne, launchStep } from "../launch/launchQueue";
 import { useMoveConfirm } from "../launch/MoveDialog";
+import { copyRoaltLink } from "../launch/target";
 import { useGameDetails } from "./GameDetails";
+import { LimitedsTab } from "./Market";
 import { PlaytimeTab, PopularTab } from "./Native";
 import { usePageCard } from "./pageCard";
 import { usePlayerDetails } from "./PlayerDetails";
@@ -36,15 +38,9 @@ const placeOf = (path: string) => Number(/^(?:[a-z]{2}(?:-[a-z]{2,4})?\/)?games\
 /** The player of a profile page ("users/156/profile", maybe under a language). */
 const userOf = (path: string) => Number(/^(?:[a-z]{2}(?:-[a-z]{2,4})?\/)?users\/(\d{1,15})\/profile(?:[/?#]|$)/i.exec(path)?.[1]) || null;
 
-/** Roblox's own pages, as tabs. */
-const PAGES: { id: string; path: string; label: Key; icon: IconName }[] = [
-  { id: "home", path: "home", label: "browse.tab.home", icon: "home" },
-  { id: "games", path: "charts", label: "browse.tab.games", icon: "grid" },
-  { id: "market", path: "catalog", label: "browse.tab.market", icon: "star" },
-  { id: "avatar", path: "my/avatar", label: "browse.tab.avatar", icon: "palette" },
-  { id: "friends", path: "users/friends", label: "browse.tab.friends", icon: "accounts" },
-];
-type Native = "popular" | "playtime";
+// Only what roblox.com lacks gets a tab; the "roblox" tab shows its page where it was, and Roblox's own
+// top bar there reaches Home, Charts, Marketplace, Avatar and Friends.
+type Native = "popular" | "playtime" | "limiteds";
 const BLOCKED: Record<BrowseBlocked, Key> = {
   create: "browse.blocked.create",
   robux: "browse.blocked.robux",
@@ -52,11 +48,8 @@ const BLOCKED: Record<BrowseBlocked, Key> = {
   signOut: "browse.blocked.signOut",
 };
 
-/** The tab a page belongs to; "" for none of them (a game, a profile). */
-const tabOf = (path: string) => PAGES.find((p) => path === p.path || path.startsWith(`${p.path}/`) || path.startsWith(`${p.path}?`))?.id ?? "";
-
-/** Browse: roblox.com inside RoALT as one of the accounts (its own session), with Roblox's main pages
- * as tabs, back / forward / reload and a search. Create isn't there. `ask`: an account's "Open on
+/** Browse: roblox.com inside RoALT as one of the accounts (its own session), with RoALT's own tabs
+ * over it, back / forward / reload and a search. Create isn't there. `ask`: an account's "Open on
  * roblox.com" (each one new). */
 export function BrowseView({ accounts, ask }: { accounts: AccountSummary[]; ask: (BrowseRequest & { n: number }) | null }) {
   const pick = (id: number | null | undefined) => (id != null && accounts.some((a) => a.id === id) ? id : null);
@@ -65,6 +58,8 @@ export function BrowseView({ accounts, ask }: { accounts: AccountSummary[]; ask:
   const [accountId, setAccountId] = useState<number | null>(() => pick(fresh?.accountId) ?? pick(lastAccount()) ?? accounts.find((a) => a.status === "valid")?.id ?? accounts[0]?.id ?? null);
   // What to load; `n` loads it again (the same search, a game opened again).
   const [page, setPage] = useState({ path: fresh ? (fresh.path ?? "home") : lastPath, n: 0 });
+  // Opened by Play's "Browse games": a Play or Join here fills Play. Leaving Browse ends it.
+  const [picking, setPicking] = useState(!!fresh?.pick);
   // What the page shows now (it navigates by itself too).
   const [shown, setShown] = useState(page.path);
   const [error, setError] = useState<string | null>(null);
@@ -74,6 +69,14 @@ export function BrowseView({ accounts, ask }: { accounts: AccountSummary[]; ask:
   const [native, setNative] = useState<Native | null>(null);
   // Counts Browse's page reports: a reload of the same page needs the profile card again.
   const [seq, setSeq] = useState(0);
+  // The game being saved as a favourite; it stays set while its dialog closes.
+  const [saving, setSavingPlace] = useState<number | null>(null);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const savingGame = useGame(saving);
+  const setSaving = (placeId: number) => {
+    setSavingPlace(placeId);
+    setSaveOpen(true);
+  };
 
   const go = (path: string) => {
     setNative(null);
@@ -85,6 +88,7 @@ export function BrowseView({ accounts, ask }: { accounts: AccountSummary[]; ask:
     setAskSeen(ask.n);
     if (pick(ask.accountId) !== null) setAccountId(ask.accountId);
     setPage((p) => ({ path: ask.path ?? "home", n: p.n + 1 }));
+    setPicking(!!ask.pick);
   }
   // The account was removed: the first one left.
   if (accountId !== null && pick(accountId) === null) setAccountId(accounts[0]?.id ?? null);
@@ -105,10 +109,12 @@ export function BrowseView({ accounts, ask }: { accounts: AccountSummary[]; ask:
     return () => void un.then((f) => f());
   }, [accountId]);
 
-  // Play or Join on Roblox's page: RoALT launches the account (asking first when it already plays).
+  // Play or Join on Roblox's page: RoALT launches the account (asking first when it already plays),
+  // or hands the game or server to Play when Browse was opened to pick one.
   const move = useMoveConfirm();
   const play = useRef<(p: BrowsePlay) => void>(() => {});
   play.current = ({ accountId: id, target }) => {
+    if (picking) return playTarget(target);
     const a = accounts.find((x) => x.id === id);
     if (!a) return;
     // One launch at a time: launchOne would do nothing.
@@ -175,9 +181,21 @@ export function BrowseView({ accounts, ask }: { accounts: AccountSummary[]; ask:
           <IconButton icon="refresh" label={t("browse.reload")} data-tip-side="top" onClick={() => nav("reload")} />
           {/* Labelled, not an icon alone: what this page offers should be seen. */}
           {gamePage && (
-            <Button size="sm" variant="ghost" icon="info" onClick={() => details.open(gamePage)}>
-              {t("game.detailsTip")}
-            </Button>
+            <>
+              <Button size="sm" variant="ghost" icon="info" onClick={() => details.open(gamePage)}>
+                {t("game.detailsTip")}
+              </Button>
+              <Button size="sm" variant="ghost" icon="link" onClick={() => copyRoaltLink({ kind: "place", placeId: gamePage, launchData: null })}>
+                {t("share.copyLink")}
+              </Button>
+              {/* The page's own Play starts only the account browsing: these take the game to Play, or keep it. */}
+              <Button size="sm" variant="ghost" icon="play" onClick={() => playTarget({ kind: "place", placeId: gamePage, launchData: null })}>
+                {t("common.playEllipsis")}
+              </Button>
+              <Button size="sm" variant="ghost" icon="star" aria-haspopup="dialog" onClick={() => setSaving(gamePage)}>
+                {t("launch.saveAsFavourite")}
+              </Button>
+            </>
           )}
           {profilePage && (
             <Button size="sm" variant="ghost" icon="info" onClick={() => player.open(profilePage)}>
@@ -187,12 +205,13 @@ export function BrowseView({ accounts, ask }: { accounts: AccountSummary[]; ask:
         </span>
         <Tabs
           label={t("browse.pages")}
-          value={native ?? tabOf(shown)}
-          onChange={(id) => (id === "popular" || id === "playtime" ? setNative(id) : go(PAGES.find((p) => p.id === id)!.path))}
+          value={native ?? "roblox"}
+          onChange={(id) => setNative(id === "roblox" ? null : (id as Native))}
           items={[
-            ...PAGES.map((p) => ({ value: p.id, label: t(p.label), icon: p.icon })),
+            { value: "roblox", label: t("browse.tab.roblox"), icon: "globe" as const },
             { value: "popular", label: t("browse.tab.popular"), icon: "bolt" as const },
             { value: "playtime", label: t("browse.tab.playtime"), icon: "clock" as const },
+            { value: "limiteds", label: t("browse.tab.limiteds"), icon: "gauge" as const },
           ]}
         />
         <form className="browse-search" onSubmit={search}>
@@ -208,6 +227,14 @@ export function BrowseView({ accounts, ask }: { accounts: AccountSummary[]; ask:
           <Input data-find leading="search" aria-label={t("browse.search")} placeholder={t("browse.search")} value={query} onChange={(e) => setQuery(e.target.value)} />
         </form>
       </div>
+      {picking && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[13px] text-fg-2">
+          <span role="status">{t("browse.picking")}</span>
+          <Button size="sm" variant="ghost" icon="back" onClick={() => requestNavigation("launch")}>
+            {t("browse.backToPlay")}
+          </Button>
+        </div>
+      )}
       {error && !native && <p role="alert" className="alert px-1 pb-2">{error}</p>}
       <div className="browse-stage">
         <RobloxPane accountId={account.id} path={page.path} n={page.n} hidden={!!native} resume={lastPath} onError={setError} />
@@ -215,6 +242,8 @@ export function BrowseView({ accounts, ask }: { accounts: AccountSummary[]; ask:
           <div className="browse-native scroll">
             {native === "popular" ? (
               <PopularTab onOpen={open} onPlay={playPlace} onDetails={details.open} />
+            ) : native === "limiteds" ? (
+              <LimitedsTab onOpen={go} />
             ) : (
               <PlaytimeTab accounts={accounts} onOpen={open} onPlay={playPlace} onDetails={details.open} />
             )}
@@ -224,6 +253,16 @@ export function BrowseView({ accounts, ask }: { accounts: AccountSummary[]; ask:
       {move.dialog}
       {details.dialog}
       {player.dialog}
+      {saving !== null && (
+        <FavouriteDialog
+          // Once the game's name is known (or can't be): the dialog takes its name as it opens.
+          open={saveOpen && !savingGame.isLoading}
+          onClose={() => setSaveOpen(false)}
+          accounts={accounts}
+          initial={{ name: savingGame.data?.name ?? t("dashboard.place", { id: saving }), accountIds: [account.id], inTray: false }}
+          resolve={() => Promise.resolve({ kind: "place", placeId: saving, launchData: null })}
+        />
+      )}
     </main>
   );
 }

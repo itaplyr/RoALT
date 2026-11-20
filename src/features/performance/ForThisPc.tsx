@@ -44,7 +44,7 @@ function worded({ id, params: p }: Suggestion): [string, string] {
       case "trimEveryMin": return t("performance.bench.why.trimEveryMin", { min: n("min") });
       case "memThrottle": return t("performance.bench.why.memThrottle", { mb: n("mb"), peak: fmtNum(Math.round(p.peak ?? 0)) });
       case "memRestart": return p.crashes === undefined ? t("performance.bench.why.memRestart", { mb: n("mb") }) : t("performance.bench.why.memRestartCrash", { mb: n("mb"), crashes: n("crashes") });
-      case "previewFps": return t("performance.bench.why.previewFps", { fps: n("fps") });
+      case "previewFps": return p.fps ? t("performance.bench.why.previewFps", { fps: n("fps") }) : t("performance.bench.why.previewOff");
     }
   })();
   return [title, why];
@@ -162,7 +162,7 @@ export function ForThisPc({ settings, previewFps, onReview }: { settings: Settin
     <div ref={card} className="panel perf-bench">
       <div className="perf-bench-head">
         <div className="min-w-0 flex-[1_1_320px]">
-          <h2 className="section-title">{t("performance.bench.title")}</h2>
+          <h3 className="section-title">{t("performance.bench.title")}</h3>
           <p id={needId} className="set-hint">{t(inGame ? "performance.bench.intro" : "performance.bench.needGame")}</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">

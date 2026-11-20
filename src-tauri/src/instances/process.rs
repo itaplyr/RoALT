@@ -4,6 +4,8 @@
 //! Listing uses a Toolhelp snapshot (no process handles at all); sysinfo would open every
 //! process with PROCESS_VM_READ and keep those handles, so it is not used here.
 
+use std::collections::HashMap;
+use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -16,7 +18,7 @@ use windows::Win32::System::Threading::{
     PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, QueryFullProcessImageNameW, TerminateProcess, WaitForSingleObject,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GW_OWNER, GetForegroundWindow, GetWindow, GetWindowThreadProcessId, IsHungAppWindow, IsIconic, IsWindowVisible,
+    EnumWindows, GW_OWNER, GetForegroundWindow, GetWindow, GetWindowThreadProcessId, IsHungAppWindow, IsIconic, IsWindow, IsWindowVisible,
     PostMessageW, WM_CLOSE,
 };
 use windows::core::{BOOL, Owned};
@@ -209,59 +211,68 @@ fn post_close(pid: u32) {
     let _ = unsafe { EnumWindows(Some(each), LPARAM(pid as isize)) };
 }
 
+/// Every process's top-level windows in Z order, from one `EnumWindows` for all: the tracker, the
+/// tiny sweep and the previews each ask for one client's many times a second.
+struct Windows {
+    at: Instant,
+    by_pid: HashMap<u32, Vec<isize>>,
+}
+
+static WINDOWS: Mutex<Option<Windows>> = Mutex::new(None);
+/// The list is made again once it is this old...
+const WINDOWS_FRESH: Duration = Duration::from_millis(500);
+/// ...or a window of the client asked about is gone, or it has none and the list is this old.
+const WINDOWS_RETRY: Duration = Duration::from_millis(100);
+
+/// `pid`'s top-level windows (visible or not), in Z order as of at most `WINDOWS_FRESH` ago.
+fn top_windows(pid: u32) -> Vec<HWND> {
+    let mut w = WINDOWS.lock().unwrap_or_else(|e| e.into_inner());
+    let stale = w.as_ref().is_none_or(|w| {
+        let age = w.at.elapsed();
+        age >= WINDOWS_FRESH
+            || match w.by_pid.get(&pid) {
+                // SAFETY: asks whether a handle still names a window.
+                Some(list) => list.iter().any(|&h| !unsafe { IsWindow(Some(HWND(h as _))) }.as_bool()),
+                None => age >= WINDOWS_RETRY,
+            }
+    });
+    if stale {
+        *w = Some(Windows { at: Instant::now(), by_pid: all_windows() });
+    }
+    w.as_ref().and_then(|w| w.by_pid.get(&pid)).map_or_else(Vec::new, |l| l.iter().map(|&h| HWND(h as _)).collect())
+}
+
+/// Every top-level window by its process (window queries only).
+fn all_windows() -> HashMap<u32, Vec<isize>> {
+    unsafe extern "system" fn each(hwnd: HWND, data: LPARAM) -> BOOL {
+        // SAFETY: `data` is the map passed to EnumWindows below, alive for the whole call.
+        let map = unsafe { &mut *(data.0 as *mut HashMap<u32, Vec<isize>>) };
+        let mut owner = 0u32;
+        // SAFETY: `hwnd` comes from EnumWindows; this only reads which process owns it.
+        unsafe { GetWindowThreadProcessId(hwnd, Some(&raw mut owner)) };
+        map.entry(owner).or_default().push(hwnd.0 as isize);
+        true.into()
+    }
+    let mut map = HashMap::new();
+    // SAFETY: `each` has the WNDENUMPROC signature; `map` outlives the call.
+    let _ = unsafe { EnumWindows(Some(each), LPARAM(&raw mut map as isize)) };
+    map
+}
+
 /// A visible top-level window of `pid` is not responding (`IsHungAppWindow`: it handled no
 /// messages for 5 s). Window queries only: no process handle is opened.
 pub fn hung(pid: u32) -> bool {
-    struct Find {
-        pid: u32,
-        hung: bool,
-    }
-    unsafe extern "system" fn each(hwnd: HWND, data: LPARAM) -> BOOL {
-        // SAFETY: `data` is the `&mut Find` passed to EnumWindows below, alive for the whole call.
-        let f = unsafe { &mut *(data.0 as *mut Find) };
-        let mut owner = 0u32;
-        // SAFETY: `hwnd` comes from EnumWindows; these calls only read the window's state.
-        let hung = unsafe {
-            GetWindowThreadProcessId(hwnd, Some(&raw mut owner));
-            owner == f.pid && IsWindowVisible(hwnd).as_bool() && IsHungAppWindow(hwnd).as_bool()
-        };
-        f.hung |= hung;
-        (!hung).into()
-    }
-    let mut f = Find { pid, hung: false };
-    // SAFETY: `each` has the WNDENUMPROC signature; `f` outlives the call. Stopping early makes
-    // EnumWindows report an error, which says nothing here.
-    let _ = unsafe { EnumWindows(Some(each), LPARAM(&raw mut f as isize)) };
-    f.hung
+    // SAFETY: reads windows' state; a stale handle answers false.
+    top_windows(pid).into_iter().any(|h| unsafe { IsWindowVisible(h).as_bool() && IsHungAppWindow(h).as_bool() })
 }
 
 /// The client's main window: its first visible top-level window without an owner (window
 /// queries only), and whether it is minimized.
 pub fn main_window(pid: u32) -> Option<(HWND, bool)> {
-    struct Find {
-        pid: u32,
-        found: Option<HWND>,
-    }
-    unsafe extern "system" fn each(hwnd: HWND, data: LPARAM) -> BOOL {
-        // SAFETY: `data` is the `&mut Find` passed to EnumWindows below, alive for the whole call.
-        let f = unsafe { &mut *(data.0 as *mut Find) };
-        let mut owner = 0u32;
-        // SAFETY: `hwnd` comes from EnumWindows; these calls only read the window's state.
-        let main = unsafe {
-            GetWindowThreadProcessId(hwnd, Some(&raw mut owner));
-            owner == f.pid && IsWindowVisible(hwnd).as_bool() && GetWindow(hwnd, GW_OWNER).is_err()
-        };
-        if main {
-            f.found = Some(hwnd);
-        }
-        (!main).into()
-    }
-    let mut f = Find { pid, found: None };
-    // SAFETY: `each` has the WNDENUMPROC signature; `f` outlives the call. Stopping early makes
-    // EnumWindows report an error, which says nothing here.
-    let _ = unsafe { EnumWindows(Some(each), LPARAM(&raw mut f as isize)) };
+    // SAFETY: reads windows' state; a stale handle answers false.
+    let main = top_windows(pid).into_iter().find(|&h| unsafe { IsWindowVisible(h).as_bool() && GetWindow(h, GW_OWNER).is_err() })?;
     // SAFETY: reads one window's state.
-    f.found.map(|h| (h, unsafe { IsIconic(h) }.as_bool()))
+    Some((main, unsafe { IsIconic(main) }.as_bool()))
 }
 
 /// The process owning the window in front (window queries only), for the adaptive manager.
@@ -405,6 +416,31 @@ mod tests {
         assert_eq!(main_window(u32::MAX), None);
         close(child.id(), None, true, Duration::from_secs(5)).unwrap();
         child.wait().unwrap();
+    }
+
+    #[test]
+    fn a_closed_window_is_looked_up_afresh() {
+        use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, RegisterClassW, WINDOW_EX_STYLE, WNDCLASSW, WS_OVERLAPPEDWINDOW, DefWindowProcW};
+        use windows::core::w;
+        unsafe extern "system" fn plain(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> windows::Win32::Foundation::LRESULT {
+            // SAFETY: the default for every message.
+            unsafe { DefWindowProcW(h, m, w, l) }
+        }
+        let pid = std::process::id();
+        // SAFETY: private hidden windows of this thread, destroyed here.
+        unsafe {
+            RegisterClassW(&WNDCLASSW { lpfnWndProc: Some(plain), lpszClassName: w!("roalt-test-windows"), ..Default::default() });
+            let make = || CreateWindowExW(WINDOW_EX_STYLE(0), w!("roalt-test-windows"), w!("t"), WS_OVERLAPPEDWINDOW, 0, 0, 10, 10, None, None, None, None).unwrap();
+            let first = make();
+            // A new window shows once the list is old (other tests here look up this process too).
+            std::thread::sleep(WINDOWS_FRESH);
+            assert!(top_windows(pid).contains(&first));
+            DestroyWindow(first).unwrap();
+            let second = make();
+            let now = top_windows(pid);
+            assert!(!now.contains(&first) && now.contains(&second), "a window gone: the list is made again at once");
+            DestroyWindow(second).unwrap();
+        }
     }
 
     #[test]

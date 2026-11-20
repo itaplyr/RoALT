@@ -57,4 +57,9 @@ signInProblem: boolean,
 /**
  * What it really has now, settings' limits included (`limits` is only what was set on it).
  */
-appliedLimits: Limits, };
+appliedLimits: Limits, 
+/**
+ * The user took control of it ("Take control"): until it closes or is given back, RoALT doesn't
+ * rejoin, restart, close, press anti-AFK keys in, limit or lay it out.
+ */
+held: boolean, };

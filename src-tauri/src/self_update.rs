@@ -42,6 +42,9 @@ use crate::model::AppUpdate;
 
 pub const UPDATE_EVENT: &str = "app://update";
 const CURRENT: &str = env!("CARGO_PKG_VERSION");
+/// An indev build (`build-installer.ps1 -Dev`): its code is newer than the published release its
+/// version trails, so it never offers that release, which would replace it with older code.
+const DEV: bool = option_env!("ROALT_DEV").is_some();
 const LATEST: &str = "https://api.github.com/repos/inspectsoftware/RoALT/releases/latest";
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 const MAX_JSON: u64 = 1_000_000;
@@ -325,8 +328,11 @@ async fn get(http: &reqwest::Client, url: &str, accept: &'static str, max: u64, 
     Ok(out)
 }
 
-/// The newer release on GitHub, if any.
+/// The newer release on GitHub, if any (never for an indev build, `DEV`).
 async fn latest(http: &reqwest::Client) -> Result<Option<Release>> {
+    if DEV {
+        return Ok(None);
+    }
     let body = get(http, LATEST, "application/vnd.github+json", MAX_JSON, Duration::from_secs(20)).await?;
     pick(&body, CURRENT)
 }
@@ -362,6 +368,21 @@ pub fn switched(app: &AppHandle, on: bool) {
     });
 }
 
+/// Tells Discord of `version` once (which one was told is kept, so a restart doesn't say it again).
+fn told_discord(app: &AppHandle, version: &str) {
+    const KEY: &str = "discordToldUpdate";
+    let db = &app.state::<App>().db;
+    if db.setting_value(KEY).ok().flatten().as_deref() == Some(version) {
+        return;
+    }
+    // Not queued (no webhook, switched off, vault locked): the next check tries again.
+    if crate::discord::notify(app, crate::discord::Event::Update { version: version.to_owned() })
+        && let Err(e) = db.set_setting_value(KEY, Some(version))
+    {
+        log::debug!("the told update isn't remembered: {e}");
+    }
+}
+
 /// Deletes what earlier updates left in %TEMP%, then checks at start and every 6 hours
 /// while `settings.self_update` is on; `app://update` when there is a newer version.
 pub fn spawn(app: AppHandle) {
@@ -379,6 +400,7 @@ pub fn spawn(app: AppHandle) {
                 match check(&app).await {
                     Ok(u) if u.available.is_some() => {
                         let _ = app.emit(UPDATE_EVENT, &u);
+                        told_discord(&app, u.available.as_deref().unwrap_or_default());
                     }
                     Ok(_) => {}
                     Err(e) => log::info!("RoALT update check failed: {e}"),

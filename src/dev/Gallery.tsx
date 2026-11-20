@@ -1,7 +1,7 @@
 // Dev-only: every primitive in its states, the island on a fake model, and a live contrast table
 // (?gallery). Toggles for theme, accent, RTL and reduced motion. Never in a production build.
 import { useEffect, useState, type ReactNode } from "react";
-import { applyAccent, contrast } from "../app/theme";
+import { applyAccent, contrast, GROUNDS } from "../app/theme";
 import { Button, IconButton } from "../ui/Button";
 import { Chip, Disclosure, Kbd, Skeleton } from "../ui/Bits";
 import { OffOrNumberField, NumberField, Segmented, Switch, TextField } from "../ui/controls";
@@ -89,7 +89,7 @@ export function Gallery() {
     root.dataset.theme = theme;
     root.dir = rtl ? "rtl" : "ltr";
     root.toggleAttribute("data-rm", rm);
-    if (accent) applyAccent(accent, theme);
+    if (accent) applyAccent(accent, GROUNDS[theme]);
     else delete root.dataset.accent;
     setTick((x) => x + 1);
   }, [theme, accent, rtl, rm]);
@@ -99,10 +99,10 @@ export function Gallery() {
     return () => clearInterval(t);
   }, []);
 
-  const leaf = (id: string, icon: "home" | "play" | "accounts" | "gauge", label: string) => ({ id, icon, label, current: current === id, onSelect: () => setCurrent(id), shortcut: "Ctrl+1" });
+  const leaf = (id: string, icon: "home" | "play" | "accounts" | "globe", label: string) => ({ id, icon, label, current: current === id, onSelect: () => setCurrent(id), shortcut: "Ctrl+1" });
   const model: IslandModel = {
     label: "Sections",
-    main: [leaf("home", "home", "Home"), leaf("play", "play", "Play"), leaf("accounts", "accounts", "Accounts"), leaf("perf", "gauge", "Performance")],
+    main: [leaf("home", "home", "Home"), leaf("play", "play", "Play"), leaf("browse", "globe", "Browse"), leaf("accounts", "accounts", "Accounts")],
     mainOrder: { ids: [], onOrder: () => {} },
     groups: [
       { id: "tools", icon: "tools", label: "More tools", children: [
@@ -110,11 +110,8 @@ export function Gallery() {
         { id: "monitor", icon: "monitor", label: "Monitor", current: current === "monitor", onSelect: () => setCurrent("monitor") },
         { id: "debug", icon: "terminal", label: "Debug", current: current === "debug", onSelect: () => setCurrent("debug") },
       ] },
-      { id: "settings", icon: "settings", label: "Settings", keepIcon: true, children: [
-        { id: "s-launch", icon: "rocket", label: "Launching", current: current === "s-launch", onSelect: () => setCurrent("s-launch") },
-        { id: "s-look", icon: "palette", label: "Appearance", current: current === "s-look", onSelect: () => setCurrent("s-look") },
-      ] },
     ],
+    end: [{ id: "settings", icon: "settings", label: "Settings", current: current === "settings", onSelect: () => setCurrent("settings") }],
   };
   const tones: Tone[] = ["ok", "info", "attention", "warn", "err", "neutral"];
 

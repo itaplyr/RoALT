@@ -1,9 +1,0 @@
-{
-  "errors": [
-    {
-      "code": 9002,
-      "subcode": 0,
-      "message": "Authentication token is missing"
-    }
-  ]
-}

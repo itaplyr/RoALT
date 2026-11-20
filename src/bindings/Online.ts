@@ -11,4 +11,9 @@ online: number,
 /**
  * Their Roblox clients added up; None from a counter older than this field.
  */
-playing: number | null, };
+playing: number | null, 
+/**
+ * Seconds until the next ping, as the counter asks; None from a counter older than this
+ * field (then every 5 minutes). The UI keeps it within 1 to 60 minutes.
+ */
+every: number | null, };

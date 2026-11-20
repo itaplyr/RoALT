@@ -1,13 +1,12 @@
 //! Rolimons' values for limiteds, only while `settings.rolimons_values` is on. While an account's
-//! limiteds are counted, RoALT downloads Rolimons' public item list (one GET of
-//! api.rolimons.com, at most every 30 minutes; no user id, name or cookie is sent) and keeps it in
-//! the cache table. Rolimons isn't part of Roblox: values are their opinion, RAP stays Roblox's.
+//! limiteds are counted or Browse › Limiteds is open, RoALT downloads
+//! Rolimons' public item list (one GET of api.rolimons.com, at most every 30 minutes; no user id,
+//! name or cookie is sent) and keeps it in the cache table. Rolimons isn't part of Roblox: values
+//! are their opinion, RAP stays Roblox's.
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
-use std::time::Duration;
 
-use reqwest::redirect::Policy;
 use serde_json::Value;
 
 use crate::model::RolimonsItem;
@@ -40,10 +39,15 @@ static STATE: LazyLock<tokio::sync::Mutex<State>> = LazyLock::new(Default::defau
 /// older than 30 minutes is downloaded again first, unless a download failed in the last 5. None
 /// when there is no list at all.
 pub async fn items(db: &Db, now: i64, fetch: bool) -> Option<Arc<Items>> {
+    list(db, now, fetch).await.map(|(_, items)| items)
+}
+
+/// As `items`, with when the list was downloaded (Unix ms).
+pub async fn list(db: &Db, now: i64, fetch: bool) -> Option<(i64, Arc<Items>)> {
     items_in(&STATE, db, now, fetch, download).await
 }
 
-async fn items_in<F, Fut>(state: &tokio::sync::Mutex<State>, db: &Db, now: i64, fetch: bool, download: F) -> Option<Arc<Items>>
+async fn items_in<F, Fut>(state: &tokio::sync::Mutex<State>, db: &Db, now: i64, fetch: bool, download: F) -> Option<(i64, Arc<Items>)>
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Option<String>>,
@@ -67,34 +71,13 @@ where
             None => s.failed_at = now,
         }
     }
-    s.items.as_ref().map(|(_, items)| items.clone())
+    s.items.clone()
 }
 
 /// The list's body, or None (logged).
 async fn download() -> Option<String> {
-    let http = reqwest::Client::builder()
-        .user_agent(concat!("RoALT/", env!("CARGO_PKG_VERSION")))
-        .https_only(true)
-        .redirect(Policy::none())
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(20))
-        .build()
-        .inspect_err(|e| log::warn!("rolimons: http client unavailable: {e}"))
-        .ok()?;
-    let mut resp = http.get(URL).send().await.map_err(|e| log::info!("rolimons: unreachable: {}", e.without_url())).ok()?;
-    if !resp.status().is_success() {
-        log::info!("rolimons: answered HTTP {}", resp.status().as_u16());
-        return None;
-    }
-    let mut out = Vec::new();
-    while let Some(chunk) = resp.chunk().await.map_err(|e| log::info!("rolimons: cut off: {}", e.without_url())).ok()? {
-        if out.len() + chunk.len() > MAX_BODY {
-            log::info!("rolimons: sent more than {MAX_BODY} bytes");
-            return None;
-        }
-        out.extend_from_slice(&chunk);
-    }
-    String::from_utf8(out).inspect_err(|_| log::info!("rolimons: sent text that isn't UTF-8")).ok()
+    let http = crate::http::client("rolimons")?;
+    crate::http::text("rolimons", http.get(URL).send().await, MAX_BODY).await
 }
 
 /// `{success, items: {"<assetId>": [name, acronym, rap, value, default value, demand, trend,
@@ -122,6 +105,8 @@ fn item(row: &[Value]) -> Option<RolimonsItem> {
     let int = |i: usize| row[i].as_i64();
     let scale = |i: usize| int(i).filter(|n| (0..=4).contains(n)).map(|n| n as u8);
     Some(RolimonsItem {
+        name: row[0].as_str().unwrap_or_default().to_owned(),
+        rap: int(2).filter(|&n| n >= 0),
         value: int(3).filter(|&n| n >= 0),
         demand: scale(5),
         trend: scale(6),
@@ -147,10 +132,21 @@ mod tests {
         assert_eq!(items.len(), 2, "the short row is left out");
         assert_eq!(
             items[&1029025],
-            RolimonsItem { value: Some(450000), demand: Some(4), trend: Some(2), projected: false, hyped: true, rare: true, acronym: Some("CF".into()) }
+            RolimonsItem {
+                name: "The Classic ROBLOX Fedora".into(),
+                rap: Some(431023),
+                value: Some(450000),
+                demand: Some(4),
+                trend: Some(2),
+                projected: false,
+                hyped: true,
+                rare: true,
+                acronym: Some("CF".into())
+            }
         );
         let helm = &items[&1365767];
         assert_eq!((helm.value, helm.demand, helm.trend, helm.projected, helm.acronym.as_deref()), (None, None, None, true, None), "-1, out of range, empty");
+        assert_eq!((helm.name.as_str(), helm.rap), ("Valkyrie Helm", Some(263297)));
         assert_eq!(parse(r#"{"success":false,"items":{}}"#), None);
         assert_eq!(parse(r#"{"success":true,"items":{"1":[1],"2":[2],"3":["a","",1,1,1,1,1,1,1,1]}}"#), None, "mostly unreadable");
         assert_eq!(parse("<html>"), None);
@@ -174,11 +170,11 @@ mod tests {
         db.cache_put(KEY, LIST, 0).unwrap();
         let state = tokio::sync::Mutex::new(State::default());
         let now = 10 * FRESH_MS;
-        assert_eq!(items_in(&state, &db, now, false, never).await.map(|i| i.len()), Some(2), "a kept list at any age");
+        assert_eq!(items_in(&state, &db, now, false, never).await.map(|(at, i)| (at, i.len())), Some((0, 2)), "a kept list at any age");
         // A count: the old list is downloaded again; a failed download keeps it and waits.
-        assert_eq!(items_in(&state, &db, now, true, fails).await.map(|i| i.len()), Some(2));
+        assert_eq!(items_in(&state, &db, now, true, fails).await.map(|(_, i)| i.len()), Some(2));
         assert!(items_in(&state, &db, now + 60_000, true, never).await.is_some(), "no retry within 5 minutes");
-        assert!(items_in(&state, &db, now + RETRY_MS, true, fresh).await.is_some());
+        assert_eq!(items_in(&state, &db, now + RETRY_MS, true, fresh).await.map(|(at, _)| at), Some(now + RETRY_MS), "when it was downloaded");
         assert!(items_in(&state, &db, now + RETRY_MS + 1, true, never).await.is_some(), "fresh for 30 minutes");
         assert!(db.cache_get(KEY, 1, now + RETRY_MS).unwrap().is_some_and(|(b, _)| b.contains("777777")), "kept in the cache table");
     }

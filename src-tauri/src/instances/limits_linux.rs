@@ -81,6 +81,22 @@ impl Limiter {
         Vec::new()
     }
 
+    /// Linux has no job object to have outlived a RoALT restart, so there is nothing to mark.
+    pub fn mark_old_job(&self, _pid: u32) {}
+
+    /// What was applied to the client when it ended, for the autopsy. Linux applies nice and
+    /// affinity only, so that is what it says.
+    pub fn at_end(&self, id: &str, _pid: u32) -> String {
+        let map = self.applied.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(a) = map.get(id) else { return "none".to_owned() };
+        format!(
+            "CPU cap {}, cores {}, trim every {}",
+            a.limits.cpu_cap.map_or_else(|| "none".to_owned(), |c| format!("{c} %")),
+            a.limits.affinity.map_or_else(|| "all".to_owned(), |m| format!("{m:#x}")),
+            a.limits.trim_every_min.filter(|&m| m > 0).map_or_else(|| "off".to_owned(), |m| format!("{m} min")),
+        )
+    }
+
     pub fn release_all(&self) {
         let applied = std::mem::take(&mut *self.applied.lock().unwrap_or_else(|e| e.into_inner()));
         for (_, a) in applied {
@@ -186,12 +202,18 @@ pub fn plan(
     plan_full(clients, v, foreground, cores, throttled, &[], None, &[])
 }
 
-/// `plan` for the clients running now, with the Full quality accounts left free.
-pub fn plan_now(s: &crate::App, v: &Settings, clients: &[(String, u32, u64, Limits)], throttled: &[String]) -> Vec<(String, u32, u64, Limits)> {
-    let full_quality = s.db.full_quality_accounts().unwrap_or_else(|e| {
+/// The accounts the user plays: the Full quality ones. Their clients keep their window, sound,
+/// graphics and frame rate: no layout, tiny, cap or mute.
+pub fn played(s: &crate::App) -> Vec<i64> {
+    s.db.full_quality_accounts().unwrap_or_else(|e| {
         log::debug!("could not read the Full quality accounts: {e}");
         Vec::new()
-    });
+    })
+}
+
+/// `plan` for the clients running now, with the Full quality accounts left free.
+pub fn plan_now(s: &crate::App, v: &Settings, clients: &[(String, u32, u64, Limits)], throttled: &[String]) -> Vec<(String, u32, u64, Limits)> {
+    let full_quality = played(s);
     let free = s.tracker.free(&full_quality, crate::commands::now_ms());
     let cores = crate::commands::cores();
     let fair = v.fair_cap.then(|| fair_cap(clients.len() as u32, cores));
@@ -256,12 +278,13 @@ pub fn throttle_cap(own: Option<u8>, throttle: u8) -> u8 {
 }
 
 /// A client followed again after RoALT restarted: its old niceness and affinity are reset;
-/// `sync` sets what it should have now.
-pub fn reset_followed(pid: u32, t0: u64) {
+/// `sync` sets what it should have now. Linux has no job object, so false always.
+pub fn reset_followed(pid: u32, t0: u64) -> bool {
     if super::process::start_time(pid) == Some(t0) {
         set_nice(pid, 0);
         clear_affinity(pid);
     }
+    false
 }
 
 pub fn fair_cap(n: u32, cores: u32) -> u8 {

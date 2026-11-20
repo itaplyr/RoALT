@@ -7,6 +7,7 @@ import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { Field } from "../../ui/Field";
 import { Collapse } from "../../ui/motion";
+import { fromCode as readCode, toCode as shareCode } from "../../ui/shareCode";
 import { friendly } from "../../ui/Toast";
 import { storedFps } from "../dashboard/previewFps";
 import { useJumpTarget } from "../settings/jump";
@@ -16,32 +17,12 @@ import { SettingSection } from "../settings/kit/SettingSection";
 const profileFilter = () => [{ name: t("performance.profileFilter"), extensions: ["json"] }];
 /** A share code: this prefix, then the profile's JSON as base64url. */
 const CODE = "RoALT-PERF:";
+const toCode = (json: string) => shareCode(CODE, json);
+const fromCode = (code: string) => readCode(CODE, code);
 
-function toCode(json: string) {
-  const bytes = new TextEncoder().encode(json);
-  return CODE + btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-/** The profile's JSON in a share code; null when it isn't one. */
-function fromCode(code: string): string | null {
-  const body = code.trim();
-  if (!body.startsWith(CODE)) return null;
-  try {
-    const b64 = body.slice(CODE.length).replace(/\s+/g, "").replace(/-/g, "+").replace(/_/g, "/");
-    return new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)));
-  } catch {
-    return null;
-  }
-}
-
-if (import.meta.env.DEV) {
-  const json = '{"fpsCap":30,"name":"Ünïcode"}';
-  console.assert(fromCode(toCode(json)) === json, "share code: round trip");
-  console.assert(fromCode("RoALT-PERF:!!") === null && fromCode("hello") === null, "share code: refuses what isn't one");
-}
-
-/** Export, import and share the settings above. What happened shows under the buttons. */
-export function ShareRow({ onProfile }: { onProfile: (p: Profile) => void }) {
+/** Export, import and share the settings above. What happened shows under the buttons. `block`: its
+ * name on Settings' page. */
+export function ShareRow({ onProfile, block }: { onProfile: (p: Profile) => void; block?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   useJumpTarget("share", ref);
   const [pasteOpen, setPasteOpen] = useState(false);
@@ -78,7 +59,7 @@ export function ShareRow({ onProfile }: { onProfile: (p: Profile) => void }) {
     });
 
   return (
-    <SettingSection label="performance.shareTitle">
+    <SettingSection sub label="performance.shareTitle" block={block}>
       <div ref={ref} className="set-row">
         <div className="set-line">
           <p className="set-text set-hint">{t("performance.shareHint")}</p>

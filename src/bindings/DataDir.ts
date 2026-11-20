@@ -5,10 +5,6 @@
  */
 export type DataDir = { path: string, 
 /**
- * `%LOCALAPPDATA%\RoALT` (not moved).
- */
-default: boolean, 
-/**
  * Set for test runs (`ROALT_DATA_DIR`): moving is not offered.
  */
 overridden: boolean, };

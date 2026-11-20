@@ -115,8 +115,9 @@ export function useHomeTabs(accounts: AccountSummary[] | undefined) {
   useEffect(() => {
     if (landed || !query.isFetched) return;
     landed = true;
-    if (unread) setActive((a) => (a === null ? "news" : a));
-  }, [query.isFetched, unread]);
+    // Not for someone with no account yet: Overview has their first steps.
+    if (unread && accounts?.length) setActive((a) => (a === null ? "news" : a));
+  }, [query.isFetched, unread, accounts?.length]);
   // One order for an account's client, tab and row, so sorting one sorts them all.
   const [order, setOrder] = useHomeOrder();
   const setDraft =(id: number, f: SetStateAction<Draft>) =>

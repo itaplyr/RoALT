@@ -100,10 +100,10 @@ pub async fn capture_login(app: &AppHandle, data_dir: &Path, fill: Option<&Login
         .incognito(false)
         .devtools(cfg!(debug_assertions))
         .general_autofill_enabled(false)
-        .on_navigation(allowed)
+        .on_navigation(allowed_sign_in)
         .build()?;
     let script = fill.map(|f| fill_script(&f.username, f.password.expose()));
-    let (pid, cookie) = match harden(window.as_ref(), None, script).await {
+    let (pid, cookie) = match harden(window.as_ref(), None, script, true).await {
         // A Google / Apple sign-in left by an earlier window goes before the page loads.
         Ok(pid) => match (clear_cookies_async(window.as_ref(), false).await, window.navigate(login)) {
             (_, Ok(())) => (Some(pid), wait_for_cookie(app.clone(), label.clone()).await),
@@ -283,12 +283,13 @@ impl Drop for LoginSlot {
 }
 
 /// Turns off what Tauri does not expose, adds `cookie` as `.ROBLOSECURITY` and `script` to
-/// every page if given, and returns the profile's browser process id.
-pub(crate) async fn harden(window: &Webview, cookie: Option<Secret>, script: Option<Zeroizing<String>>) -> Result<u32> {
+/// every page if given, and returns the profile's browser process id. `sign_in`: the sign-in
+/// window, which may also go to Google's and Apple's sign-in pages (`allowed_sign_in`).
+pub(crate) async fn harden(window: &Webview, cookie: Option<Secret>, script: Option<Zeroizing<String>>, sign_in: bool) -> Result<u32> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     window.with_webview(move |pv| {
         let script = script.map(|s| wide(&s));
-        let r = harden_webview(&pv, cookie.as_ref(), script.as_deref().map(Vec::as_slice))
+        let r = harden_webview(&pv, cookie.as_ref(), script.as_deref().map(Vec::as_slice), sign_in)
             .map_err(|e| AppError::Internal(tr!("WebView2 setup failed: {why}", why = e)));
         let _ = tx.send(r);
     })?;
@@ -299,7 +300,7 @@ pub(crate) async fn harden(window: &Webview, cookie: Option<Secret>, script: Opt
     })?
 }
 
-fn harden_webview(pv: &PlatformWebview, cookie: Option<&Secret>, script: Option<&[u16]>) -> windows::core::Result<u32> {
+fn harden_webview(pv: &PlatformWebview, cookie: Option<&Secret>, script: Option<&[u16]>, sign_in: bool) -> windows::core::Result<u32> {
     // SAFETY: COM calls on the main thread (with_webview), on live interfaces from WebView2;
     // `value` outlives the call that reads it.
     unsafe {
@@ -311,12 +312,12 @@ fn harden_webview(pv: &PlatformWebview, cookie: Option<&Secret>, script: Option<
         settings.SetIsPasswordAutosaveEnabled(false)?;
         // As well as on_navigation: Tauri lets through any address it can't parse, and a page on
         // such a host panics Tauri's IPC, which ends the app.
-        let guard = webview2_com::NavigationStartingEventHandler::create(Box::new(|_, args| {
+        let guard = webview2_com::NavigationStartingEventHandler::create(Box::new(move |_, args| {
             if let Some(args) = args {
                 let mut uri = windows::core::PWSTR::null();
                 // A live args interface; `take_pwstr` frees the string it hands out.
                 args.Uri(&mut uri)?;
-                if !allowed_uri(&webview2_com::take_pwstr(uri)) {
+                if !allowed_uri(&webview2_com::take_pwstr(uri), sign_in) {
                     args.SetCancel(true)?;
                 }
             }
@@ -539,15 +540,28 @@ pub(crate) fn pick_roblosecurity(cookies: Vec<Cookie<'static>>) -> Option<Secret
         .map(|c| Secret::new(c.value()))
 }
 
-/// Where a Roblox page may go: Roblox over https, and the sign-in providers it hands off to.
-/// A Tauri window's page can crash the app through its IPC with a crafted host name, so it stays
-/// off anything else. Never Create (`creating`): building games is not what RoALT is for.
+/// The pages Roblox's sign-in hands a Google or Apple sign-in to: only these, not the rest of
+/// google.com and apple.com.
+const SIGN_IN_HOSTS: [&str; 2] = ["accounts.google.com", "appleid.apple.com"];
+
+/// Where a Roblox page (Browse) may go: Roblox over https. A Tauri window's page can crash the app
+/// through its IPC with a crafted host name, so it stays off anything else. Never Create
+/// (`creating`): building games is not what RoALT is for.
 pub(crate) fn allowed(url: &Url) -> bool {
+    allowed_on(url, false)
+}
+
+/// The sign-in window: as `allowed`, and the Google and Apple sign-in pages (`SIGN_IN_HOSTS`).
+fn allowed_sign_in(url: &Url) -> bool {
+    allowed_on(url, true)
+}
+
+fn allowed_on(url: &Url, sign_in: bool) -> bool {
     let ok = url.as_str() == "about:blank"
         || (url.scheme() == "https"
             && url.username().is_empty()
             && url.port().is_none()
-            && url.host_str().is_some_and(|h| is_roblox(h) || is_sign_in_provider(h))
+            && url.host_str().is_some_and(|h| is_roblox(h) || (sign_in && SIGN_IN_HOSTS.contains(&h.to_ascii_lowercase().as_str())))
             && !creating(url));
     if !ok {
         log::debug!("Roblox window: navigation to another site refused");
@@ -563,8 +577,8 @@ pub(crate) fn creating(url: &Url) -> bool {
         || ((host == "www.roblox.com" || host == "roblox.com") && ["/develop", "/create", "/build"].iter().any(|p| path == *p || path.starts_with(&format!("{p}/"))))
 }
 
-fn allowed_uri(uri: &str) -> bool {
-    uri.parse().is_ok_and(|u| allowed(&u))
+fn allowed_uri(uri: &str, sign_in: bool) -> bool {
+    uri.parse().is_ok_and(|u| allowed_on(&u, sign_in))
 }
 
 fn is_roblox(domain: &str) -> bool {
@@ -686,9 +700,16 @@ mod tests {
 
     #[test]
     fn roblox_windows_stay_on_roblox() {
-        let go = allowed_uri;
-        for u in ["about:blank", "https://www.roblox.com/home", "https://roblox.com/", "https://appleid.apple.com/x", "https://accounts.google.com/"] {
+        let go = |u: &str| allowed_uri(u, false);
+        for u in ["about:blank", "https://www.roblox.com/home", "https://roblox.com/"] {
             assert!(go(u), "{u}");
+        }
+        // Google's and Apple's sign-in pages: the sign-in window only, and none of their other sites.
+        for u in ["https://appleid.apple.com/x", "https://accounts.google.com/", "https://Accounts.Google.com/o"] {
+            assert!(!go(u) && allowed_uri(u, true), "{u}");
+        }
+        for u in ["https://sites.google.com/x", "https://www.apple.com/", "https://mail.google.com/", "https://google.com/", "http://accounts.google.com/"] {
+            assert!(!allowed_uri(u, true), "{u}");
         }
         for u in [
             "http://www.roblox.com/",

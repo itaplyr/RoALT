@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "../../api";
-import { useAccounts, useInstances, useSettings } from "../../data";
+import { useInstances, useRunAccounts, useSettings } from "../../data";
 import { t } from "../../i18n";
 import { toast, toastError } from "../../ui/Toast";
 import { isRunning } from "../launch/Running";
@@ -9,7 +9,7 @@ import { isRunning } from "../launch/Running";
  * a time per caller (`busy`). Tile says when it laid out fewer windows than it could. */
 export function useWindowTools() {
   const settings = useSettings().data;
-  const accounts = useAccounts().data;
+  const accounts = useRunAccounts();
   const running = (useInstances().data ?? []).filter(isRunning);
   const [busy, setBusy] = useState(false);
   const act = (f: () => Promise<unknown>) => {

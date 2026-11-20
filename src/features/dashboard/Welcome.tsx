@@ -1,22 +1,39 @@
 import type { ReactNode } from "react";
 import type { AccountSummary, Favourite } from "../../api";
 import { requestNavigation } from "../../app/navigation";
-import { publicBlock, useBulk, useFavourites, useInstances, useMultiStatus, useNetwork, useSettings } from "../../data";
+import { publicBlock, useBulk, useFavourites, useGame, useInstances, useMultiStatus, useNetwork, useSettings } from "../../data";
 import { fmtList, t, type Key } from "../../i18n";
 import { Button } from "../../ui/Button";
-import { Icon } from "../../ui/Icon";
 import { ListPresence } from "../../ui/motion";
 import { accountName, Avatar } from "../accounts/shared";
+import { favouriteAccountIds, FavIcon } from "../launch/Favourites";
 import { LaunchButton } from "../launch/LaunchButton";
 import { launchBlocked, launchOne, launchSame, sessionFps } from "../launch/launchQueue";
 import { isLive } from "../launch/Running";
-import { describeTarget, draftFor } from "../launch/target";
+import { describeTarget, draftFor, targetPlace } from "../launch/target";
 
 const STEPS: [Key, Key][] = [
   ["home.step1", "home.step1Text"],
   ["home.step2", "home.step2Text"],
   ["home.step3", "home.step3Text"],
 ];
+
+/** A favourite's icon, name and what it opens: the game by name once RoALT knows it. */
+function FavHead({ f }: { f: Favourite }) {
+  const look = describeTarget(f.target);
+  const game = useGame(targetPlace(f.target)).data;
+  return (
+    <>
+      <span className="flex-none text-fg-2 grid place-items-center w-7">
+        <FavIcon target={f.target} size={28} />
+      </span>
+      <span className="flex-[1_1_180px] min-w-0 flex flex-col">
+        <span className="font-medium truncate">{f.name}</span>
+        <span className="text-[13px] text-fg-2 truncate">{look.kind} · {game?.name ?? look.detail}</span>
+      </span>
+    </>
+  );
+}
 
 /** The favourites, each a click from playing with its default accounts (and Play's FPS cap for this
  * session), or from Play with it filled in. */
@@ -41,18 +58,13 @@ function QuickPlay({ accounts, onPick }: { accounts: AccountSummary[]; onPick?: 
         className="panel home-favs"
         itemClassName="home-fav"
         render={(f) => {
-          const who = f.accountIds.map((id) => byId.get(id)).filter((a): a is AccountSummary => !!a);
+          const who = favouriteAccountIds(f, accounts).map((id) => byId.get(id)).filter((a): a is AccountSummary => !!a);
           const ready = who.filter((a) => a.status === "valid" && !live.has(a.id));
-          const look = describeTarget(f.target);
           const where = { draft: draftFor(f.target, f.id, f.name), setDraft: () => {} };
           const block = publicBlock(network, settings) ?? launchBlocked(ready.length > 1, multi, batch);
           return (
             <div className="home-fav-row">
-              <Icon name="star" size={14} fill className="flex-none text-fg-2" />
-              <span className="flex-[1_1_180px] min-w-0 flex flex-col">
-                <span className="font-medium truncate">{f.name}</span>
-                <span className="text-[13px] text-fg-2 truncate">{look.kind} · {look.detail}</span>
-              </span>
+              <FavHead f={f} />
               {who.length > 0 && (
                 <span className="home-who" data-tip={fmtList(who.map(accountName))}>
                   {who.slice(0, 4).map((a) => (
@@ -73,7 +85,11 @@ function QuickPlay({ accounts, onPick }: { accounts: AccountSummary[]; onPick?: 
                     label={t("launch.fav.playNow", { name: f.name })}
                     disabled={block !== null}
                     reason={block}
-                    onLaunch={() => void (ready.length === 1 ? launchOne(ready[0], where, sessionFps()) : launchSame(ready, where, { fpsCap: sessionFps() }))}
+                    // Its own way of launching, where it has one; else Play's FPS cap for this session.
+                    onLaunch={() => {
+                      const fpsCap = f.options.fpsCap ?? sessionFps();
+                      void (ready.length === 1 ? launchOne(ready[0], where, fpsCap) : launchSame(ready, where, { sameServer: f.options.sameServer ?? undefined, fpsCap }));
+                    }}
                   />
                 )}
               </div>

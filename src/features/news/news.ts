@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import type { NewsItem, NewsSource } from "../../api";
-import { useNews, useRobloxClient } from "../../data";
+import { useNews, useRobloxClient, useSettings } from "../../data";
 import { t } from "../../i18n";
 import { signal } from "../../ui/signal";
 import { json, readStored, writeStored } from "../../ui/stored";
@@ -36,15 +36,17 @@ const useSeen = () => useSyncExternalStore(subscribe, () => seenSet);
 /** Within FRESH_MS; `YYYY-MM` counts from the month's first day. An empty date (the client) is fresh. */
 const isFresh = (published: string, now: number) => !published || now - Date.parse(published) < FRESH_MS;
 
-/** Every item, newest first, the client update on top while unread; the unread count; what failed. */
+/** Every item, newest first, the client update on top while unread; the unread count; what failed.
+ * `off`: Settings' News is off, so nothing is asked or shown. */
 export function useNewsFeed() {
-  const news = useNews();
+  const on = useSettings().data?.news;
+  const news = useNews(on === true);
   const latest = useRobloxClient().data?.latest ?? null;
   const read = useSeen();
   const now = Date.now();
   const unread = (id: string, published: string) => !read.has(id) && isFresh(published, now);
-  const items: FeedItem[] = (news.data?.items ?? []).map((i) => ({ ...i, unread: unread(i.id, i.published) }));
-  if (latest) {
+  const items: FeedItem[] = on ? (news.data?.items ?? []).map((i) => ({ ...i, unread: unread(i.id, i.published) })) : [];
+  if (latest && on) {
     const id = `client:${latest}`;
     const client: FeedItem = { id, source: "client", title: t("news.clientTitle", { version: latest }), summary: t("news.clientText"), url: null, published: "", version: null, unread: unread(id, "") };
     if (client.unread) items.unshift(client);
@@ -53,7 +55,8 @@ export function useNewsFeed() {
   return {
     items,
     unread: items.filter((i) => i.unread).length,
-    failed: news.data?.failed ?? [],
+    failed: on ? (news.data?.failed ?? []) : [],
     query: news,
+    off: on === false,
   };
 }

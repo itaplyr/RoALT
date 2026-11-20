@@ -6,6 +6,7 @@ export const RANGES = {
   memThrottleMb: { min: 512, max: 65_536, on: 4096 },
   memRestartMb: { min: 512, max: 65_536, on: 6144 },
   statusEveryMin: { min: 5, max: 1440, on: 60 },
+  timerHours: { min: 1, max: 168, on: 4 },
   bandwidthKbps: { min: 64, max: 10_000_000, on: 1000 },
 } as const;
 

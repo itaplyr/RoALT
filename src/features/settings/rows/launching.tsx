@@ -7,7 +7,7 @@ import { fmtDate, t } from "../../../i18n";
 import { Skeleton } from "../../../ui/Bits";
 import { Button } from "../../../ui/Button";
 import { NumberField, Switch } from "../../../ui/controls";
-import { Checkbox, Field } from "../../../ui/Field";
+import { Checkbox, Field, Select } from "../../../ui/Field";
 import { Meter } from "../../../ui/Meter";
 import { Morph, Swap } from "../../../ui/motion";
 import { Popover, useAnchor } from "../../../ui/Popover";
@@ -277,6 +277,51 @@ function Install({ client }: { client: RobloxClient }) {
         )}
       </Swap>
     </Morph>
+  );
+}
+
+/** Who opens Roblox's links: Roblox, a bootstrapper installed, or RoALT; RoALT launches through
+ * it. Its own command (it changes Windows' link handler); the client card below follows it. */
+function LauncherControl() {
+  const { describedBy, setError } = useRow();
+  const qc = useQueryClient();
+  // Asked again each time: a bootstrapper may have been installed or taken the links meanwhile.
+  const list = useQuery({ queryKey: qk.launchers, queryFn: api.robloxLaunchers, staleTime: 0 });
+  const [busy, setBusy] = useState(false);
+  if (list.isError) return <Button size="md" onClick={() => void list.refetch()}>{t("common.tryAgain")}</Button>;
+  if (!list.data) return <Skeleton width={160} height={34} radius={10} />;
+  const current = list.data.find((l) => l.current)?.path ?? "";
+  const pick = (path: string) => {
+    setBusy(true);
+    setError(null);
+    api
+      .robloxLauncherSet(path)
+      .then(
+        (next) => {
+          qc.setQueryData(qk.launchers, next);
+          void qc.invalidateQueries({ queryKey: qk.client });
+        },
+        (e) => setError(friendly(asError(e))),
+      )
+      .finally(() => setBusy(false));
+  };
+  return (
+    <Select
+      aria-label={t("settings.defaultLauncher")}
+      aria-describedby={describedBy}
+      disabled={busy}
+      value={current}
+      onChange={pick}
+      options={[...(current ? [] : [{ value: "", label: t("settings.defaultLauncherNone") }]), ...list.data.map((l) => ({ value: l.path, label: l.name }))]}
+    />
+  );
+}
+
+export function LauncherRow() {
+  return (
+    <SettingRow id="defaultLauncher">
+      <LauncherControl />
+    </SettingRow>
   );
 }
 

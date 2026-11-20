@@ -24,6 +24,13 @@ pub struct BackupPayload {
     pub groups: Vec<BackupGroup>,
     #[serde(default)]
     pub favourites: Vec<BackupFavourite>,
+    /// The settings as stored (`model::Settings`), absent in older backups. Restored only when the
+    /// import asks for it, and then through the same checks as a change made in the UI.
+    #[serde(default)]
+    pub settings: Option<serde_json::Value>,
+    /// The Discord webhook URL, if one was set.
+    #[serde(default)]
+    pub discord_webhook: Option<Zeroizing<String>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -33,6 +40,12 @@ pub struct BackupFavourite {
     pub target: crate::model::LaunchTarget,
     pub user_ids: Vec<i64>,
     pub in_tray: bool,
+    // Absent in backups from before favourites kept their launch options.
+    #[serde(default)]
+    pub options: crate::model::FavouriteOptions,
+    /// Its groups by name (`options.group_ids` are this PC's ids, and travel empty).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -65,6 +78,9 @@ pub struct BackupAccount {
     // Absent in backups from before custom FFlags: the account's own flags stay then.
     #[serde(default)]
     pub custom_flags: Option<std::collections::BTreeMap<String, String>>,
+    // Absent in backups from before account profiles: the account's own profile stays then.
+    #[serde(default)]
+    pub profile: Option<crate::performance::Profile>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -73,6 +89,9 @@ pub struct BackupGroup {
     pub name: String,
     pub color: Option<String>,
     pub sort_order: i64,
+    /// What it gives its accounts; a backup from before 1.2 holds none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub defaults: Option<crate::model::GroupDefaults>,
 }
 
 const HEADER_LEN: usize = MAGIC.len() + 3 * 4 + 16;
@@ -84,8 +103,9 @@ const MAX_T: u32 = 20;
 const MAX_P: u32 = 16;
 
 /// Writes atomically (temp file in the same folder, then rename).
+/// Uses the stronger 256 MiB KDF cost because backup files leave the PC and can be attacked offline.
 pub fn write(path: &Path, password: &str, payload: &BackupPayload) -> Result<()> {
-    let kdf = master::new_kdf();
+    let kdf = master::new_recovery_kdf();
     let mut out = MAGIC.to_vec();
     for v in [kdf.m_kib, kdf.t, kdf.p] {
         out.extend_from_slice(&v.to_le_bytes());
@@ -172,6 +192,8 @@ mod tests {
     fn sample() -> BackupPayload {
         BackupPayload {
             favourites: Vec::new(),
+            settings: Some(serde_json::json!({ "fpsCap": 30 })),
+            discord_webhook: Some(Zeroizing::new("https://discord.com/api/webhooks/1/x".into())),
             version: 1,
             exported_at: 1_700_000_000,
             accounts: vec![BackupAccount {
@@ -192,8 +214,9 @@ mod tests {
                 full_quality: true,
                 main: true,
                 custom_flags: Some([("FFlagDebugSkyGray".into(), "True".into())].into()),
+                profile: Some(crate::performance::Profile { fps_cap: Some(10), ..Default::default() }),
             }],
-            groups: vec![BackupGroup { name: "Mains".into(), color: None, sort_order: 0 }],
+            groups: vec![BackupGroup { name: "Mains".into(), color: None, sort_order: 0, defaults: None }],
         }
     }
 
@@ -201,8 +224,10 @@ mod tests {
     fn older_backups_have_no_custom_flags() {
         let mut v = serde_json::to_value(&sample().accounts[0]).unwrap();
         v.as_object_mut().unwrap().remove("customFlags");
+        v.as_object_mut().unwrap().remove("profile");
         let a: BackupAccount = serde_json::from_value(v).unwrap();
         assert!(a.custom_flags.is_none(), "None keeps the account's own flags on import");
+        assert!(a.profile.is_none(), "and its own profile");
     }
 
     #[test]
@@ -221,6 +246,8 @@ mod tests {
         assert_eq!(back.accounts[0].groups, ["Mains"]);
         assert_eq!(back.accounts[0].custom_flags.as_ref().unwrap()["FFlagDebugSkyGray"], "True");
         assert_eq!(back.groups[0].name, "Mains");
+        assert_eq!(back.settings.unwrap()["fpsCap"], 30);
+        assert_eq!(back.discord_webhook.unwrap().as_str(), "https://discord.com/api/webhooks/1/x");
         assert!(matches!(wrong, Err(AppError::WrongPassword)));
     }
 
@@ -228,6 +255,7 @@ mod tests {
     fn a_backup_with_the_removed_macros_still_reads() {
         let old: BackupPayload = serde_json::from_str(r#"{"version":1,"exportedAt":5,"accounts":[],"groups":[],"favourites":[],"macros":[{"name":"x","body":"Send 'w'"}]}"#).unwrap();
         assert_eq!(old.exported_at, 5);
+        assert!(old.settings.is_none() && old.discord_webhook.is_none(), "a backup from before settings were in it");
     }
 
     #[test]

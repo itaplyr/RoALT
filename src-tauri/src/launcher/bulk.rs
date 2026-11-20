@@ -20,8 +20,7 @@
 //!    (`spread_list`). Each account, once before its launch, gets
 //!    a private server it owns (`OwnPrivate`: its first page of private servers, its cookie),
 //!    else the next public server, else the target as given (with a note).
-//! 2. Per account: stage `Ticket`, then `commands::launch_tracked` (the favourite is touched
-//!    for the first started client only), then `Starting` with its instance id; later stages
+//! 2. Per account: stage `Ticket`, then `commands::launch_tracked`, then `Starting` with its instance id; later stages
 //!    mirror that instance (`stage_of`; a disconnect is `Done` for an account that allows it).
 //! 3. Between launches: wait until the previous client is through signing in and joining (its
 //!    instance left `starting` and `joining`, at most 30 s), then `delay_ms` ± 1 s (`jittered`).
@@ -295,10 +294,11 @@ pub fn start(app: AppHandle, mut req: BulkRequest) -> Result<String> {
     }
     let mut accounts = Vec::with_capacity(ids.len());
     // The ones the window layout places: the accounts the user plays (full quality) keep their window.
+    let played = crate::instances::limits::played(&s);
     let mut laid_out = Vec::new();
     for &id in ids {
-        let a = s.db.account(id)?;
-        if !a.full_quality {
+        let a = s.db.effective(id)?;
+        if !played.contains(&id) {
             laid_out.push(id);
         }
         let name = name_of(&a);
@@ -462,7 +462,7 @@ impl Run {
                 self.update(|p| p.job_id = Some(found.1.clone()));
             }
         }
-        let (mut started, mut pace) = (false, Pace::default());
+        let mut pace = Pace::default();
         for (i, a) in self.accounts.iter().enumerate() {
             if i > 0
                 && let Some(why) = self.wait(jittered(pace.delay(req.delay_ms)), || false).await
@@ -505,10 +505,8 @@ impl Run {
             };
             loop {
                 self.set_stage(i, BulkStage::Ticket);
-                let favourite = if started { None } else { req.favourite_id };
-                let refused = match crate::commands::launch_tracked(&self.app, &s, a.id, target.clone(), favourite, Some(req.delay_ms), req.fps_cap, true, None).await {
+                let refused = match crate::commands::launch_tracked(&self.app, &s, a.id, target.clone(), Some(req.delay_ms), req.fps_cap, true, None).await {
                     Ok((info, inst)) => {
-                        started = true;
                         self.update(|p| {
                             p.items[i].instance_id = Some(inst.id.clone());
                             p.items[i].stage = BulkStage::Starting;
@@ -637,13 +635,29 @@ impl Run {
             _ => ServerOrder::Recommended,
         };
         let public = match server_page(&s.api, self.accounts[0].id, &cookie, place_id, order).await {
-            Ok(list) => spread_list(list, req.same_server),
+            Ok(list) => fresh_first(spread_list(list, req.same_server), &self.recent_servers(place_id)),
             Err(e) => {
                 self.note(tr!("The server list couldn't be read ({why}), so accounts were matched by Roblox on their own.", why = e.message()));
                 VecDeque::new()
             }
         };
         Some(Spread { place_id, public })
+    }
+
+    /// The servers of the game the user's accounts are in now or joined in the last hour: a
+    /// spreading batch hands those out last (`fresh_first`). Unreadable history counts as none.
+    fn recent_servers(&self, place_id: i64) -> HashSet<String> {
+        let s = self.app.state::<App>();
+        let since = crate::commands::now_ms() - RECENT_SERVER_MS;
+        let mut recent: HashSet<String> = s
+            .db
+            .servers_since(place_id, since)
+            .inspect_err(|e| log::debug!("bulk batch {}: server history unreadable: {e}", self.batch_id))
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        recent.extend(s.tracker.list().into_iter().filter(|i| i.state != InstanceState::Exited).filter_map(|i| i.job_id));
+        recent
     }
 
     /// One account's server in a spreading batch: a private server it owns (`OwnPrivate`), else
@@ -842,6 +856,18 @@ pub fn spread_list(mut servers: Vec<GameServer>, mode: SameServer) -> VecDeque<S
     spread_servers(&servers, matches!(mode, SameServer::RandomPublic | SameServer::OwnPrivate))
 }
 
+/// How long a server one of the user's accounts joined stays "recent" for a spreading batch.
+const RECENT_SERVER_MS: i64 = 3_600_000;
+
+/// `servers` with the ones in `recent` moved to the end, each part in its order (pure): a
+/// spreading batch fills servers the user's accounts haven't just been in first, and still uses
+/// the others before leaving an account to Roblox's own matching.
+pub fn fresh_first(servers: VecDeque<String>, recent: &HashSet<String>) -> VecDeque<String> {
+    let is_recent = |id: &String| recent.iter().any(|r| r.eq_ignore_ascii_case(id));
+    let (old, fresh): (Vec<String>, Vec<String>) = servers.into_iter().partition(is_recent);
+    fresh.into_iter().chain(old).collect()
+}
+
 /// Public servers for a spreading batch, one per account: GUID ids with room for one more and a
 /// spare seat, each once, in list order or shuffled.
 pub fn spread_servers(servers: &[GameServer], shuffle: bool) -> VecDeque<String> {
@@ -1028,6 +1054,7 @@ mod tests {
             sign_in_problem: false,
             micro_size: None,
             applied_limits: Default::default(),
+            held: false,
         }
     }
 
@@ -1096,6 +1123,10 @@ mod tests {
         // Out of order, as a refused sort's fallback page would be; d (19/20) has no spare seat.
         let list = vec![server(&b, 10, 20), server(&a, 2, 20), server(&d, 19, 20), server(&c, 15, 20)];
         assert_eq!(spread_list(list.clone(), SameServer::MostEmpty), [a.clone(), b.clone(), c.clone()]);
+        // Servers the user's accounts were just in go last, in their order; the rest keep theirs.
+        let recent: HashSet<String> = [a.to_uppercase()].into();
+        assert_eq!(fresh_first(spread_list(list.clone(), SameServer::MostEmpty), &recent), [b.clone(), c.clone(), a.clone()]);
+        assert_eq!(fresh_first(spread_list(list.clone(), SameServer::MostEmpty), &HashSet::new()), [a.clone(), b.clone(), c.clone()]);
         assert_eq!(spread_list(list.clone(), SameServer::MostFull), [c.clone(), b.clone(), a.clone()]);
         assert_eq!(spread_list(list, SameServer::Closest), [b, a, c], "Closest keeps the list's order");
     }
@@ -1206,7 +1237,7 @@ mod tests {
         let mut it = item(BulkStage::InGame, true);
         assert_eq!(mirror_item(&mut it, &instance(Disconnected, None), &a), None);
         assert_eq!(it.stage, BulkStage::Done);
-        let req = BulkRequest { account_ids: vec![1], target: LaunchTarget::FollowUser { user_id: 1 }, delay_ms: 0, same_server: SameServer::Off, favourite_id: None, fps_cap: None };
+        let req = BulkRequest { account_ids: vec![1], target: LaunchTarget::FollowUser { user_id: 1 }, delay_ms: 0, same_server: SameServer::Off, fps_cap: None };
         let mut p = new_progress("b".into(), &req, &[a]);
         p.items[0] = it;
         assert!(settled(&p));
@@ -1251,7 +1282,7 @@ mod tests {
         drop(rejoin);
         assert!(b.check_single_launch().is_ok() && !b.any_busy());
 
-        let req = BulkRequest { account_ids: vec![1], target: LaunchTarget::Place { place_id: 1, launch_data: None }, delay_ms: 0, same_server: SameServer::PickFirst, favourite_id: None, fps_cap: None };
+        let req = BulkRequest { account_ids: vec![1], target: LaunchTarget::Place { place_id: 1, launch_data: None }, delay_ms: 0, same_server: SameServer::PickFirst, fps_cap: None };
         let progress = new_progress("b".into(), &req, &accounts(&[1]));
         *b.batch() = Some(Batch { progress, cancel: Arc::new(AtomicBool::new(false)) });
         assert!(b.begin_rejoin().is_none() && b.any_busy());
@@ -1321,7 +1352,7 @@ mod tests {
             target: LaunchTarget::Place { place_id: 1818, launch_data: None },
             delay_ms: 6_000,
             same_server: SameServer::Off,
-            favourite_id: None,
+           
             fps_cap: None,
         };
         let mut p = new_progress("b".into(), &req, &accounts(&req.account_ids));
@@ -1353,7 +1384,6 @@ mod tests {
             target: LaunchTarget::FollowUser { user_id: 1 },
             delay_ms: 500,
             same_server: SameServer::PickFirst,
-            favourite_id: Some(3),
             fps_cap: None,
         };
         let accounts = accounts(&req.account_ids);
@@ -1407,6 +1437,8 @@ mod tests {
             full_quality: false,
             main: false,
             custom_flags: Default::default(),
+            client_limits: None,
+            profile: None,
             fps_cap: None,
 
         };

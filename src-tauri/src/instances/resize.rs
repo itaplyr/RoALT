@@ -17,7 +17,7 @@ use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
 use windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GA_ROOT, GetAncestor, SW_MAXIMIZE, ShowWindowAsync, MSLLHOOKSTRUCT, SMTO_ABORTIFHUNG, SMTO_BLOCK, SendMessageTimeoutW, SetWindowsHookExW, WH_MOUSE_LL, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_NCHITTEST, WindowFromPoint,
-    DispatchMessageW, EVENT_SYSTEM_MOVESIZEEND, EVENT_SYSTEM_MOVESIZESTART, GetCursorPos, GetMessageW, GetWindowRect, GetWindowThreadProcessId, IsZoomed, MSG, OBJID_WINDOW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
+    DispatchMessageW, EVENT_SYSTEM_MOVESIZEEND, EVENT_SYSTEM_MOVESIZESTART, GetCursorPos, GetMessageW, GetWindowRect, GetWindowThreadProcessId, IsWindow, IsZoomed, MSG, OBJID_WINDOW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
     WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
 };
 
@@ -41,6 +41,9 @@ static SMALL: Mutex<Vec<isize>> = Mutex::new(Vec::new());
 
 pub fn mark_small(hwnd: HWND) {
     let mut s = SMALL.lock().unwrap_or_else(|e| e.into_inner());
+    // Windows gives a closed window's handle out again: a new client must not count as small.
+    // SAFETY: only asks whether each handle is still a window.
+    s.retain(|&h| unsafe { IsWindow(Some(HWND(h as _))) }.as_bool());
     if !s.contains(&(hwnd.0 as isize)) {
         s.push(hwnd.0 as isize);
     }

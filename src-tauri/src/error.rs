@@ -116,13 +116,22 @@ impl AppError {
 pub struct ErrorPayload {
     pub kind: String,
     pub message: String,
+    /// Optional sub-kind for friendly UI messages (e.g. `"forbidden"` for a Roblox HTTP 403).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub code: Option<String>,
 }
 
 impl Serialize for AppError {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         // Only IPC serializes an AppError: every command error the UI gets is logged here once.
         self.log();
-        ErrorPayload { kind: self.kind().into(), message: self.message() }.serialize(s)
+        ErrorPayload {
+            kind: self.kind().into(),
+            message: self.message(),
+            code: self.is_forbidden().then(|| "forbidden".into()),
+        }
+        .serialize(s)
     }
 }
 

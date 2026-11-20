@@ -3,12 +3,9 @@
 //! side and one that fails is named in `failed` while the others still show. Every link is rebuilt
 //! from an id or slug on the source's own host, so a page can't hand the UI some other address.
 
-use std::time::Duration;
-
-use reqwest::redirect::Policy;
 use serde::Deserialize;
 
-use crate::model::{News, NewsItem, NewsSource};
+use crate::model::{Extras, News, NewsItem, NewsSource, Sponsor};
 
 const RELEASES: &str = "https://api.github.com/repos/inspectsoftware/RoALT/releases?per_page=5";
 const ANNOUNCEMENTS: &str = "https://devforum.roblox.com/c/updates/announcements/36.json";
@@ -24,19 +21,8 @@ const MAX_NOTES: usize = 20_000;
 
 /// Fetches every source at once; never fails as a whole.
 pub async fn fetch() -> News {
-    let http = match reqwest::Client::builder()
-        .user_agent(concat!("RoALT/", env!("CARGO_PKG_VERSION")))
-        .https_only(true)
-        .redirect(Policy::none())
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(20))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            log::warn!("news: http client unavailable: {e}");
-            return News { items: vec![], failed: vec![NewsSource::Roalt, NewsSource::Devforum, NewsSource::Newsroom] };
-        }
+    let Some(http) = crate::http::client("news") else {
+        return News { items: vec![], failed: vec![NewsSource::Roalt, NewsSource::Devforum, NewsSource::Newsroom] };
     };
     let (releases, announcements, notes, newsroom) = tokio::join!(get(&http, RELEASES), get(&http, ANNOUNCEMENTS), get(&http, RELEASE_NOTES), get(&http, NEWSROOM));
     let mut items = Vec::new();
@@ -59,23 +45,47 @@ pub async fn fetch() -> News {
     News { items, failed }
 }
 
+/// The sponsor and the supporters' names, kept on RoALT's site so they change without a release.
+const EXTRAS: &str = "https://roalt.dev/app.json";
+const MAX_EXTRAS: usize = 10_000;
+const MAX_SPONSOR_NAME: usize = 40;
+const MAX_SPONSOR_TEXT: usize = 140;
+const MAX_SUPPORTERS: usize = 200;
+const MAX_SUPPORTER_NAME: usize = 32;
+
+/// The sponsor and supporters as roalt.dev lists them; empty when it can't be read. Only the
+/// request itself is sent (no id, nothing about this PC).
+pub async fn extras() -> Extras {
+    let Some(http) = crate::http::client("extras") else { return Extras::default() };
+    crate::http::text("extras", http.get(EXTRAS).send().await, MAX_EXTRAS).await.map(|b| parse_extras(&b)).unwrap_or_default()
+}
+
+/// One line of at most `max` characters: control characters dropped, white space runs made one space.
+fn line(s: &str, max: usize) -> String {
+    let plain: String = s.chars().filter(|c| !c.is_control() || c.is_whitespace()).collect();
+    plain.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(max).collect()
+}
+
+/// `app.json` (pure): `{"sponsor": {"name", "text"} | null, "supporters": [names]}`. Each part that
+/// doesn't read so is left out; text is cut to its limit, never trusted as markup or as a link.
+fn parse_extras(body: &str) -> Extras {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(body).inspect_err(|e| log::info!("extras: unreadable: {e}")) else {
+        return Extras::default();
+    };
+    let field = |o: &serde_json::Value, k: &str, max| o.get(k).and_then(|s| s.as_str()).map(|s| line(s, max)).filter(|s| !s.is_empty());
+    let sponsor = v.get("sponsor").and_then(|s| Some(Sponsor { name: field(s, "name", MAX_SPONSOR_NAME)?, text: field(s, "text", MAX_SPONSOR_TEXT)? }));
+    let supporters = v
+        .get("supporters")
+        .and_then(|l| l.as_array())
+        .map(|l| l.iter().filter_map(|n| n.as_str()).map(|n| line(n, MAX_SUPPORTER_NAME)).filter(|n| !n.is_empty()).take(MAX_SUPPORTERS).collect())
+        .unwrap_or_default();
+    Extras { sponsor, supporters }
+}
+
 /// The body of a 2xx answer, at most `MAX_BODY` bytes, as UTF-8; None (logged) otherwise.
 async fn get(http: &reqwest::Client, url: &str) -> Option<String> {
     let host = url.split('/').nth(2).unwrap_or(url);
-    let mut resp = http.get(url).send().await.map_err(|e| log::info!("news: {host} unreachable: {}", e.without_url())).ok()?;
-    if !resp.status().is_success() {
-        log::info!("news: {host} answered HTTP {}", resp.status().as_u16());
-        return None;
-    }
-    let mut out = Vec::new();
-    while let Some(chunk) = resp.chunk().await.map_err(|e| log::info!("news: {host} cut off: {}", e.without_url())).ok()? {
-        if out.len() + chunk.len() > MAX_BODY {
-            log::info!("news: {host} sent more than {MAX_BODY} bytes");
-            return None;
-        }
-        out.extend_from_slice(&chunk);
-    }
-    String::from_utf8(out).inspect_err(|_| log::info!("news: {host} sent text that isn't UTF-8")).ok()
+    crate::http::text(&format!("news: {host}"), http.get(url).send().await, MAX_BODY).await
 }
 
 #[derive(Deserialize)]
@@ -185,7 +195,8 @@ fn parse_newsroom(html: &str) -> Vec<NewsItem> {
         }
         let title = card.find("<h3").and_then(|h| {
             let s = &card[h..];
-            Some(text(&s[s.find('>')? + 1..s.find("</h3>")?]))
+            // `get`: a card like `<h3</h3>` has its `>` after the `</h3>`.
+            Some(text(s.get(s.find('>')? + 1..s.find("</h3>")?)?))
         });
         let Some(title) = title.filter(|t| !t.is_empty()) else { continue };
         let id = format!("newsroom:{year}/{month}/{slug}");
@@ -328,6 +339,34 @@ mod tests {
         assert_eq!(items[0].published, "2026-10");
         assert_eq!(items[1].title, "Fine one");
         assert!(parse_newsroom("<html></html>").is_empty());
+        assert!(parse_newsroom(r#"<a href="/newsroom/2026/09/cut-short"><h3</h3></a>"#).is_empty(), "no panic on a broken title");
+    }
+
+    #[test]
+    fn extras_read_the_sponsor_and_supporters() {
+        let e = parse_extras(r#"{"sponsor":{"name":" Example  Host ","text":"Cloud PCs\nfor more alts.","url":"https://evil.example"},"supporters":["nova"," kit ","",7,"a\u0007b"]}"#);
+        assert_eq!(e.sponsor, Some(Sponsor { name: "Example Host".into(), text: "Cloud PCs for more alts.".into() }), "one line each; a link in the file is not read");
+        assert_eq!(e.supporters, ["nova", "kit", "ab"], "empty names and non-text are left out, control characters dropped");
+    }
+
+    #[test]
+    fn extras_without_a_sponsor() {
+        assert_eq!(parse_extras(r#"{"sponsor":null,"supporters":[]}"#), Extras::default());
+        assert_eq!(parse_extras(r#"{"sponsor":{"name":"No text"}}"#), Extras::default(), "half a sponsor is none");
+        assert_eq!(parse_extras(r#"{"sponsor":"x","supporters":"y"}"#), Extras::default(), "wrong types");
+        assert_eq!(parse_extras("<html>404</html>"), Extras::default());
+        assert_eq!(parse_extras("[]"), Extras::default());
+    }
+
+    #[test]
+    fn extras_are_cut_to_their_limits() {
+        let long = "x".repeat(500);
+        let names = vec![format!("\"{long}\""); 300].join(",");
+        let e = parse_extras(&format!(r#"{{"sponsor":{{"name":"{long}","text":"{long}"}},"supporters":[{names}]}}"#));
+        let s = e.sponsor.unwrap();
+        assert_eq!((s.name.len(), s.text.len()), (MAX_SPONSOR_NAME, MAX_SPONSOR_TEXT));
+        assert_eq!(e.supporters.len(), MAX_SUPPORTERS);
+        assert!(e.supporters.iter().all(|n| n.len() == MAX_SUPPORTER_NAME));
     }
 
     /// Against the real sites (the newsroom is read from its page, which can change):

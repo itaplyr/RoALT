@@ -23,11 +23,12 @@
   :root[data-bg][data-theme="light"] :is(.titlebar .caption-btn, .titlebar .wc, .stage summary) svg {
     filter: drop-shadow(0 1px 2px rgb(255 255 255 / 0.85));
   }
-  /* Not while Home shows live pictures: a blur over them redraws with every frame they get. */
-  :root[data-bg]:not(:has(.home-pic)) :is([popover]:not([data-passive]), dialog, .toast) {
+  /* Not over anything that moves (Home's live pictures, a GIF that plays, data-bg-live): a blur
+     redraws with every frame. */
+  :root[data-bg]:not([data-bg-live]):not(:has(.home-pic)) :is([popover]:not([data-passive]), dialog, .toast) {
     backdrop-filter: blur(16px) saturate(1.2);
   }
-  :root[data-bg] .island {
+  :root[data-bg]:not([data-bg-live]) .island {
     backdrop-filter: blur(12px) saturate(1.2);
   }
 }

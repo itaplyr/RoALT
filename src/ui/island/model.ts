@@ -15,14 +15,13 @@ export type IslandLeaf = {
   onSelect: () => void;
 };
 
-/** A group that opens in place as an inset pill (More tools, the Settings areas). Collapsed, its tile
- * shows the current child's icon and label, unless `keepIcon` (Settings keeps its gear). */
+/** A group that opens in place as an inset pill (More tools). Collapsed, its tile shows the current
+ * child's icon and label. */
 export type IslandGroup = {
   id: string;
   icon: IconName;
   label: string;
   children: IslandLeaf[];
-  keepIcon?: boolean;
   /** Children the user can reorder (saved by the caller). */
   order?: { ids: string[]; onOrder: (ids: string[]) => void };
 };
@@ -33,4 +32,6 @@ export type IslandModel = {
   main: IslandLeaf[];
   mainOrder: { ids: string[]; onOrder: (ids: string[]) => void };
   groups: IslandGroup[];
+  /** Places after the groups, in a fixed order (Settings). */
+  end: IslandLeaf[];
 };

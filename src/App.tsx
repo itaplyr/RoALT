@@ -1,10 +1,11 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useId, useRef, useState } from "react";
 import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { api, events, type VaultStatus } from "./api";
 import { qk, queryClient, useSetSettings, useSettings, useVault } from "./data";
 import { AppMenu } from "./app/AppMenu";
 import { TitleTools } from "./app/TitleTools";
 import { useTheme } from "./app/theme";
+import { playAllAgain } from "./features/dashboard/Ended";
 import { DonateDialog } from "./features/donate/DonateDialog";
 import { PublicNetworkBanner } from "./features/settings/PublicNetworkBanner";
 import { resetLaunches } from "./features/launch/launchQueue";
@@ -14,6 +15,7 @@ import { UnlockScreen, type LockReason } from "./features/vault/UnlockScreen";
 import { t, useLang } from "./i18n";
 import { Announcer } from "./ui/a11y";
 import { MotionRoot } from "./ui/motion";
+import { Dialog } from "./ui/Dialog";
 import { TitleBar } from "./ui/TitleBar";
 import { LoadFailed, toast, toastError, Toaster } from "./ui/Toast";
 import { TooltipHost } from "./ui/Tooltip";
@@ -46,6 +48,7 @@ function Root() {
   const [lockReason, setLockReason] = useState<LockReason>("start");
   const [islandSlot, setIslandSlot] = useState<HTMLDivElement | null>(null);
   const [donating, setDonating] = useState(false);
+  const [closeAsk, setCloseAsk] = useState(false);
   const manualLockAt = useRef(0);
   const v = vault.data;
   const s = settings.data;
@@ -55,7 +58,7 @@ function Root() {
 
   const markLocked = () => {
     qc.setQueryData<VaultStatus>(qk.vault, (old) => old && { ...old, locked: true });
-    for (const queryKey of [qk.accounts, qk.presence, ["info"], qk.favourites, qk.join, qk.privateServers, qk.discord]) qc.removeQueries({ queryKey });
+    for (const queryKey of [qk.accounts, qk.presence, ["info"], qk.favourites, qk.join, qk.privateServers, qk.discord, ["robux"], ["robuxTotals"], qk.values, ["playerValue"]]) qc.removeQueries({ queryKey });
     // A launch kept on show from here (its target can hold a private server's code) goes too. The
     // backend's batch (qk.bulk) stays: "unlock, then launch the ones cancelled" shows after unlock.
     resetLaunches();
@@ -84,6 +87,9 @@ function Root() {
       events.onRobloxClient((c) => qc.setQueryData(qk.client, c)),
       events.onNetwork((n) => qc.setQueryData(qk.network, n)),
       events.onAppUpdate((u) => qc.setQueryData(qk.appUpdate, u)),
+      events.onSettingsChanged(() => void qc.invalidateQueries({ queryKey: qk.settings })),
+      events.onPlayAgain(() => playAllAgain(qc)),
+      events.onCloseAsk(() => setCloseAsk(true)),
       // Errors stay until dismissed: the window may have been hidden in the tray.
       events.onNotice((n) => toast(n.message, n.error ? "error" : "ok", n.error, n.error ? "error" : "notification")),
       events.onVaultLocked(() => {
@@ -178,7 +184,27 @@ function Root() {
       {/* A new recovery code no flow is showing (a recovered unlock, a lock mid-flow): up here because it must outlive what made it, as the old code is void by now. Never while locked: it would open the vault for whoever comes by. */}
       <RecoveryCodeHost unlocked={unlocked} />
       <DonateDialog open={donating} onClose={() => setDonating(false)} />
+      <CloseAskDialog open={closeAsk} onClose={() => setCloseAsk(false)} />
     </div>
+  );
+}
+
+/** Closing the window while RoALT looks after running clients (rejoin, restart, anti-AFK, Discord):
+ * quitting stops all of it, so it asks. Esc or × keeps the window open. */
+function CloseAskDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const textId = useId();
+  const answer = (f: () => Promise<void>) => {
+    onClose();
+    f().catch(toastError);
+  };
+  return (
+    <Dialog open={open} onClose={onClose} title={t("app.closeAsk.title")} width={440} describedBy={textId}>
+      <div id={textId} className="dlg-body text-fg-2">{t("app.closeAsk.text")}</div>
+      <div className="dlg-foot">
+        <button type="button" className="btn btn-danger" onClick={() => answer(api.appQuit)}>{t("app.closeAsk.quit")}</button>
+        <button type="button" className="btn btn-primary" onClick={() => answer(api.windowToTray)} data-autofocus>{t("app.closeAsk.keep")}</button>
+      </div>
+    </Dialog>
   );
 }
 

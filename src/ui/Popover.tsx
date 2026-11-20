@@ -65,13 +65,12 @@ export function Popover({ id, anchor, placement = "below-start", role, label, cl
 
 const closeMenu = (e: MouseEvent<HTMLElement>) => e.currentTarget.closest<HTMLElement>("[popover]")?.hidePopover();
 
-/** A menu item; it closes its menu unless `closes` is false. */
-export function MenuItem({ icon, danger, kbd, disabled, closes = true, onSelect, children }: {
+/** A menu item; choosing it closes its menu. */
+export function MenuItem({ icon, danger, kbd, disabled, onSelect, children }: {
   icon?: IconName;
   danger?: boolean;
   kbd?: string;
   disabled?: boolean;
-  closes?: boolean;
   onSelect: () => void;
   children: ReactNode;
 }) {
@@ -83,7 +82,7 @@ export function MenuItem({ icon, danger, kbd, disabled, closes = true, onSelect,
       data-danger={danger || undefined}
       disabled={disabled}
       onClick={(e) => {
-        if (closes) closeMenu(e);
+        closeMenu(e);
         onSelect();
       }}
     >

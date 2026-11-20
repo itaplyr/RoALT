@@ -5,11 +5,15 @@ import { api, asError, type AccountSummary, type GameInfo, type PopularGame } fr
 import { qk } from "../../data";
 import { fmtNum, t, tx } from "../../i18n";
 import { Skeleton } from "../../ui/Bits";
-import { Button } from "../../ui/Button";
+import { Button, IconButton } from "../../ui/Button";
+import { Segmented } from "../../ui/controls";
+import { Select } from "../../ui/Field";
 import { Icon } from "../../ui/Icon";
 import { friendly } from "../../ui/Toast";
-import { accountName, ago, Avatar } from "../accounts/shared";
+import { accountName, ago, Avatar, formatDate } from "../accounts/shared";
+import { exportCsv } from "../crashes/exportCsv";
 import { uptime } from "../launch/Running";
+import { copyRoaltLink } from "../launch/target";
 // GameIcon is also drawn by Servers and Play's game details, which load without BrowseView.
 import "./browse.css";
 
@@ -81,6 +85,7 @@ function PopularCard({ game: g, onOpen, onPlay, onDetails }: { game: PopularGame
         <Button size="sm" icon="play" onClick={() => onPlay(g.rootPlaceId)}>{t("browse.play")}</Button>
         <Button size="sm" variant="ghost" icon="globe" onClick={() => onOpen(g.rootPlaceId)}>{t("browse.open")}</Button>
         <Button size="sm" variant="ghost" icon="info" onClick={() => onDetails(g.rootPlaceId)}>{t("game.details")}</Button>
+        <IconButton icon="link" size="sm" label={t("share.copyLink")} onClick={() => copyRoaltLink({ kind: "place", placeId: g.rootPlaceId, launchData: null })} />
       </div>
     </article>
   );
@@ -118,6 +123,7 @@ export function PlaytimeTab({ accounts, onOpen, onPlay, onDetails }: { accounts:
   return (
     <div className="flex flex-col gap-3">
       <p className="text-[13px] text-fg-3 max-w-prose">{t("browse.playtimeHint")}</p>
+      <PlaytimeDays accounts={accounts} />
       <ul className="flex flex-col gap-2">
         {list.map((g) => (
           <li key={g.key} className="panel browse-row">
@@ -149,10 +155,70 @@ export function PlaytimeTab({ accounts, onOpen, onPlay, onDetails }: { accounts:
               <Button size="sm" icon="play" onClick={() => onPlay(g.placeId)}>{t("browse.play")}</Button>
               <Button size="sm" variant="ghost" icon="globe" onClick={() => onOpen(g.placeId)}>{t("browse.open")}</Button>
               <Button size="sm" variant="ghost" icon="info" onClick={() => onDetails(g.placeId)}>{t("game.details")}</Button>
+              <Button size="sm" variant="ghost" icon="link" onClick={() => copyRoaltLink({ kind: "place", placeId: g.placeId, launchData: null })}>{t("share.copyLink")}</Button>
             </div>
           </li>
         ))}
       </ul>
     </div>
+  );
+}
+
+const SPANS = [7, 30, 90] as const;
+/** A local day as the backend keeps it (YYYYMMDD), and back. */
+const dayOf = (d: Date) => d.getFullYear() * 10_000 + (d.getMonth() + 1) * 100 + d.getDate();
+const dateOf = (day: number) => new Date(Math.floor(day / 10_000), (Math.floor(day / 100) % 100) - 1, day % 100).getTime();
+
+/** Time in games per day, of every account or one: a bar a day, and the days as a CSV file. Nothing
+ * shows until a day was counted (RoALT counts days from the version that brought this). */
+function PlaytimeDays({ accounts }: { accounts: AccountSummary[] }) {
+  const q = useQuery({ queryKey: ["playtimeDays"], queryFn: api.playtimeDays, refetchInterval: 60_000 });
+  const [span, setSpan] = useState<(typeof SPANS)[number]>(30);
+  const [only, setOnly] = useState("");
+  if (!q.data?.length) return null;
+
+  const had = accounts.filter((a) => q.data.some((r) => r.accountId === a.id));
+  const picked = had.some((a) => String(a.id) === only) ? only : "";
+  const sum = new Map<number, number>();
+  for (const r of q.data) if (!picked || String(r.accountId) === picked) sum.set(r.day, (sum.get(r.day) ?? 0) + r.ms);
+  const days = Array.from({ length: span }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - (span - 1 - i));
+    return dayOf(d);
+  });
+  const most = Math.max(1, ...days.map((d) => sum.get(d) ?? 0));
+  const total = days.reduce((n, d) => n + (sum.get(d) ?? 0), 0);
+  const summary = t("playtime.totalIn", { time: uptime(0, total), n: span });
+
+  return (
+    <section aria-label={t("playtime.byDay")} className="panel flex flex-col gap-3 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="font-medium">{t("playtime.byDay")}</h3>
+        <span className="flex flex-wrap items-center gap-2">
+          <Segmented label={t("playtime.span")} value={span} onChange={setSpan} options={SPANS.map((n) => ({ value: n, label: t("playtime.days", { n }) }))} />
+          {had.length > 1 && (
+            <Select
+              aria-label={t("monitor.account")}
+              value={picked}
+              onChange={setOnly}
+              options={[{ value: "", label: t("common.allAccounts") }, ...had.map((a) => ({ value: String(a.id), label: accountName(a) }))]}
+            />
+          )}
+          <Button size="sm" variant="ghost" icon="download" onClick={() => void exportCsv("RoALT-playtime", api.playtimeExport)}>
+            {t("common.exportCsv")}
+          </Button>
+        </span>
+      </div>
+      {/* One picture to a screen reader, with its total; the days themselves are in the CSV. */}
+      <div role="img" aria-label={summary} className="playtime-bars">
+        {days.map((d) => {
+          const ms = sum.get(d) ?? 0;
+          return <span key={d} className="playtime-bar" data-empty={ms ? undefined : ""} style={{ height: ms ? `${Math.max(4, (100 * ms) / most)}%` : undefined }} data-tip={`${formatDate(dateOf(d))} · ${uptime(0, ms)}`} />;
+        })}
+      </div>
+      <p className="meta">
+        {summary} · {t("playtime.kept")}
+      </p>
+    </section>
   );
 }

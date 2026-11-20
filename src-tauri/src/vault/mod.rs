@@ -208,6 +208,31 @@ impl Vault {
         self.guard().mode = mode;
     }
 
+    /// Generates a brand-new 256-bit data key and wraps it under `new_password` (Master mode).
+    /// Used when upgrading from DPAPI to Master so a previously captured DPAPI blob can no longer
+    /// decrypt secrets after the switch.
+    pub fn prepare_master_rotation(&self, new_password: Option<&str>) -> Result<(Zeroizing<[u8; 32]>, VaultRecord)> {
+        let _ = self.key()?;
+        let pw = long_enough(new_password)?;
+        let new_key = Zeroizing::new(master::random_bytes::<32>());
+        let rec = wrap_master(&new_key, pw)?;
+        Ok((new_key, rec))
+    }
+
+    /// Decrypts `blob` under the current key and re-encrypts it under `new_key` with the same AAD.
+    pub fn reencrypt_with_key(&self, new_key: &[u8; 32], aad: &[u8], blob: &[u8]) -> Result<Vec<u8>> {
+        let plain = self.decrypt(aad, blob)?;
+        master::seal(new_key, aad, &plain)
+    }
+
+    /// Swaps the in-memory data key and mode after a key rotation has been committed to SQLite.
+    pub fn commit_rotation(&self, new_key: Zeroizing<[u8; 32]>, mode: VaultMode) {
+        let mut g = self.guard();
+        g.key = Some(new_key);
+        g.mode = mode;
+        g.last_activity = Instant::now();
+    }
+
     /// `Locked` when locked.
     pub fn encrypt(&self, aad: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
         let key = self.key()?;
@@ -424,5 +449,25 @@ mod tests {
         let kek = master::derive_key(code.expose(), &recovery.kdf).unwrap();
         let sealed = dpapi::unprotect(&recovery.wrapped_key).unwrap();
         assert!(master::open(&kek, KEY_AAD, &sealed).is_err(), "bound to its own AAD");
+    }
+
+    #[test]
+    fn dpapi_to_master_rotation_invalidates_old_dpapi_key() {
+        let (v, old_rec) = Vault::create().unwrap();
+        let aad = b"cookie:42";
+        let old_blob = v.encrypt(aad, b"secret-cookie").unwrap();
+
+        let (new_key, new_rec) = v.prepare_master_rotation(Some("strong master password")).unwrap();
+        let new_blob = v.reencrypt_with_key(&new_key, aad, &old_blob).unwrap();
+        v.commit_rotation(new_key, VaultMode::Master);
+
+        // New master vault opens and decrypts the rotated blob.
+        let v_new = Vault::open(&new_rec).unwrap();
+        v_new.unlock(&new_rec, "strong master password").unwrap();
+        assert_eq!(&*v_new.decrypt(aad, &new_blob).unwrap(), b"secret-cookie");
+
+        // The old DPAPI-wrapped key cannot decrypt ciphertexts created under the rotated key.
+        let v_old = Vault::open(&old_rec).unwrap();
+        assert!(v_old.decrypt(aad, &new_blob).is_err());
     }
 }

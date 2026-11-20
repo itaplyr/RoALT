@@ -1,8 +1,10 @@
 // The Launch composer's state and how a target reads in the UI. Shell owns the draft, so it
 // survives switching views and is dropped with everything else when the vault locks.
 import type { Dispatch, SetStateAction } from "react";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { api, type ErrorPayload, type LaunchTarget, type ParsedInput, type UserRef } from "../../api";
 import { t } from "../../i18n";
+import { toast, toastError } from "../../ui/Toast";
 
 export type Draft = {
   text: string;
@@ -46,6 +48,20 @@ export function targetText(t: LaunchTarget): string {
   }
 }
 
+/** A link that opens RoALT on Play with this game or server (roalt.dev hands it to `roalt://`).
+ * Public games and servers only: private servers' codes never go into a link. */
+export function roaltLink(t: LaunchTarget): string | null {
+  if (t.kind === "place") return `https://roalt.dev/play/?place=${t.placeId}`;
+  if (t.kind === "server") return `https://roalt.dev/play/?place=${t.placeId}&job=${t.jobId}`;
+  return null;
+}
+
+/** Copies `roaltLink(target)` and says so. */
+export function copyRoaltLink(target: LaunchTarget) {
+  const link = roaltLink(target);
+  if (link) void writeText(link).then(() => toast(t("share.copied")), toastError);
+}
+
 /** A draft holding a known target (no parse round trip needed). A private server's access code never
  * shows (the user may never have seen it: the server drawer, a favourite): the field reads its masked
  * description and the real target waits in `parsed`, so readDraft and resolveTarget work. */
@@ -68,25 +84,47 @@ export function placeOf(s: string): number | null {
   return n > 0 && Number.isSafeInteger(n) ? n : null;
 }
 
+/** The place a target names; null for one that names none (a share link, a universe, a followed user). */
+export const targetPlace = (tg: LaunchTarget): number | null => ("placeId" in tg ? tg.placeId : null);
+
 export type Tone = "ok" | "info" | "bad";
 export type Look = { kind: string; detail: string; tone: Tone };
 
 const job = (j: string) => `${j.slice(0, 8)}…${j.slice(-4)}`;
 const ok = (kind: string, detail: string): Look => ({ kind, detail, tone: "ok" });
 
-/** "Game · place 1818"; link and access codes never show. */
-export function describeTarget(tg: LaunchTarget): Look {
+function shareLinkDetail(linkType: string): string {
+  switch (linkType.toLowerCase()) {
+    case "experienceinvite":
+      return t("launch.target.share.experienceInvite");
+    case "server":
+      return t("launch.target.share.server");
+    case "privateserver":
+      return t("launch.target.share.privateServer");
+    case "experiencedetails":
+      return t("launch.target.share.experienceDetails");
+    case "profile":
+      return t("launch.target.share.profile");
+    default:
+      return linkType;
+  }
+}
+
+const withGame = (detail: string, gameName?: string | null) => (gameName ? `${gameName} · ${detail}` : detail);
+
+/** "Game · Adopt Me! · place 1818"; link and access codes never show. */
+export function describeTarget(tg: LaunchTarget, gameName?: string | null): Look {
   switch (tg.kind) {
     case "place":
-      return ok(t("launch.target.game"), t(tg.launchData ? "launch.target.placeWithData" : "launch.target.place", { place: tg.placeId }));
+      return ok(t("launch.target.game"), withGame(t(tg.launchData ? "launch.target.placeWithData" : "launch.target.place", { place: tg.placeId }), gameName));
     case "server":
-      return ok(t("launch.target.server"), t("launch.target.placeJob", { place: tg.placeId, job: job(tg.jobId) }));
+      return ok(t("launch.target.server"), withGame(t("launch.target.placeJob", { place: tg.placeId, job: job(tg.jobId) }), gameName));
     case "privateLink":
-      return ok(t("launch.target.privateServer"), t("launch.target.linkCode", { place: tg.placeId }));
+      return ok(t("launch.target.privateServer"), withGame(t("launch.target.linkCode", { place: tg.placeId }), gameName));
     case "privateAccess":
-      return ok(t("launch.target.privateServer"), t("launch.target.accessCode", { place: tg.placeId }));
+      return ok(t("launch.target.privateServer"), withGame(t("launch.target.accessCode", { place: tg.placeId }), gameName));
     case "shareLink":
-      return ok(t("launch.target.shareLink"), tg.linkType);
+      return ok(t("launch.target.shareLink"), shareLinkDetail(tg.linkType));
     case "shareLinkV2":
       return ok(t("launch.target.shareLink"), t("launch.target.openedOnLaunch"));
     case "universe":
@@ -96,14 +134,14 @@ export function describeTarget(tg: LaunchTarget): Look {
   }
 }
 
-export function describe(p: ParsedInput, place: number | null, user: UserRef | null): Look {
+export function describe(p: ParsedInput, place: number | null, user: UserRef | null, gameName?: string | null): Look {
   switch (p.kind) {
     case "target":
-      return describeTarget(p.target);
+      return describeTarget(p.target, gameName);
     case "jobIdOnly":
       return place === null
         ? { kind: t("launch.target.server"), detail: t("launch.target.jobNeedsPlace", { job: job(p.jobId) }), tone: "info" }
-        : ok(t("launch.target.server"), t("launch.target.placeJob", { place, job: job(p.jobId) }));
+        : ok(t("launch.target.server"), withGame(t("launch.target.placeJob", { place, job: job(p.jobId) }), gameName));
     case "username":
       return { kind: t("launch.target.joinUser"), detail: `@${p.name}${user ? ` (${user.displayName})` : ""}`, tone: user ? "ok" : "info" };
     case "invalid":
@@ -119,11 +157,11 @@ export const userFor = (d: Draft, name: string) =>
 
 /** How a draft reads now. `pending`: the parse hasn't caught up, which is still launchable because
  * `resolveTarget` parses again. */
-export function readDraft(d: Draft) {
+export function readDraft(d: Draft, gameName?: string | null) {
   const parsed = d.text.trim() ? d.parsed?.value ?? null : null;
   const place = placeOf(d.place);
   const user = parsed?.kind === "username" ? userFor(d, parsed.name) : null;
-  const look = parsed && describe(parsed, place, user);
+  const look = parsed && describe(parsed, place, user, gameName);
   const usable = !!look && look.tone !== "bad" && !(parsed?.kind === "jobIdOnly" && place === null);
   return { parsed, place, look, usable, pending: !!d.text.trim() && d.parsed?.text !== d.text };
 }

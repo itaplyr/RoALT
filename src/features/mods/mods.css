@@ -1,0 +1,117 @@
+/* Mods: one column, as wide as Settings'. */
+@layer views {
+  .mods-page {
+    max-width: 840px;
+    margin-inline: auto;
+  }
+  .mods-head {
+    margin-bottom: 24px;
+  }
+  .mods-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  /* The lead is the summary of the page's "More about": body text, not a label. */
+  .mods-lead {
+    margin-top: 4px;
+  }
+  .mods-lead > .disclosure-summary {
+    color: var(--fg-2);
+    font-size: var(--fs-body);
+    font-weight: 400;
+  }
+  .mods-lead .disclosure-body {
+    max-width: 64ch;
+  }
+  .mods-master {
+    margin-bottom: 16px;
+  }
+
+  .mods-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  /* Mods off: the list stays editable, but reads as not in use. */
+  .mods-list[data-dimmed] .mods-text {
+    opacity: 0.6;
+  }
+  .mods-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 56px;
+    padding-block: 8px;
+    padding-inline: 4px 12px;
+    border-radius: 12px;
+    background: var(--surface-1);
+    border: 1px solid var(--line);
+  }
+  .mods-grip {
+    display: grid;
+    place-items: center;
+    inline-size: 28px;
+    block-size: 44px;
+    border-radius: 10px;
+    color: var(--fg-3);
+    cursor: grab;
+    touch-action: none;
+  }
+  .mods-grip:hover {
+    color: var(--fg-2);
+  }
+  .mods-grip:active {
+    cursor: grabbing;
+  }
+  .mods-text {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+  }
+  .mods-name {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mods-meta {
+    color: var(--fg-3);
+    font-size: var(--fs-small);
+    font-variant-numeric: tabular-nums;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mods-order {
+    margin-top: 12px;
+    color: var(--fg-3);
+    font-size: var(--fs-small);
+  }
+
+  .mods-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 40px 24px;
+    text-align: center;
+    color: var(--fg-2);
+    border: 1px dashed var(--line);
+    border-radius: 16px;
+  }
+  .mods-empty-title {
+    color: var(--fg);
+    font-weight: 600;
+  }
+  .mods-ack {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-inline-start: 18px;
+    list-style: disc;
+  }
+}

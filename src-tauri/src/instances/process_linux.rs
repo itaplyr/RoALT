@@ -186,6 +186,11 @@ pub fn unreadable_client(pid: u32) -> bool {
     start_time(pid).is_none() && std::fs::metadata(format!("/proc/{pid}")).is_ok()
 }
 
+/// The executable a running process was started from; None if it is gone or can't be read.
+pub fn exe_path(pid: u32) -> Option<std::path::PathBuf> {
+    std::fs::read_link(format!("/proc/{pid}/exe")).ok()
+}
+
 /// Start time of a running process, `None` if it is gone.
 pub fn start_time(pid: u32) -> Option<u64> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;

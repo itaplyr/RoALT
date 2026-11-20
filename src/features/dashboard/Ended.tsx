@@ -1,33 +1,31 @@
 import { useState } from "react";
-import { api, type AccountSummary, type Crash, type CrashKind, type Instance } from "../../api";
-import { useBulk, useCrashes, useInstances, useMultiStatus } from "../../data";
-import { t, type Key } from "../../i18n";
+import type { QueryClient } from "@tanstack/react-query";
+import { api, type AccountSummary, type BulkProgress, type Crash, type Instance, type MultiInstanceStatus } from "../../api";
+import { qk, useBulk, useCrashes, useInstances, useMultiStatus } from "../../data";
+import { t } from "../../i18n";
 import { Button } from "../../ui/Button";
 import { Icon } from "../../ui/Icon";
 import { Collapse, ListPresence } from "../../ui/motion";
-import { toastError } from "../../ui/Toast";
+import { toast, toastError } from "../../ui/Toast";
 import { accountName, Avatar } from "../accounts/shared";
-import { launchBlocked, launchEach, launchOne, useLaunchActivity, useLaunchStep } from "../launch/launchQueue";
+import { CRASH_KINDS, verdictOf } from "../crashes/kinds";
+import { launchBlocked, launchEach, launchOne, launchStep, useLaunchActivity, useLaunchStep } from "../launch/launchQueue";
 import { MultiNotice } from "../launch/MultiNotice";
 import { isLive, isRunning, uptime, useNow } from "../launch/Running";
 import { tabLaunch } from "./homeLayout";
 
-const KINDS: Record<CrashKind, Key> = {
-  crash: "launch.crash.crash",
-  disconnect: "launch.crash.disconnect",
-  hang: "launch.crash.hang",
-  mem: "launch.crash.mem",
-};
 
 /** What RoALT recorded about an ended client: how it ended, what its log said, its log. */
 function CrashDetails({ crash: c }: { crash: Crash }) {
+  const verdict = verdictOf(c);
   return (
     <div className="well flex flex-col gap-2 px-4 py-3 mt-1 mb-2.5">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <span>{t(KINDS[c.kind])}</span>
+        <span>{t(CRASH_KINDS[c.kind])}</span>
         <span className="text-xs text-fg-3 tabular-nums">{c.placeId !== null ? t("launch.crash.afterPlace", { time: uptime(0, c.uptimeMs), place: c.placeId }) : t("launch.crash.after", { time: uptime(0, c.uptimeMs) })}</span>
       </div>
       {c.reason && <p className="mono text-xs text-fg-2 break-words selectable">{c.reason}</p>}
+      {verdict && <p className="text-[13px] text-fg-2">{verdict}</p>}
       {c.hasLog && (
         <Button size="sm" iconEnd="external" className="self-start" onClick={() => api.crashOpenLog(c.id).catch(toastError)}>
           {t("launch.crash.openLog")}
@@ -35,6 +33,29 @@ function CrashDetails({ crash: c }: { crash: Crash }) {
       )}
     </div>
   );
+}
+
+/** What Play all again starts: each account once, at its latest ended client, when its sign-in is
+ * valid and none of its clients runs. */
+function againOf(list: Instance[], accounts: AccountSummary[]) {
+  const valid = new Set(accounts.filter((a) => a.status === "valid").map((a) => a.id));
+  const live = new Set(list.filter((i) => isRunning(i) && isLive(i)).map((i) => i.accountId));
+  const ended = list.filter((i) => !isRunning(i)).sort((x, y) => (y.endedAt ?? 0) - (x.endedAt ?? 0));
+  return ended.filter((i, n) => valid.has(i.accountId) && !live.has(i.accountId) && ended.findIndex((x) => x.accountId === i.accountId) === n);
+}
+
+/** The tray's Play all again: as the panel's button, from what the page last read; why it can't is
+ * said in a toast (the tray has no place for it). */
+export function playAllAgain(qc: QueryClient) {
+  const list = qc.getQueryData<Instance[]>(qk.instances) ?? [];
+  const accounts = qc.getQueryData<AccountSummary[]>(qk.accounts) ?? [];
+  const again = againOf(list, accounts);
+  if (!again.length) return;
+  const several = again.length > 1 || list.some(isRunning);
+  const why = launchStep() ?? launchBlocked(several, qc.getQueryData<MultiInstanceStatus>(qk.multi), qc.getQueryData<BulkProgress | null>(qk.bulk));
+  if (why) return toast(why, "error");
+  const byId = new Map(accounts.map((a) => [a.id, a]));
+  void launchEach(again.map((i) => ({ account: byId.get(i.accountId)!, where: i.target, fpsCap: i.fpsCap })));
 }
 
 /** Clients that ended, newest first: how they ended, and a way to start them again, one or all. Why
@@ -53,8 +74,7 @@ export function EndedPanel({ accounts }: { accounts: AccountSummary[] }) {
   const live = new Set(running.filter(isLive).map((i) => i.accountId));
   const ended = list.filter((i) => !isRunning(i)).sort((x, y) => (y.endedAt ?? 0) - (x.endedAt ?? 0));
   const can = (i: Instance) => byId.get(i.accountId)?.status === "valid" && !live.has(i.accountId);
-  // Each account once, at its latest client: what Play all again starts.
-  const again = ended.filter((i, n) => can(i) && ended.findIndex((x) => x.accountId === i.accountId) === n);
+  const again = againOf(list, accounts);
   // Starting next to running clients needs multi-instance, as a bulk launch does.
   const one = step ?? launchBlocked(running.length > 0, multi, batch);
   const all = one ?? launchBlocked(again.length > 1, multi, batch);

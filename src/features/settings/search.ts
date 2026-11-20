@@ -18,12 +18,12 @@ export const fold = (s: string) => s.normalize("NFD").replace(/\p{M}/gu, "").toL
 const GROUP = new Map<string, Key | undefined>(AREAS.flatMap((a) => a.groups.flatMap((g) => g.ids.map((id) => [id, g.label] as const))));
 const root = (e: Entry): Entry => (e.parent ? root(entry(e.parent)) : e);
 const placeOf = (row: Entry): Place => (row.place.view === "settings" ? { ...row.place, group: GROUP.get(row.id) } : row.place);
-const screenOf = (p: Place) => (p.view === "settings" ? `settings:${p.area}` : p.view);
+export const screenOf = (p: Place) => (p.view === "settings" ? `settings:${p.area}` : p.view);
 /** A place's stable key: its screen and group. */
 export const keyOf = (p: Place) => `${screenOf(p)}|${"group" in p ? (p.group ?? "") : ""}`;
 
-// Island order: Settings' areas, then Performance, Discord, then the views links go to.
-const SCREENS = [...AREAS.map((a) => `settings:${a.id}`), "performance", "discord", "accounts", "launch", "dashboard"];
+// Island order: Settings' areas, then Discord, then the views links go to.
+const SCREENS = [...AREAS.map((a) => `settings:${a.id}`), "discord", "mods", "accounts", "launch", "dashboard"];
 const ORDER = new Map(ENTRIES.map((e, i) => [e.id, i]));
 const GROUP_ORDER = new Map<string, number>();
 ENTRIES.forEach((e, i) => {

@@ -87,8 +87,9 @@ pub fn logs_dir() -> Option<PathBuf> {
     Some(data.join("logs").join("clients"))
 }
 
-/// The `_Player_` log (not `_CrashHandler_`) modified since `since` whose first lines name
-/// this browser tracker id. Reads at most the first ~256 KB of each candidate.
+/// The `_Player_` log (not `_CrashHandler_`) created and modified since `since` whose first lines
+/// name this browser tracker id. Reads at most the first ~256 KB of each candidate.
+/// Linux: a client only writes `_Player_` output there, and ctime (birth time) is used.
 pub fn find_log(dir: &Path, browser_tracker_id: i64, since: SystemTime) -> Option<PathBuf> {
     let since = since.checked_sub(SINCE_SLACK).unwrap_or(UNIX_EPOCH);
     let mut candidates: Vec<(SystemTime, PathBuf)> = std::fs::read_dir(dir)
@@ -101,18 +102,37 @@ pub fn find_log(dir: &Path, browser_tracker_id: i64, since: SystemTime) -> Optio
         })
         .ok()?
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            let name = e.file_name();
-            let name = name.to_string_lossy();
-            name.contains("_Player_") && !name.contains("_CrashHandler_")
-        })
+        .filter(is_player_log)
         .filter_map(|e| {
-            let modified = e.metadata().ok()?.modified().ok()?;
-            (modified >= since).then(|| (modified, e.path()))
+            let m = e.metadata().ok()?;
+            let modified = m.modified().ok()?;
+            // Created before: an earlier client's, still written to. A browser's Play links all
+            // carry the same tracker id.
+            let created = m.created().map_or(true, |c| c >= since);
+            (modified >= since && created).then(|| (modified, e.path()))
         })
         .collect();
     candidates.sort_by_key(|c| std::cmp::Reverse(c.0));
     candidates.into_iter().map(|(_, p)| p).find(|p| names_tracker(p, browser_tracker_id))
+}
+
+fn is_player_log(e: &std::fs::DirEntry) -> bool {
+    let name = e.file_name();
+    let name = name.to_string_lossy();
+    name.contains("_Player_") && !name.contains("_CrashHandler_")
+}
+
+/// The `_Player_` log a client started at `start` (Unix s) created: the one created closest to
+/// it, at most `skew` s away. For a client RoALT didn't launch, whose tracker id isn't known.
+pub fn log_started_at(dir: &Path, start: u64, skew: u64) -> Option<PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(is_player_log)
+        .filter_map(|e| Some((e.metadata().ok()?.created().ok()?.duration_since(UNIX_EPOCH).ok()?.as_secs().abs_diff(start), e.path())))
+        .filter(|&(d, _)| d <= skew)
+        .min_by_key(|&(d, _)| d)
+        .map(|(_, p)| p)
 }
 
 /// `clean` deletes logs last written over a day ago ...
@@ -168,20 +188,49 @@ fn names_tracker(path: &Path, browser_tracker_id: i64) -> bool {
     String::from_utf8_lossy(&head).lines().any(|l| tracker_id(l) == Some(browser_tracker_id))
 }
 
+/// Maximum unread bytes processed in a single `read_new` pass (16 MiB).
+const MAX_READ_BYTES: u64 = 16 << 20;
+
 /// Reads lines appended since `offset` (opened shared, so Roblox keeps writing), updates
 /// `facts`, returns the new offset. A partial last line is left for the next read. The client's
 /// own errors and warnings (`problem_of`) go to `on_problem`, repeats within one read counted.
-pub fn read_new(path: &Path, offset: u64, facts: &mut LogFacts, mut on_problem: impl FnMut(&str, usize)) -> std::io::Result<u64> {
+pub fn read_new(path: &Path, offset: u64, facts: &mut LogFacts, on_problem: impl FnMut(&str, usize)) -> std::io::Result<u64> {
+    read_new_capped(path, offset, MAX_READ_BYTES, facts, on_problem)
+}
+
+fn read_new_capped(
+    path: &Path,
+    offset: u64,
+    max_bytes: u64,
+    facts: &mut LogFacts,
+    mut on_problem: impl FnMut(&str, usize),
+) -> std::io::Result<u64> {
     let mut f = open_shared(path)?;
+    let len = f.metadata()?.len();
     // Shorter than what was read: a new file under the same name, start over.
-    let offset = if f.metadata()?.len() < offset { 0 } else { offset };
+    let mut offset = if len < offset { 0 } else { offset };
+    // A runaway log (e.g. a script spamming errors) could grow gigabytes between polls: skip
+    // ahead to the last `max_bytes` so reading stays bounded in memory and time.
+    let skipped = len.saturating_sub(offset) > max_bytes;
+    if skipped {
+        offset = len.saturating_sub(max_bytes);
+    }
     f.seek(SeekFrom::Start(offset))?;
     let mut buf = Vec::new();
-    f.read_to_end(&mut buf)?;
+    (&f).take(max_bytes).read_to_end(&mut buf)?;
     let Some(end) = buf.iter().rposition(|&b| b == b'\n') else { return Ok(offset) };
+    // When we jumped into the middle of the file, drop the leading partial line.
+    let start = if skipped {
+        match buf[..end].iter().position(|&b| b == b'\n') {
+            Some(first) => first + 1,
+            None => return Ok(offset + end as u64 + 1),
+        }
+    } else {
+        0
+    };
     let mut problems: Vec<(String, usize)> = Vec::new();
     let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    for line in buf[..end].split(|&b| b == b'\n') {
+    for line in buf[start..end].split(|&b| b == b'\n') {
         let line = String::from_utf8_lossy(line);
         if let Some(p) = problem_of(&line).or_else(|| update_line(&line)) {
             match seen.get(p) {
@@ -611,10 +660,43 @@ mod tests {
         let older = write("0.743.0.7431134_20261023T220010Z_Player_33333_last.log", BTID, Duration::from_secs(30));
         assert_eq!(find_log(&dir, BTID, since), Some(older));
         let newer = write("0.743.0.7431134_20261023T220011Z_Player_44444_last.log", BTID, Duration::from_secs(2));
-        assert_eq!(find_log(&dir, BTID, since), Some(newer));
+        assert_eq!(find_log(&dir, BTID, since), Some(newer.clone()));
+        // Written just now, but created before `since`: an earlier client's with the same id.
+        // Windows-only: only here can the test set a creation time (Linux metadata has no birth time).
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::FileTimesExt;
+            let earlier = write("0.743.0.7431134_20261023T200000Z_Player_55555_last.log", BTID, Duration::ZERO);
+            let created = std::fs::FileTimes::new().set_created(now - Duration::from_secs(600));
+            File::options().write(true).open(&earlier).unwrap().set_times(created).unwrap();
+            assert_eq!(find_log(&dir, BTID, since), Some(newer));
+        }
         // Modified a little before `since`: within the slack.
         assert!(find_log(&dir, BTID + 1, now + Duration::from_secs(3)).is_some());
         assert_eq!(find_log(&dir.join("missing"), BTID, since), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn finds_the_log_by_start_time() {
+        use std::os::windows::fs::FileTimesExt;
+        let dir = temp_dir();
+        let start = 1_800_000_000;
+        let write = |name: &str, created: u64| {
+            let p = dir.join(name);
+            std::fs::write(&p, "").unwrap();
+            let t = std::fs::FileTimes::new().set_created(UNIX_EPOCH + Duration::from_secs(created));
+            File::options().write(true).open(&p).unwrap().set_times(t).unwrap();
+            p
+        };
+        write("0.743.0.7431134_20261023T220008Z_Player_0A5C5_CrashHandler_last.log", start);
+        write("0.743.0.7431134_20261023T210008Z_Player_11111_last.log", start - 60);
+        assert_eq!(log_started_at(&dir, start, 3), None);
+        let far = write("0.743.0.7431134_20261023T220010Z_Player_33333_last.log", start + 3);
+        assert_eq!(log_started_at(&dir, start, 3), Some(far));
+        let near = write("0.743.0.7431134_20261023T220009Z_Player_22222_last.log", start + 1);
+        assert_eq!(log_started_at(&dir, start, 3), Some(near));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -694,6 +776,27 @@ mod tests {
         let mut f = parsed(&[&line("[FLog::Network] Sending disconnect with reason: 267")]);
         parse_line(&line(&format!("[FLog::Output] ! Joining game '{JOB}' place {PLACE} at 10.9.2.90")), &mut f);
         assert_eq!(f.reason, None);
+    }
+
+    #[test]
+    fn capped_read_skips_oversized_middle_and_parses_tail() {
+        let dir = std::env::temp_dir().join(format!("roalt-logwatch-cap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("big.log");
+        let mut content = String::new();
+        for _ in 0..40 {
+            content.push_str(&line("[FLog::Output] filler noise line to push past the read cap"));
+        }
+        content.push_str(&line(&format!("[FLog::Output] ! Joining game '{JOB}' place {PLACE} at 10.9.2.90")));
+        content.push_str(&line("[FLog::Network] Replicator created: 000000007A26CF00"));
+        std::fs::write(&p, &content).unwrap();
+
+        let mut f = LogFacts::default();
+        let o = read_new_capped(&p, 0, 512, &mut f, |_, _| {}).unwrap();
+        assert_eq!(o, content.len() as u64);
+        assert_eq!((f.job_id.as_deref(), f.place_id, f.in_game), (Some(JOB), Some(PLACE), true));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
 

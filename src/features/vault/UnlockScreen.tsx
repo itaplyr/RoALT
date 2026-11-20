@@ -22,9 +22,9 @@ const LIFT_MS = 120;
 /**
  * The locked vault: one card, the master password in it. With a recovery code, "Forgot password?"
  * morphs the card into a reset (code, new password, confirm) that unlocks too. The fresh code goes
- * to `onRecovered` when given (the old path), else to RecoveryCodeHost.
+ * to RecoveryCodeHost.
  */
-export function UnlockScreen({ status, reason, onRecovered }: { status: VaultStatus; reason: LockReason; onRecovered?: (code: string) => void }) {
+export function UnlockScreen({ status, reason }: { status: VaultStatus; reason: LockReason }) {
   const qc = useQueryClient();
   const [card, animate] = useAnimate<HTMLDivElement>();
   const [recovering, setRecovering] = useState(false);
@@ -74,7 +74,7 @@ export function UnlockScreen({ status, reason, onRecovered }: { status: VaultSta
                 exit={{ opacity: 0, transition: TWEEN.exit }}
               >
                 {recovering ? (
-                  <RecoverForm {...events} onBack={toggle} onRecovered={onRecovered} />
+                  <RecoverForm {...events} onBack={toggle} />
                 ) : (
                   <UnlockForm {...events} lead={lead} hasRecovery={status.hasRecovery} onForgot={toggle} />
                 )}
@@ -163,7 +163,7 @@ function UnlockForm({ lead, hasRecovery, onForgot, onFail, onFixed, onOpen }: Ca
 /** Where a reset's problem shows: under its field, or under the form. */
 type Slot = "code" | "next" | "confirm" | "form";
 
-function RecoverForm({ onBack, onRecovered, onFail, onFixed, onOpen }: Card & { onBack: () => void; onRecovered?: (code: string) => void }) {
+function RecoverForm({ onBack, onFail, onFixed, onOpen }: Card & { onBack: () => void }) {
   const form = useRef<HTMLFormElement>(null);
   const [code, setCode] = useState("");
   const pw = useNewPassword();
@@ -198,8 +198,7 @@ function RecoverForm({ onBack, onRecovered, onFail, onFixed, onOpen }: Card & { 
     try {
       const fresh = await api.vaultRecover(code, pw.nw);
       // At once: the old code is void now, and the card is about to go.
-      if (onRecovered) onRecovered(fresh);
-      else publishRecoveryCode(fresh);
+      publishRecoveryCode(fresh);
       onOpen();
     } catch (err) {
       const e2 = asError(err);

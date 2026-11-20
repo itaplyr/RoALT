@@ -5,7 +5,7 @@ import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
 import "./theme.css";
 import App from "./App";
-import { accentTokens, ACCENT_KEY, applyAccent, THEME_KEY } from "./app/theme";
+import { accentTokens, ACCENT_KEY, applyAccent, applyLook, GROUNDS, LOOK_KEY, ROUND_KEY, THEME_KEY } from "./app/theme";
 import { debugLog } from "./api";
 import { loadLastLang, t } from "./i18n";
 import { LayoutPreview, type PreviewData } from "./features/launch/LayoutPreview";
@@ -56,16 +56,22 @@ class Boundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   }
 }
 
-// Before first paint: the last theme and accent, so a light or coloured start doesn't flash.
+// Before first paint: the last theme, look, corners and accent, so a light or coloured start doesn't flash.
 try {
   const theme = localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark";
   const root = document.documentElement;
   if (theme === "light") root.dataset.theme = theme;
+  // Written by useTheme only (lookCss), never from outside: it becomes a stylesheet as it is.
+  const look = localStorage.getItem(LOOK_KEY);
+  if (look) applyLook(look);
+  const round = Number(localStorage.getItem(ROUND_KEY));
+  if (round >= 0 && round <= 2 && localStorage.getItem(ROUND_KEY)) root.style.setProperty("--round", String(round));
   const accent = localStorage.getItem(ACCENT_KEY);
   if (accent && /^#[0-9a-f]{6}$/i.test(accent)) {
-    applyAccent(accent, theme);
+    // A custom look's own grounds come with its accent once settings load; the base's do until then.
+    applyAccent(accent, GROUNDS[theme]);
     // The splash is always dark: its cube takes the dark-theme shade.
-    root.style.setProperty("--splash-accent", accentTokens(accent, "dark").text);
+    root.style.setProperty("--splash-accent", accentTokens(accent, GROUNDS.dark).text);
   }
 } catch {
   // No storage: the defaults (dark, monochrome) apply until settings load.

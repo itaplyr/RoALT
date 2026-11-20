@@ -1,9 +1,10 @@
 import { useEffect, useRef, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { api } from "../../api";
+import { useGame } from "../../data";
 import { t } from "../../i18n";
 import { Input } from "../../ui/Field";
 import { Collapse, Swap } from "../../ui/motion";
-import { readDraft, targetText, type Draft, type Tone } from "./target";
+import { placeOf, readDraft, targetPlace, targetText, type Draft, type Tone } from "./target";
 import "./launch.css";
 
 /** A parse's tone as a shape and a status hue (never the accent). */
@@ -31,12 +32,14 @@ export function TargetField({ draft, setDraft, id = "launch-target", autoFocus, 
   const field = useRef<HTMLInputElement>(null);
   const pasted = useRef(false);
   const { text } = draft;
-  const { parsed, place, look: now } = readDraft(draft);
+  const known = draft.parsed?.text === text && draft.parsed.value.kind === "target" ? draft.parsed.value.target : null;
+  const targetPlaceId = known ? targetPlace(known) : draft.parsed?.value.kind === "jobIdOnly" ? placeOf(draft.place) : null;
+  const game = useGame(targetPlaceId).data ?? null;
+  const { parsed, place, look: now } = readDraft(draft, game?.name);
   // Cleared, the row folds away still saying what it read.
   const kept = useRef(now);
   if (now) kept.current = now;
   const look = now ?? (text.trim() ? null : kept.current);
-  const known = draft.parsed?.text === text && draft.parsed.value.kind === "target" ? draft.parsed.value.target : null;
   // Only a private server's description stands in for its link; any other text is what was typed.
   const masked = known?.kind === "privateAccess" && targetText(known) !== text;
 

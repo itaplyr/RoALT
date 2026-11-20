@@ -1,13 +1,14 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { motion } from "motion/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { fmtNum, t } from "../../i18n";
+import { fmtNum, t, type Key } from "../../i18n";
 import { rovingKeys } from "../../ui/a11y";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { DUR, RISE, SPRING, staggerDelay } from "../../ui/motion";
 import { toastError } from "../../ui/Toast";
 import { useOpenCount } from "../vault/useOpenCount";
+import { COFFEE } from "./links";
 import "./donate.css";
 
 const STORE = "https://www.roblox.com/games/102259086923102/Donation-Experience#!/store";
@@ -63,6 +64,7 @@ function Amounts({ textId, onClose }: { textId: string; onClose: () => void }) {
     <>
       <div className="dlg-body flex flex-col gap-3">
         <p id={textId} className="text-fg-2">{t("donate.text")}</p>
+        <p className="text-[13px] text-fg-3">{t("donate.perks")}</p>
         <div className="donate-grid" role="group" aria-label={t("donate.unit")} onKeyDown={keys}>
           {ROWS.map((row, r) => (
             <div key={r} className="donate-row">
@@ -96,17 +98,22 @@ function Amounts({ textId, onClose }: { textId: string; onClose: () => void }) {
       </div>
       <div className="dlg-foot items-center justify-between">
         <span className="text-[13px] text-fg-3">{t("donate.unit")}</span>
-        <Button
-          variant="ghost"
-          size="md"
-          iconEnd="external"
-          onClick={() => {
-            openUrl(STORE).catch(toastError);
-            onClose();
-          }}
-        >
-          {t("donate.store")}
-        </Button>
+        <span className="flex flex-wrap justify-end gap-2">
+          {[[COFFEE, "donate.coffee"], [STORE, "donate.store"]].map(([url, label]) => (
+            <Button
+              key={url}
+              variant="ghost"
+              size="md"
+              iconEnd="external"
+              onClick={() => {
+                openUrl(url).catch(toastError);
+                onClose();
+              }}
+            >
+              {t(label as Key)}
+            </Button>
+          ))}
+        </span>
       </div>
     </>
   );

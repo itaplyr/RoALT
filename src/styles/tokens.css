@@ -12,6 +12,7 @@
     --island: #141414;
     --island-inset: #222222; /* the open group's pill: one step up, as in the reference */
     --float: #161616; /* menus, dialogs, toasts, sheets */
+    --titlebar: transparent; /* the ground shows through, unless a custom look paints it */
     --thumb: #303030; /* segmented and tab thumbs: a neutral raised tile, not the accent */
     --hover: rgb(255 255 255 / 0.07);
     --press: rgb(255 255 255 / 0.11);
@@ -42,13 +43,14 @@
     --backdrop: rgb(0 0 0 / 0.6);
     --scrollbar: rgb(255 255 255 / 0.18);
 
-    /* Shape. Concentric: an inner corner is the outer one less the padding. */
-    --r-pill: 999px;
-    --r-xl: 22px;
-    --r-lg: 16px;
-    --r-md: 12px;
-    --r-sm: 10px;
-    --r-xs: 6px;
+    /* Shape. Concentric: an inner corner is the outer one less the padding. --round is Settings'
+       corners (src/app/theme.ts): 0 squares every corner, pills too; 2 doubles them. */
+    --r-pill: calc(999px * var(--round, 1));
+    --r-xl: calc(22px * var(--round, 1));
+    --r-lg: calc(16px * var(--round, 1));
+    --r-md: calc(12px * var(--round, 1));
+    --r-sm: calc(10px * var(--round, 1));
+    --r-xs: calc(6px * var(--round, 1));
     /* Control heights: default, dense, row actions, tags. */
     --h-lg: 40px;
     --h-md: 34px;

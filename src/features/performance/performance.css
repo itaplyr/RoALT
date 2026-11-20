@@ -1,28 +1,21 @@
-/* Performance: the preset cards and For this PC, then what its rows draw beyond the settings kit. */
+/* Settings' Performance area: the preset cards and For this PC, then what its rows draw beyond the settings kit. */
 @layer views {
-  .perf-page {
-    max-width: 1000px;
-    margin-inline: auto;
-  }
-  .perf-head {
-    margin-bottom: 24px;
-  }
+  /* What is in use now, then what this area is for. */
   .perf-title {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px 12px;
+    display: grid;
+    justify-items: start;
+    gap: 8px;
   }
 
-  /* The page's first job, above the rows: a preset, or this PC's own suggestions. */
+  /* The area's first job, above the rows: a preset. */
   .perf-top {
     display: grid;
     gap: 16px;
-    margin-bottom: 40px;
   }
+  /* 200px: the three cards stay in one row in Settings' column at the smallest window. */
   .perf-presets {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
     gap: 16px;
   }
   .preset {

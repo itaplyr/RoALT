@@ -95,14 +95,20 @@ fn parse_at(input: &str, depth: u8) -> ParsedInput {
     if let Some(name) = s.strip_prefix('@') {
         return if is_username(name) { username(name) } else { invalid(username_why()) };
     }
-    if is_username(s) {
-        return username(s);
-    }
     let Some((scheme, rest)) = s.split_once(':').filter(|(x, _)| is_scheme(x)) else {
+        // Bare words (e.g. a game title like "Brookhaven") are not usernames: require `@name`
+        // so typing a game name points to Browse games instead of following a stranger.
+        if !s.contains('.') && !s.contains('/') {
+            return invalid(tr!("To search for a game by name, use Browse games. To join a player, put @ before their username."));
+        }
         return web(&format!("https://{s}"), depth);
     };
     match scheme.to_ascii_lowercase().as_str() {
         "roblox" if rest.starts_with("//") => deeplink(&rest[2..]),
+        "roalt" if rest.starts_with("//") => {
+            let (path, raw) = rest[2..].split_once('?').unwrap_or((&rest[2..], ""));
+            roalt(path, &query(raw))
+        }
         "roblox-player" | "roblox-studio" | "roblox-studio-auth" => invalid(launch_uri_why()),
         "http" | "https" => web(s, depth),
         _ => invalid(not_roblox_why()),
@@ -116,6 +122,9 @@ fn web(s: &str, depth: u8) -> ParsedInput {
     let q = query(u.query().unwrap_or(""));
     if host == "ro.blox.com" {
         return apps_flyer(&q, depth);
+    }
+    if host == "roalt.dev" || host == "www.roalt.dev" {
+        return roalt(u.path(), &q);
     }
     if !WEB_HOSTS.contains(&host.as_str()) {
         return invalid(not_roblox_why());
@@ -162,6 +171,20 @@ fn deeplink(rest: &str) -> ParsedInput {
             .map_or_else(|| invalid(universe_why()), |universe_id| target(LaunchTarget::Universe { universe_id })),
         "navigation/profile" => q.get("userid").and_then(|u| id(u)).map_or_else(|| invalid(user_why()), follow),
         _ => unsupported(not_game_why()),
+    }
+}
+
+/// RoALT's own share links, `roalt://play?place=1&job=<uuid>` and `https://roalt.dev/play?...`:
+/// a public game or server only, never a private server's code.
+fn roalt(path: &str, q: &Query) -> ParsedInput {
+    if !path.trim_matches('/').eq_ignore_ascii_case("play") {
+        return unsupported(not_game_why());
+    }
+    let Some(place_id) = q.get("place").and_then(|p| id(p)) else { return invalid(place_why()) };
+    match q.get("job") {
+        None => place(place_id, None),
+        Some(j) if is_uuid(j) => target(LaunchTarget::Server { place_id, job_id: j.to_ascii_lowercase() }),
+        Some(_) => invalid(job_why()),
     }
 }
 
@@ -430,20 +453,51 @@ mod tests {
     }
 
     #[test]
+    fn roalt_links() {
+        let job = "8D5F1B3E-6A0C-4F7E-9B2D-1C3E5A7F9B0D";
+        let server = target(LaunchTarget::Server { place_id: 920587237, job_id: job.to_ascii_lowercase() });
+        let cases = [
+            ("roalt://play?place=920587237", place(920587237, None)),
+            ("roalt://play/?place=920587237", place(920587237, None)),
+            ("ROALT://Play?place=920587237&job=8D5F1B3E-6A0C-4F7E-9B2D-1C3E5A7F9B0D", server.clone()),
+            ("https://roalt.dev/play?place=920587237&job=8D5F1B3E-6A0C-4F7E-9B2D-1C3E5A7F9B0D", server.clone()),
+            ("roalt.dev/play/?place=920587237&utm=x", place(920587237, None)),
+            ("https://www.roalt.dev/play?place=1", place(1, None)),
+            ("roalt://play?place=0", invalid(place_why())),
+            ("roalt://play?place=x", invalid(place_why())),
+            ("roalt://play", invalid(place_why())),
+            ("roalt://play?place=1&job=nope", invalid(job_why())),
+            ("roalt://home?place=1", unsupported(not_game_why())),
+            ("https://roalt.dev/?place=1", unsupported(not_game_why())),
+            ("roalt:play?place=1", invalid(not_roblox_why())),
+            ("https://roalt.dev.evil.com/play?place=1", invalid(not_roblox_why())),
+            // Private servers never travel in a RoALT link.
+            ("roalt://play?place=1&linkCode=123", place(1, None)),
+        ];
+        for (input, want) in cases {
+            assert_eq!(parse(input), want, "{input}");
+        }
+    }
+
+    #[test]
     fn usernames() {
         let name = |n: &str| ParsedInput::Username { name: n.into() };
+        let bare_hint = invalid(tr!("To search for a game by name, use Browse games. To join a player, put @ before their username."));
         let cases = [
             ("@builderman", name("builderman")),
-            ("  builderman ", name("builderman")),
-            ("Roblox_Dev1", name("Roblox_Dev1")),
+            ("  @builderman ", name("builderman")),
+            ("@Roblox_Dev1", name("Roblox_Dev1")),
             ("@1234", name("1234")),
-            ("abc", name("abc")),
+            ("@abc", name("abc")),
             ("@ab", invalid(username_why())),
             ("@builder-man", invalid(username_why())),
             ("@", invalid(username_why())),
             ("123456", place(123456, None)),
-            ("ab", invalid(not_roblox_why())),
-            ("abcdefghijklmnopqrstu", invalid(not_roblox_why())),
+            // Bare words without `@` are rejected with a hint rather than treated as usernames.
+            ("Brookhaven", bare_hint.clone()),
+            ("builderman", bare_hint.clone()),
+            ("ab", bare_hint.clone()),
+            ("abcdefghijklmnopqrstu", bare_hint),
         ];
         for (input, want) in cases {
             assert_eq!(parse(input), want, "{input}");

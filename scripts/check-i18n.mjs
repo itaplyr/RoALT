@@ -8,7 +8,8 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const root = join(import.meta.dirname, "..");
-const LANGS = ["ar", "bs", "de", "es", "fil", "fr", "id", "ja", "ko", "pl", "pt", "ru", "sv", "th", "tr", "vi", "zh"];
+// Every catalog beside en.json: a language added there is checked without being listed here.
+const LANGS = readdirSync(join(root, "src", "i18n", "locales")).map((f) => f.replace(/\.json$/, "")).filter((l) => l !== "en").sort();
 const PLURAL = /_(zero|one|two|few|many|other)$/;
 const read = (p) => JSON.parse(readFileSync(join(root, p), "utf8"));
 const categories = (lang) => [...new Set(Array.from({ length: 200 }, (_, n) => new Intl.PluralRules(lang).select(n)))].sort();
@@ -39,9 +40,13 @@ if (process.argv.includes("--rust-keys")) {
 
 const problems = [];
 const warnings = [];
+// Genuine loanwords like "{amount} Robux" or "place {place}" stay below ~12 per language;
+// failing above 20 stops a half-translated catalog from slipping through CI silently.
+const MAX_UNTRANSLATED_PER_LANG = 20;
 
 for (const lang of LANGS) {
   const cats = categories(lang);
+  let langWarnings = 0;
 
   // UI
   const en = read("src/i18n/locales/en.json");
@@ -58,8 +63,14 @@ for (const lang of LANGS) {
     if (typeof got !== "string" || !got.trim()) problems.push(`${lang}.json: missing "${k}"`);
     else {
       if (marks(got) !== marks(v)) problems.push(`${lang}.json: "${k}" has ${marks(got) || "no marks"}, English has ${marks(v) || "none"}`);
-      if (got === v && /[a-z]{4,}.*\s.*[a-z]{4,}/.test(v)) warnings.push(`${lang}.json: "${k}" is still English`);
+      if (got === v && /[a-z]{4,}.*\s.*[a-z]{4,}/.test(v)) {
+        warnings.push(`${lang}.json: "${k}" is still English`);
+        langWarnings++;
+      }
     }
+  }
+  if (langWarnings > MAX_UNTRANSLATED_PER_LANG) {
+    problems.push(`${lang}.json: ${langWarnings} multi-word strings are still English (max ${MAX_UNTRANSLATED_PER_LANG})`);
   }
   for (const k of Object.keys(cat)) if (!want.has(k)) problems.push(`${lang}.json: extra key "${k}"`);
 

@@ -2,6 +2,7 @@ import { t } from "../../../i18n";
 import { Kbd } from "../../../ui/Bits";
 import { NumberField, OffOrNumberField, Segmented, Switch, TextField } from "../../../ui/controls";
 import { Select } from "../../../ui/Field";
+import { HotkeyField } from "../../../ui/HotkeyField";
 import { say, type Field } from "../registry";
 import { patchFor, valueOf } from "./patch";
 import { useRow } from "./rowError";
@@ -56,6 +57,8 @@ export function AutoControl() {
     case "text":
       // A refused save rejects, so the field puts the saved text back.
       return <TextField label={label} value={value as string} placeholder={t(c.placeholder)} className={WIDTH[c.size]} describedBy={describedBy} onCommit={(v) => put(v).then((s) => s ?? Promise.reject())} />;
+    case "hotkey":
+      return <HotkeyField label={label} value={value as string} describedBy={describedBy} onCommit={(v) => put(v).then((s) => s ?? Promise.reject())} />;
     case "shortcut":
       return <Kbd keys={c.combo} />;
     default:

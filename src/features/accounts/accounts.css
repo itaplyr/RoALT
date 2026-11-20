@@ -20,6 +20,30 @@
   th.acc-c-act {
     width: 112px;
   }
+  th.acc-c-extra {
+    width: 104px;
+  }
+  /* The optional columns (Columns menu): the first to go when the list gets narrow. */
+  .acc-c-extra {
+    display: none;
+  }
+  @container acc-table (width >= 720px) {
+    .acc-c-extra {
+      display: table-cell;
+    }
+  }
+  /* A header that sorts: its label is the button. */
+  .acc-sort {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+  }
+  .acc-sort:hover {
+    color: var(--fg);
+  }
   .acc-c-status,
   .acc-c-groups,
   .acc-handle {
@@ -203,12 +227,16 @@
     font-weight: 600;
     letter-spacing: -0.01em;
   }
+  /* One row at any panel width: tabs shrink and long labels end in "…" instead of wrapping. */
   .acc-tabs {
     display: flex;
+    flex-wrap: nowrap;
   }
   .acc-tabs .seg {
-    flex: 1 1 0;
+    flex: 1 1 auto;
+    min-width: 0;
     justify-content: center;
+    padding-inline: 8px;
   }
   .acc-sec {
     display: flex;

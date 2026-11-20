@@ -413,6 +413,12 @@
     max-width: 100%;
     padding-inline: 12px 38px;
   }
+  .fav-icon {
+    flex: none;
+    border-radius: 5px;
+    object-fit: cover;
+    background: var(--surface-2);
+  }
   .launch-fav-pick > svg {
     color: var(--fg-3);
     transition: color var(--dur-fast) var(--ease-out);

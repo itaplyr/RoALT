@@ -98,6 +98,27 @@ pub struct AccountSummary {
     pub main: bool,
     /// Its own FFlags (`launcher::flags`), used while `Settings.custom_flags_scope` is Account.
     pub custom_flags: BTreeMap<String, String>,
+    /// What was last set on one of its clients; its next client starts with it. None: nothing.
+    pub client_limits: Option<ClientPrefs>,
+    /// Its own performance profile: its clients get these settings instead of the ones in
+    /// Settings (`performance::overlay`). None: the ones in Settings.
+    pub profile: Option<crate::performance::Profile>,
+}
+
+/// What a running client was given by hand and its account keeps for the next one: its limits and
+/// whether anti-AFK presses keys in it.
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export)]
+pub struct ClientPrefs {
+    pub limits: Limits,
+    pub anti_afk: bool,
+}
+
+impl Default for ClientPrefs {
+    fn default() -> Self {
+        Self { limits: Limits::default(), anti_afk: true }
+    }
 }
 
 /// Partial update from the UI; `None` leaves a field as it is.
@@ -134,6 +155,13 @@ pub struct AccountPatch {
     /// Replaces the account's own FFlags (`launcher::flags::check` rules); empty: none.
     #[ts(optional)]
     pub custom_flags: Option<BTreeMap<String, String>>,
+    /// `Some(true)` forgets `client_limits`: its next client starts with the defaults.
+    #[ts(optional)]
+    pub clear_client_limits: Option<bool>,
+    /// Replaces the account's own performance profile (`performance::per_client` of it is kept);
+    /// an empty one removes it.
+    #[ts(optional)]
+    pub profile: Option<crate::performance::Profile>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
@@ -144,6 +172,26 @@ pub struct Group {
     pub name: String,
     pub color: Option<String>,
     pub sort_order: i64,
+    #[serde(default)]
+    pub defaults: GroupDefaults,
+}
+
+/// What a group gives its accounts where they set nothing themselves: the fields of an account's
+/// Overrides tab, and the limits and anti-AFK of a new client. None: nothing from this group. An
+/// account in several groups takes each from the first group, in the groups' order, that sets it
+/// (`storage::with_group_defaults`).
+#[derive(Serialize, Deserialize, TS, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export)]
+pub struct GroupDefaults {
+    /// 5..=360.
+    pub fps_cap: Option<u32>,
+    pub full_quality: Option<bool>,
+    pub launch_args: Option<String>,
+    pub discord_muted: Option<bool>,
+    pub allow_disconnect: Option<bool>,
+    /// For an account that keeps none of its own (`AccountSummary::client_limits`).
+    pub client: Option<ClientPrefs>,
 }
 
 /// Create (`id: None`) or rename / recolour a group.
@@ -156,6 +204,9 @@ pub struct GroupInput {
     pub name: String,
     #[ts(optional)]
     pub color: Option<String>,
+    /// None leaves the group's defaults as they are.
+    #[ts(optional)]
+    pub defaults: Option<GroupDefaults>,
 }
 
 /// Where launched clients' windows go (`instances::window::slot_rect`) once they reach a game.
@@ -195,6 +246,40 @@ pub enum Theme {
     #[serde(alias = "sakura")]
     Light,
     System,
+    /// The user's own colours (`Settings::look`), on its base.
+    Custom,
+}
+
+/// The theme a custom look is built on.
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum LookBase {
+    #[default]
+    Dark,
+    Light,
+}
+
+/// The user's own colours: part or token id (the UI's list) → `#rrggbb`. An id left out keeps the
+/// base's colour; the UI works out the shades in between and keeps text readable.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export)]
+pub struct Look {
+    pub base: LookBase,
+    pub colors: BTreeMap<String, String>,
+}
+
+/// When an animated background moves.
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum BackgroundMotion {
+    /// While RoALT's window has the focus; a still frame otherwise.
+    #[default]
+    Focused,
+    Always,
+    Never,
 }
 
 
@@ -215,13 +300,21 @@ pub enum Density {
 pub struct Settings {
     pub theme: Theme,
     pub tab_layout: TabLayout,
-    /// `#rrggbb`, or "" for the theme's own lime.
+    /// `#rrggbb`, or "" for the theme's own (monochrome).
     pub accent: String,
+    /// What `Theme::Custom` shows.
+    pub look: Look,
+    /// Corner roundness, % of the design's radii: one of `CORNERS`.
+    pub corners: u8,
     /// How much of the theme's background covers a custom background image, 0-95 %.
     pub background_dim: u8,
+    pub background_motion: BackgroundMotion,
     pub density: Density,
     /// Master-password mode only.
     pub auto_lock_minutes: u32,
+    /// Master-password mode only: lock when Windows locks or goes to sleep (`session`), unless
+    /// running clients hold the vault open (`vault_held_open`).
+    pub lock_on_session_lock: bool,
     pub clipboard_clear_seconds: u32,
     /// How long account info is reused before Roblox is asked again.
     pub cache_minutes: u32,
@@ -278,15 +371,36 @@ pub struct Settings {
     /// Install a new Roblox version on its own once no client runs and no launch or batch does
     /// (never over a bootstrapper; the installer is signature-checked as always).
     pub auto_update: bool,
+    /// While RoALT opens Roblox's links: the website's Play button fills in Play, where the
+    /// account is picked, instead of starting the client as the browser's account.
+    pub ask_browser_links: bool,
     /// Ask GitHub for a newer RoALT at start and every 6 hours (`self_update`); it is offered,
     /// never installed without a click.
     pub self_update: bool,
     /// Discord rich presence through the Discord app on this PC (`rpc`): "Playing RoALT" with
     /// the game and how many alts run.
     pub discord_presence: bool,
-    /// Ping RoALT's online counter every 2 minutes with a random id made once per launch, and
+    /// What Discord rich presence shows (`rpc`): game name, alt count, elapsed timer, buttons,
+    /// and optional custom lines.
+    pub discord_rpc: DiscordRpc,
+    /// Ping RoALT's online counter every few minutes (it says how often) with a random id made once per launch, and
     /// show how many people use RoALT beside the Discord button (`online`). Off: nothing is sent.
     pub online_count: bool,
+    /// Restart each client in a game once it has run this many hours (0: off, else 1..=168): long
+    /// runs leak memory. Never the clients of Full quality accounts or the one in front.
+    pub restart_every_h: u32,
+    /// Close each client once its account's run has lasted this many hours (0: off, else 1..=168);
+    /// a rejoin or restart goes on with the same run. Same exceptions.
+    pub close_after_h: u32,
+    /// Home's News tab: RoALT's releases on GitHub, the Roblox DevForum and Roblox's newsroom, every
+    /// 30 minutes while shown (`news`). Off: none of them is asked.
+    pub news: bool,
+    /// Show the sponsor's card in Home's News (`extras`, read from roalt.dev). Off: roalt.dev isn't
+    /// asked for it (Settings › About still reads the supporters' names).
+    pub show_sponsor: bool,
+    /// Check every account's sign-in with Roblox by itself, 90 s after start and every 6 hours
+    /// (`watch`), so a dead one is known before a launch finds it. Off: only when asked.
+    pub sign_in_watch: bool,
     /// While counting an account's limiteds, download Rolimons' public item list (`rolimons`;
     /// api.rolimons.com, at most every 30 minutes) and add its value, demand and trend. No user id,
     /// name or cookie is sent. Off by default: Rolimons isn't Roblox.
@@ -297,6 +411,11 @@ pub struct Settings {
     pub minimize_on_launch: bool,
     /// System-wide key combination for Kill all, like "Ctrl+Shift+F12"; "" for none.
     pub panic_hotkey: String,
+    /// System-wide keys (`hotkeys`), "" for none: show RoALT or hide it to the tray; tile the
+    /// clients' windows; minimize them all.
+    pub toggle_hotkey: String,
+    pub tile_hotkey: String,
+    pub minimize_hotkey: String,
     /// Delete old or huge Roblox client logs at start and every hour (`logwatch::clean`).
     pub clean_logs: bool,
     /// FPS cap given to each client a launch starts (Roblox's own Maximum Frame Rate,
@@ -314,7 +433,7 @@ pub struct Settings {
     /// Whose FFlags a launch writes: `custom_flags`, or the account's own.
     pub custom_flags_scope: FlagScope,
     /// Browse refuses anything that spends Robux (free items still work) and the Robux, Premium and
-    /// billing pages (`browse`); RoALT's own private server purchase is refused too. On by default.
+    /// billing pages (`browse`). On by default.
     pub lock_purchases: bool,
     /// Width and height "Make it tiny" and "Tile tiny windows" use.
     pub micro_width: u32,
@@ -334,6 +453,14 @@ pub struct Settings {
     pub allow_public_networks: bool,
     /// UI and message language (`i18n::LANGS`), or "" to follow Windows' display language.
     pub language: String,
+    /// Launches start clients with the mods that are on (`mods`). On by default; nothing is
+    /// applied until a mod is imported.
+    pub mods_on: bool,
+    /// The user has read what importing someone else's mod means (asked before the first import).
+    pub mods_ack: bool,
+    /// The first-run setup was finished or skipped (the UI shows it while this is off and there
+    /// are no accounts).
+    pub onboarded: bool,
 }
 
 /// The network RoALT runs on (`network`). Never its name: streamers show RoALT on screen.
@@ -451,6 +578,50 @@ impl Default for AntiAfk {
 }
 
 
+/// What Discord rich presence shows on the user's profile (`rpc`).
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export)]
+pub struct DiscordRpc {
+    /// Show the current game's title (off: generic "Playing Roblox").
+    pub show_game: bool,
+    /// Show how many alts are running.
+    pub show_count: bool,
+    /// Show the elapsed timer.
+    pub show_elapsed: bool,
+    /// Show the "Get RoALT" and "Join Discord" buttons.
+    pub show_buttons: bool,
+    /// Optional custom top line (`details`, up to 128 chars; supports `{game}` and `{count}`).
+    pub custom_details: String,
+    /// Optional custom bottom line (`state`, up to 128 chars; supports `{game}` and `{count}`).
+    pub custom_state: String,
+}
+
+impl Default for DiscordRpc {
+    fn default() -> Self {
+        Self {
+            show_game: true,
+            show_count: true,
+            show_elapsed: true,
+            show_buttons: true,
+            custom_details: String::new(),
+            custom_state: String::new(),
+        }
+    }
+}
+
+/// Which Discord alerts mention `DiscordEvents.ping`.
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum PingLevel {
+    /// Only urgent problems (crashes, gave up, breaker, anti-AFK blocked).
+    #[default]
+    Urgent,
+    /// Also warnings (disconnects, hangs, sign-in trouble, PC alerts, batch failures).
+    Warnings,
+}
+
 /// Events sent to the Discord webhook (`discord`), each on or off.
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", default)]
@@ -467,15 +638,43 @@ pub struct DiscordEvents {
     pub batch_done: bool,
     /// A client first got into a game (not after a rejoin, restart or reconnect).
     pub launch: bool,
+    /// An account's saved sign-in stopped working, or Roblox refused a client's sign-in, wants a
+    /// human check, or the client is signed in as another account.
+    pub sign_in: bool,
+    /// A client is held to the memory throttle's CPU cap.
+    pub throttle: bool,
+    /// A newer RoALT is out.
+    pub update: bool,
+    /// With clients running: the PC's memory stayed at 90 % or more for a minute, or the clients'
+    /// GPU use at 95 % or more for five (`discord::Sustained`).
+    pub pc: bool,
     /// A summary of the running clients every this many minutes (0: off, else 5..=1440).
     pub status_every_min: u32,
     /// Who bad alerts mention, as `<@id>` (a user) or `<@&id>` (a role); "" for no one.
     pub ping: String,
+    /// Which severities fire `ping`: only urgent ones (default), or warnings too.
+    pub ping_level: PingLevel,
 }
 
 impl Default for DiscordEvents {
     fn default() -> Self {
-        Self { crash: true, hang: true, mem_restart: true, disconnect: true, restart: true, breaker: true, batch_done: true, launch: false, status_every_min: 0, ping: String::new() }
+        Self {
+            crash: true,
+            hang: true,
+            mem_restart: true,
+            disconnect: true,
+            restart: true,
+            breaker: true,
+            batch_done: true,
+            launch: false,
+            sign_in: true,
+            throttle: false,
+            update: true,
+            pc: false,
+            status_every_min: 0,
+            ping: String::new(),
+            ping_level: PingLevel::default(),
+        }
     }
 }
 
@@ -511,9 +710,13 @@ impl Default for Settings {
             theme: Theme::Dark,
             tab_layout: TabLayout::Top,
             accent: String::new(),
+            look: Look::default(),
+            corners: 100,
             background_dim: 60,
+            background_motion: BackgroundMotion::Focused,
             density: Density::Detailed,
             auto_lock_minutes: 15,
+            lock_on_session_lock: true,
             clipboard_clear_seconds: 30,
             cache_minutes: 10,
             multi_instance: true,
@@ -540,12 +743,22 @@ impl Default for Settings {
             anti_afk: AntiAfk::default(),
             discord: DiscordEvents::default(),
             auto_update: false,
+            ask_browser_links: false,
             self_update: true,
             discord_presence: true,
+            discord_rpc: DiscordRpc::default(),
             online_count: true,
+            restart_every_h: 0,
+            close_after_h: 0,
+            news: true,
+            show_sponsor: true,
+            sign_in_watch: true,
             rolimons_values: false,
             minimize_on_launch: false,
 panic_hotkey: String::new(),
+toggle_hotkey: String::new(),
+tile_hotkey: String::new(),
+minimize_hotkey: String::new(),
             clean_logs: false,
             fps_cap: 0,
             low_graphics: true,
@@ -563,6 +776,9 @@ panic_hotkey: String::new(),
             keep_running_on_close: false,
             allow_public_networks: true,
             language: String::new(),
+            mods_on: true,
+            mods_ack: false,
+            onboarded: false,
         }
     }
 }
@@ -578,11 +794,19 @@ pub struct SettingsPatch {
     #[ts(optional)]
     pub accent: Option<String>,
     #[ts(optional)]
+    pub look: Option<Look>,
+    #[ts(optional)]
+    pub corners: Option<u8>,
+    #[ts(optional)]
     pub background_dim: Option<u8>,
+    #[ts(optional)]
+    pub background_motion: Option<BackgroundMotion>,
     #[ts(optional)]
     pub density: Option<Density>,
     #[ts(optional)]
     pub auto_lock_minutes: Option<u32>,
+    #[ts(optional)]
+    pub lock_on_session_lock: Option<bool>,
     #[ts(optional)]
     pub clipboard_clear_seconds: Option<u32>,
     #[ts(optional)]
@@ -632,17 +856,37 @@ pub struct SettingsPatch {
     #[ts(optional)]
     pub auto_update: Option<bool>,
     #[ts(optional)]
+    pub ask_browser_links: Option<bool>,
+    #[ts(optional)]
     pub self_update: Option<bool>,
     #[ts(optional)]
     pub discord_presence: Option<bool>,
     #[ts(optional)]
+    pub discord_rpc: Option<DiscordRpc>,
+    #[ts(optional)]
     pub online_count: Option<bool>,
+    #[ts(optional)]
+    pub restart_every_h: Option<u32>,
+    #[ts(optional)]
+    pub close_after_h: Option<u32>,
+    #[ts(optional)]
+    pub news: Option<bool>,
+    #[ts(optional)]
+    pub show_sponsor: Option<bool>,
+    #[ts(optional)]
+    pub sign_in_watch: Option<bool>,
     #[ts(optional)]
     pub rolimons_values: Option<bool>,
     #[ts(optional)]
     pub minimize_on_launch: Option<bool>,
     #[ts(optional)]
     pub panic_hotkey: Option<String>,
+    #[ts(optional)]
+    pub toggle_hotkey: Option<String>,
+    #[ts(optional)]
+    pub tile_hotkey: Option<String>,
+    #[ts(optional)]
+    pub minimize_hotkey: Option<String>,
     #[ts(optional)]
     pub clean_logs: Option<bool>,
     #[ts(optional)]
@@ -677,6 +921,12 @@ pub struct SettingsPatch {
     pub allow_public_networks: Option<bool>,
     #[ts(optional)]
     pub language: Option<String>,
+    #[ts(optional)]
+    pub mods_on: Option<bool>,
+    #[ts(optional)]
+    pub mods_ack: Option<bool>,
+    #[ts(optional)]
+    pub onboarded: Option<bool>,
 }
 
 /// What a Roblox log clean-up deleted (`logs_clean`).
@@ -809,6 +1059,11 @@ pub struct ImportReport {
     pub skipped: u32,
     /// Cookies Roblox refused, or entries without one.
     pub failed: u32,
+    /// A backup's settings were asked for and it had some: whether they were applied.
+    pub settings: Option<bool>,
+    /// Secret-free description of each failed entry (e.g. `"Cookie #3: ..."` or `"user: ..."`).
+    #[serde(default)]
+    pub failures: Vec<String>,
 }
 
 /// What "Export cookies" wrote (`cookie_export`).
@@ -885,8 +1140,24 @@ pub struct Favourite {
     pub account_ids: Vec<i64>,
     pub in_tray: bool,
     pub sort_order: i64,
-    /// Unix ms.
-    pub last_used_at: Option<i64>,
+    pub options: FavouriteOptions,
+}
+
+/// How a favourite launches besides where: what a one-click, tray or hotkey launch uses, and what
+/// picking it in Play sets.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export)]
+pub struct FavouriteOptions {
+    /// How several accounts share or spread over servers; None: as a favourite always did (the
+    /// first account picks the server from the tray, each on its own from Home).
+    pub same_server: Option<SameServer>,
+    /// The FPS cap of its launches (5..=360); None: each account's own, else the default.
+    pub fps_cap: Option<u32>,
+    /// Groups whose accounts launch with it too, besides `account_ids`: whoever is in them then.
+    pub group_ids: Vec<i64>,
+    /// A system-wide key combination that launches it, like "Ctrl+Alt+1"; "" for none.
+    pub hotkey: String,
 }
 
 #[derive(Deserialize, TS, Clone, Debug)]
@@ -899,6 +1170,9 @@ pub struct FavouriteInput {
     pub target: LaunchTarget,
     pub account_ids: Vec<i64>,
     pub in_tray: bool,
+    /// Left out: an edit keeps what the favourite has, a new one gets the defaults.
+    #[ts(optional)]
+    pub options: Option<FavouriteOptions>,
 }
 
 /// Someone an account can join: a friend online on Roblox, or another stored account.
@@ -1014,6 +1288,10 @@ pub struct Instance {
     /// What it really has now, settings' limits included (`limits` is only what was set on it).
     #[serde(default, skip_deserializing)]
     pub applied_limits: Limits,
+    /// The user took control of it ("Take control"): until it closes or is given back, RoALT doesn't
+    /// rejoin, restart, close, press anti-AFK keys in, limit or lay it out.
+    #[serde(default)]
+    pub held: bool,
 }
 
 /// What Windows holds one client to (instances::limits). Lasts as long as the client.
@@ -1137,8 +1415,6 @@ pub struct BulkRequest {
     /// Wait between launches; clamped to 2 000..=60 000, ±1 s jitter is added.
     pub delay_ms: u32,
     pub same_server: SameServer,
-    /// Marked as used once the first client starts.
-    pub favourite_id: Option<i64>,
     /// FPS cap for each of these launches, instead of each account's and the default; None:
     /// those.
     #[serde(default)]
@@ -1284,76 +1560,6 @@ pub struct PrivateServerPage {
     pub join_restricted: bool,
 }
 
-/// A private server as its owner manages it (`GET /v1/vip-servers/{id}`), without its join
-/// secrets. Missing fields read as off / empty.
-#[derive(Serialize, TS, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
-#[ts(export)]
-pub struct PrivateServerSettings {
-    pub vip_server_id: i64,
-    pub name: String,
-    /// The server is on (anyone allowed can join).
-    pub active: bool,
-    pub friends_allowed: bool,
-    pub allowed_users: Vec<AllowedUser>,
-    /// Auto-renew is on: Robux are spent each month.
-    pub renews: bool,
-    pub expired: bool,
-    /// When the paid time ends (ISO 8601), when Roblox says.
-    pub expires: Option<String>,
-    /// Robux a month, when Roblox says.
-    pub price: Option<i64>,
-}
-
-/// A player the owner let into a private server.
-#[derive(Serialize, TS, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
-#[ts(export)]
-pub struct AllowedUser {
-    pub user_id: i64,
-    pub username: String,
-    pub display_name: String,
-}
-
-/// What `private_server_update` changes; unset (and empty) parts are not sent.
-#[derive(Deserialize, TS, Clone, Debug, Default)]
-#[serde(rename_all = "camelCase")]
-#[ts(export)]
-pub struct PrivateServerPatch {
-    /// Trimmed; an empty name is refused.
-    #[ts(optional)]
-    pub name: Option<String>,
-    #[ts(optional)]
-    pub active: Option<bool>,
-    /// `Some(true)` makes a new invite link; the old one stops working.
-    #[ts(optional)]
-    pub new_join_code: Option<bool>,
-    #[ts(optional)]
-    pub friends_allowed: Option<bool>,
-    /// User ids.
-    #[ts(optional)]
-    pub users_to_add: Option<Vec<i64>>,
-    /// User ids.
-    #[ts(optional)]
-    pub users_to_remove: Option<Vec<i64>>,
-}
-
-/// Buying a private server (spends Robux). Roblox refuses, charging nothing, when
-/// `expected_price` isn't the real price.
-#[derive(Deserialize, TS, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(export)]
-pub struct PrivateServerBuy {
-    /// The paying account.
-    pub account_id: i64,
-    pub universe_id: i64,
-    /// Trimmed; an empty name is refused.
-    pub name: String,
-    pub expected_price: i64,
-    /// A UUID made once per buy dialog, so a repeated click can't buy twice.
-    pub idempotency_key: String,
-}
-
 // ---------- M7 ----------
 
 /// The Roblox client RoALT would start.
@@ -1373,6 +1579,32 @@ pub struct RobloxClient {
     pub latest: Option<String>,
     /// Both versions are known and differ (`launcher::update::outdated`).
     pub outdated: bool,
+}
+
+/// What a default Roblox launcher is (`launcher::links`).
+#[derive(Serialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+#[allow(dead_code)]
+pub enum LauncherKind {
+    Roblox,
+    /// Bloxstrap, Fishstrap and the like: RoALT launches through it.
+    Bootstrapper,
+    /// RoALT opens Roblox's links itself.
+    Roalt,
+}
+
+/// A program that can open Roblox's links (`roblox-player:` and `roblox:`).
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RobloxLauncher {
+    pub kind: LauncherKind,
+    /// "Roblox", "RoALT", or the bootstrapper's file name ("Bloxstrap").
+    pub name: String,
+    pub path: String,
+    /// It opens the links now.
+    pub current: bool,
 }
 
 /// RoALT's own version and a newer published release, once found (`self_update`).
@@ -1415,12 +1647,31 @@ pub struct NewsItem {
 }
 
 /// Newest first; a source that couldn't be read is left out and named in `failed`.
-#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[derive(Serialize, TS, Clone, Debug, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct News {
     pub items: Vec<NewsItem>,
     pub failed: Vec<NewsSource>,
+}
+
+/// Who sponsors RoALT now (`extras`): plain text. Its link is RoALT's own, never taken from here.
+#[derive(Serialize, TS, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Sponsor {
+    pub name: String,
+    pub text: String,
+}
+
+/// What roalt.dev says beyond the app itself (`extras`); empty when it couldn't be read.
+#[derive(Serialize, TS, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Extras {
+    pub sponsor: Option<Sponsor>,
+    /// The names of those who support RoALT, as listed.
+    pub supporters: Vec<String>,
 }
 
 /// Where `roblox_install` is (`roblox://install`).
@@ -1444,8 +1695,6 @@ pub enum InstallProgress {
 #[ts(export)]
 pub struct DataDir {
     pub path: String,
-    /// `%LOCALAPPDATA%\RoALT` (not moved).
-    pub default: bool,
     /// Set for test runs (`ROALT_DATA_DIR`): moving is not offered.
     pub overridden: bool,
 }
@@ -1463,6 +1712,8 @@ pub enum CrashKind {
     Hang,
     /// RoALT restarted it: its memory stayed over `Settings.mem_restart_mb`.
     Mem,
+    /// RoALT restarted it: it had run for `Settings.restart_every_h`.
+    Timed,
 }
 
 impl CrashKind {
@@ -1472,12 +1723,14 @@ impl CrashKind {
             Self::Disconnect => "disconnect",
             Self::Hang => "hang",
             Self::Mem => "mem",
+            Self::Timed => "timed",
         }
     }
 
     pub fn parse(s: &str) -> Self {
         match s {
             "disconnect" => Self::Disconnect,
+            "timed" => Self::Timed,
             "hang" => Self::Hang,
             "mem" => Self::Mem,
             "crash" => Self::Crash,
@@ -1700,6 +1953,9 @@ pub struct LimitedItem {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct RolimonsItem {
+    pub name: String,
+    /// Robux, Rolimons' copy of Roblox's RAP; None: none.
+    pub rap: Option<i64>,
     /// Robux; None: not valued.
     pub value: Option<i64>,
     /// 0 Terrible .. 4 Amazing.
@@ -1711,6 +1967,17 @@ pub struct RolimonsItem {
     pub hyped: bool,
     pub rare: bool,
     pub acronym: Option<String>,
+}
+
+/// Browse › Limiteds (`market_items`): every limited Rolimons lists.
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Market {
+    /// Unix ms the list was downloaded; None: there is none (Rolimons couldn't be reached).
+    pub fetched_at: Option<i64>,
+    /// Asset id and what Rolimons says about it.
+    pub items: Vec<(i64, RolimonsItem)>,
 }
 
 /// One account's time in one place (`Db::playtime`), from the clients RoALT followed.
@@ -1741,6 +2008,82 @@ pub struct ServerVisit {
     pub joined_at: i64,
 }
 
+/// A server any account's client reached, once however many accounts were in it (`Db::recent_servers`).
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PlayedServer {
+    pub place_id: i64,
+    pub job_id: String,
+    /// As `ServerVisit::private`: listed only.
+    pub private: bool,
+    /// The newest visit, Unix ms.
+    pub joined_at: i64,
+    /// The accounts that were in it.
+    pub account_ids: Vec<i64>,
+}
+
+/// An account's time in games on one local day (`Db::playtime_days`; the last 90 days are kept).
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PlaytimeDay {
+    pub account_id: i64,
+    /// The local date as YYYYMMDD.
+    pub day: i32,
+    pub ms: i64,
+}
+
+/// Which of an account's Robux transactions `robux_transactions` reads.
+#[derive(Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum RobuxKind {
+    Purchase,
+    Sale,
+    GroupPayout,
+    PremiumStipend,
+}
+
+impl RobuxKind {
+    /// Its name in Roblox's URL.
+    pub fn path(self) -> &'static str {
+        match self {
+            Self::Purchase => "Purchase",
+            Self::Sale => "Sale",
+            Self::GroupPayout => "GroupPayout",
+            Self::PremiumStipend => "PremiumStipend",
+        }
+    }
+}
+
+/// One line of an account's Robux history (`robux_transactions`).
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RobuxTransaction {
+    /// ISO 8601, as Roblox gave it.
+    pub created: Option<String>,
+    /// Robux: negative when spent.
+    pub amount: i64,
+    /// What it was for (an item, a pass, a game); "" when Roblox named nothing.
+    pub what: String,
+    /// The other side (a player, a group, Roblox); "" when none.
+    pub who: String,
+    pub pending: bool,
+}
+
+/// An account's Robux over its last month (`robux_totals`); a number Roblox left out is none.
+#[derive(Serialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RobuxTotals {
+    pub incoming: Option<i64>,
+    /// Negative, as Roblox sends it.
+    pub outgoing: Option<i64>,
+    pub pending: Option<i64>,
+}
+
 /// One client that crashed, was disconnected or hung (the newest 200 are kept).
 #[derive(Serialize, TS, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -1760,6 +2103,9 @@ pub struct Crash {
     pub place_id: Option<i64>,
     /// Its client log was found ("Open log"); the path itself stays in the backend.
     pub has_log: bool,
+    /// What the autopsy made of it (`autopsy::Verdict::code`); none before it is done, and for an
+    /// end RoALT made itself.
+    pub verdict: Option<String>,
 }
 
 /// A message for the user from the backend (`app://notice`), shown as a toast.

@@ -1,17 +1,21 @@
 import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import type { AccountSummary, GameServer, PrivateServer } from "../../api";
+import type { GameServer, PrivateServer } from "../../api";
+import { useAccounts, useInstances } from "../../data";
 import { Skeleton } from "../../ui/Bits";
 import { IconButton } from "../../ui/Button";
 import { riseIn, STAGGER, useFreshItems } from "../../ui/motion";
 import { StatusPill } from "../../ui/Status";
 import { toast, toastError } from "../../ui/Toast";
-import { fmtNum, isRtl, t } from "../../i18n";
+import { fmtList, fmtNum, isRtl, t } from "../../i18n";
+import { accountName } from "../accounts/shared";
+import { isRunning } from "../launch/Running";
+import { copyRoaltLink } from "../launch/target";
+import { NONE } from "../monitor/format";
 
 export type Pick = { kind: "public"; id: string } | { kind: "private"; id: number } | null;
 
 export const short = (id: string) => `${id.slice(0, 8)}…${id.slice(-4)}`;
-const NONE = "—";
 const copyJob = (id: string) => writeText(id).then(() => toast(t("servers.jobCopied")), toastError);
 
 /** Rows that arrive (the first page, the next one, a refresh) rise in 12 ms apart, capped at the
@@ -64,10 +68,24 @@ function Players({ playing, max }: { playing: number; max: number }) {
   );
 }
 
+/** Which servers the user's own running clients are in: job id to those accounts' names. */
+function useMine() {
+  const instances = useInstances().data ?? [];
+  const names = new Map((useAccounts().data ?? []).map((a) => [a.id, accountName(a)]));
+  const mine = new Map<string, string[]>();
+  for (const i of instances) {
+    if (!isRunning(i) || !i.jobId) continue;
+    mine.set(i.jobId, [...(mine.get(i.jobId) ?? []), names.get(i.accountId) ?? String(i.accountId)]);
+  }
+  return mine;
+}
+
 /** `servers` null: the first page is on its way. `fastest`: the list is in Roblox's best-ping order
- * for the asking account, so row 1 is fastest. */
-export function PublicTable({ servers, pick, fastest, radio, onPick }: {
+ * for the asking account, so row 1 is fastest. A server one of the user's clients is in says so. */
+export function PublicTable({ servers, placeId, pick, fastest, radio, onPick }: {
   servers: GameServer[] | null;
+  /** The game the servers are of: their RoALT links need it. */
+  placeId: number | null;
   pick: string | null;
   fastest: boolean;
   /** The radio group's name, one per browser. */
@@ -75,6 +93,7 @@ export function PublicTable({ servers, pick, fastest, radio, onPick }: {
   onPick: (id: string) => void;
 }) {
   const body = useRowRise(servers?.map((s) => s.id) ?? []);
+  const mine = useMine();
   if (servers?.length === 0) return null;
   return (
     <table className="w-full border-collapse" aria-label={t("servers.publicServers")}>
@@ -86,13 +105,14 @@ export function PublicTable({ servers, pick, fastest, radio, onPick }: {
           <th className="srv-opt text-end">{t("servers.friends")}</th>
           <th className="text-end" data-tip={t("servers.pingTip")}>{t("servers.ping")}</th>
           <th className="srv-opt text-end pe-4">FPS</th>
-          <th className="w-14"><span className="sr-only">{t("servers.actions")}</span></th>
+          <th className="w-20"><span className="sr-only">{t("servers.actions")}</span></th>
         </tr>
       </thead>
       <tbody ref={body}>
         {servers?.map((s, i) => {
           const id = short(s.id);
           const on = pick === s.id;
+          const here = mine.get(s.id);
           return (
             <tr key={s.id} data-id={s.id} className="row h-11 cursor-pointer" data-selected={on || undefined} onClick={() => onPick(s.id)}>
               <td className="ps-5">
@@ -101,22 +121,40 @@ export function PublicTable({ servers, pick, fastest, radio, onPick }: {
               <td className="whitespace-nowrap">
                 <span className="mono text-xs">{id}</span>
                 {fastest && i === 0 && <span className="tag ms-2">{t("servers.fastest")}</span>}
+                {here && (
+                  <span className="tag ms-2" data-tip={fmtList(here)}>
+                    {t("servers.yours")}{here.length > 1 && ` ×${fmtNum(here.length)}`}
+                    <span className="sr-only">: {fmtList(here)}</span>
+                  </span>
+                )}
               </td>
               <td><Players playing={s.playing} max={s.maxPlayers} /></td>
               <td className="srv-opt mono text-xs text-end">{s.friendCount ?? NONE}</td>
               <td className="mono text-xs text-end">{s.ping === null ? NONE : t("servers.pingMs", { ms: s.ping })}</td>
               <td className="srv-opt mono text-xs text-end pe-4">{s.fps === null ? NONE : fmtNum(s.fps, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</td>
               <td className="pe-3">
-                <IconButton
-                  icon="copy"
-                  size="sm"
-                  className="ms-auto"
-                  label={t("servers.copyJobIdFor", { id })}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void copyJob(s.id);
-                  }}
-                />
+                <span className="flex justify-end">
+                  {placeId !== null && (
+                    <IconButton
+                      icon="link"
+                      size="sm"
+                      label={t("share.copyLinkFor", { id })}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        copyRoaltLink({ kind: "server", placeId, jobId: s.id });
+                      }}
+                    />
+                  )}
+                  <IconButton
+                    icon="copy"
+                    size="sm"
+                    label={t("servers.copyJobIdFor", { id })}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void copyJob(s.id);
+                    }}
+                  />
+                </span>
               </td>
             </tr>
           );
@@ -136,16 +174,13 @@ export function PublicTable({ servers, pick, fastest, radio, onPick }: {
   );
 }
 
-/** Access codes stay out of the UI: a row only says whether this account can join. Servers owned by
- *  one of `owners` (valid vault accounts by userId) get a gear that manages them as that owner. */
-export function PrivateTable({ servers, pick, radio, onPick, owners, onManage }: {
+/** Access codes stay out of the UI: a row only says whether this account can join. */
+export function PrivateTable({ servers, pick, radio, onPick }: {
   /** Null: the first page is on its way. */
   servers: PrivateServer[] | null;
   pick: number | null;
   radio: string;
   onPick: (id: number) => void;
-  owners: Map<number, AccountSummary>;
-  onManage: (s: PrivateServer, owner: AccountSummary) => void;
 }) {
   const body = useRowRise(servers?.map((s) => s.vipServerId) ?? []);
   if (servers?.length === 0) return null;
@@ -157,8 +192,7 @@ export function PrivateTable({ servers, pick, radio, onPick, owners, onManage }:
           <th>{t("servers.name")}</th>
           <th className="srv-opt">{t("servers.owner")}</th>
           <th className="w-[26%]">{t("servers.players")}</th>
-          <th className="text-end">{t("servers.access")}</th>
-          <th className="w-14"><span className="sr-only">{t("servers.actions")}</span></th>
+          <th className="text-end pe-5">{t("servers.access")}</th>
         </tr>
       </thead>
       <tbody ref={body}>
@@ -166,7 +200,6 @@ export function PrivateTable({ servers, pick, radio, onPick, owners, onManage }:
           const name = s.name || t("servers.unnamed");
           const can = s.accessCode !== null;
           const on = pick === s.vipServerId;
-          const owner = s.ownerId === null ? undefined : owners.get(s.ownerId);
           return (
             <tr
               key={s.vipServerId}
@@ -187,29 +220,12 @@ export function PrivateTable({ servers, pick, radio, onPick, owners, onManage }:
                 />
               </td>
               <td className="pe-3 max-w-0">
-                <span className="flex items-center gap-2 min-w-0">
-                  <span className="truncate" title={name}>{name}</span>
-                  {owner && <span className="tag">{t("servers.yours")}</span>}
-                </span>
+                <span className="block truncate" title={name}>{name}</span>
               </td>
               <td className="srv-opt pe-3 max-w-0 truncate text-fg-2">{s.ownerName ? `@${s.ownerName}` : NONE}</td>
               <td><Players playing={s.playing} max={s.maxPlayers} /></td>
-              <td className="text-end">
+              <td className="text-end pe-5">
                 <StatusPill tone={can ? "ok" : "neutral"} label={can ? t("servers.joinable") : t("servers.noAccess")} />
-              </td>
-              <td className="pe-3">
-                {owner && (
-                  <IconButton
-                    icon="settings"
-                    size="sm"
-                    className="ms-auto"
-                    label={t("servers.manageName", { name })}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onManage(s, owner);
-                    }}
-                  />
-                )}
               </td>
             </tr>
           );
@@ -219,8 +235,7 @@ export function PrivateTable({ servers, pick, radio, onPick, owners, onManage }:
               <td><Skeleton width={120} /></td>
               <td className="srv-opt"><Skeleton width={84} /></td>
               <td>{SEATS_GHOST}</td>
-              <td><Skeleton width={76} height={22} radius={999} className="ms-auto" /></td>
-              <td />
+              <td className="pe-5"><Skeleton width={76} height={22} radius={999} className="ms-auto" /></td>
             </>,
           )}
       </tbody>

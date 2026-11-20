@@ -136,15 +136,14 @@ export function DialogSteps({ step, direction = 1, children }: { step: string | 
       first.current = false;
       return;
     }
-    // The arriving step only: under popLayout the leaving one is still in the DOM, before it.
-    const id = requestAnimationFrame(() => ref.current?.lastElementChild?.querySelector<HTMLElement>("[data-autofocus]")?.focus());
-    return () => cancelAnimationFrame(id);
-  }, [step]);
+    const id = setTimeout(() => ref.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus(), reduced ? 0 : DUR.exit + 30);
+    return () => clearTimeout(id);
+  }, [step, reduced]);
   const x = reduced ? 0 : 18 * direction * (isRtl() ? -1 : 1);
   return (
     <Morph axis="height" transition={SPRING.size}>
-      <div ref={ref} style={{ position: "relative" }}>
-        <AnimatePresence mode="popLayout" initial={false}>
+      <div ref={ref} style={{ position: "relative", overflowX: "clip" }}>
+        <AnimatePresence mode="wait" initial={false}>
           <motion.div
             key={step}
             initial={{ opacity: 0, x }}

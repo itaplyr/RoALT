@@ -16,7 +16,8 @@ export const SHORTCUTS: readonly Shortcut[] = [
   go("monitor", "settings.shortcut.monitor"),
   go("discord", "settings.shortcut.discord"),
   go("debug", "settings.shortcut.debug"),
-  go("performance", "settings.shortcut.performance"),
+  // Settings' Performance area (once its own view): the shell's key handler opens it.
+  { id: "performance", label: "settings.shortcut.performance", combo: "Ctrl+9" },
   { id: "add", label: "settings.shortcut.add", combo: "Ctrl+N" },
   { id: "find", label: "settings.shortcut.filter", combo: "Ctrl+F" },
   { id: "selectAll", label: "settings.shortcut.selectAll", combo: "Ctrl+A" },

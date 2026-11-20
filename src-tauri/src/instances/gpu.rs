@@ -111,6 +111,25 @@ impl Gpu {
     }
 }
 
+/// The graphics card with the most dedicated video memory, and that memory in MB; software
+/// renderers left out. None when Windows lists none.
+pub fn adapter() -> Option<(String, f64)> {
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIFactory1};
+    // SAFETY: plain COM calls on interfaces this function owns; the loop ends at the first index Windows refuses.
+    unsafe {
+        let factory: IDXGIFactory1 = CreateDXGIFactory1().inspect_err(|e| log::debug!("no DXGI factory: {e}")).ok()?;
+        (0..)
+            .map_while(|i| factory.EnumAdapters1(i).ok())
+            .filter_map(|a| a.GetDesc1().ok())
+            .filter(|d| d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 == 0)
+            .max_by_key(|d| d.DedicatedVideoMemory)
+            .map(|d| {
+                let len = d.Description.iter().position(|&c| c == 0).unwrap_or(d.Description.len());
+                (String::from_utf16_lossy(&d.Description[..len]).trim().to_owned(), d.DedicatedVideoMemory as f64 / MB)
+            })
+    }
+}
+
 /// The counter's current instances, handed to `f` as (name, value).
 fn values<T>(counter: PDH_HCOUNTER, f: impl FnOnce(&mut dyn Iterator<Item = (&str, f64)>) -> T) -> Option<T> {
     let (mut bytes, mut count) = (0u32, 0u32);
@@ -177,6 +196,15 @@ mod tests {
         assert_eq!(m.get(&10), Some(&45.0), "a repeated engine adds up; engines don't");
         assert_eq!(m.get(&11), Some(&60.0), "any engine type counts");
         assert_eq!(m.len(), 2);
+    }
+
+    /// The real graphics card: `cargo test -- --ignored --nocapture finds_the_real_adapter`.
+    #[test]
+    #[ignore]
+    fn finds_the_real_adapter() {
+        let (name, vram) = adapter().expect("an adapter");
+        println!("GPU {name}: {vram:.0} MB");
+        assert!(!name.is_empty());
     }
 
     /// Real counters (needs a desktop session): `cargo test -- --ignored reads_real_counters`.

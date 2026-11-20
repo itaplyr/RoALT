@@ -70,7 +70,15 @@ export function DetailCookie({ account: a, vaultMode, clipboardSeconds, label }:
       <Morph axis="height">
         {cookie ? (
           <div key="shown" className="enter well overflow-hidden">
-            <div className="mono text-[12px] leading-snug p-3 max-h-36 overflow-auto break-all selectable scroll">{cookie.value}</div>
+            <div
+              className="mono text-[12px] leading-snug p-3 max-h-36 overflow-auto break-all scroll"
+              onCopy={(e) => {
+                e.preventDefault();
+                start("copy");
+              }}
+            >
+              {cookie.value}
+            </div>
             <div className="h-0.5 bg-surface-3">
               <div className="h-full bg-accent-text drain" />
             </div>

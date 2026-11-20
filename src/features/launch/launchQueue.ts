@@ -3,7 +3,7 @@
 // under way (useLaunchActivity). Owned by Play; the API here is what the other views build on.
 import { useEffect, useSyncExternalStore, type Dispatch, type SetStateAction } from "react";
 import { api, asError, type AccountSummary, type BulkProgress, type BulkStage, type Instance, type LaunchInfo, type LaunchTarget, type MultiInstanceStatus, type SameServer, type Settings } from "../../api";
-import { dismissBulk, qk, queryClient, useAccounts, useBulk, useInstances } from "../../data";
+import { dismissBulk, qk, queryClient, useBulk, useInstances, useRunAccounts } from "../../data";
 import { fmtNum, t, type Key } from "../../i18n";
 import { signal } from "../../ui/signal";
 import { readStored, writeStored } from "../../ui/stored";
@@ -51,9 +51,8 @@ export function launchFailed(e: unknown) {
 }
 
 /** Where a launch goes: a known target, or a draft (parsed again if it hasn't caught up, its
- * username looked up once, its favourite marked used). */
+ * username looked up once). */
 export type Where = LaunchTarget | { draft: Draft; setDraft: Dispatch<SetStateAction<Draft>> };
-const favOf = (w: Where) => ("draft" in w ? w.draft.favId : null);
 
 // ---- State: one launch at a time, and the launch started here (local) on show ----
 
@@ -104,7 +103,6 @@ async function runLocal(jobs: Job[]) {
     cancelling: null,
     local: { id, target: only, running: true, stopped: null, cancel: false, rows: jobs.map(({ account: a }) => ({ accountId: a.id, userId: a.userId, stage: { kind: "queued" }, at: null, instanceId: null })) },
   });
-  let favourite = false;
   try {
     for (const [n, { account: a, where, fpsCap, moveFrom }] of jobs.entries()) {
       if (!current()) return;
@@ -130,12 +128,10 @@ async function runLocal(jobs: Job[]) {
         timer = window.setTimeout(() => step(t("launch.step.starting")), 800);
         // Its client is the account's first one that starts after this (a bootstrapper changes the pid).
         setRow(id, n, { at: Date.now() });
-        const fav = favOf(where) ?? undefined;
-        const info = moveFrom ? await api.instanceMove(moveFrom, target, fav, fpsCap) : await api.launch(a.id, target, fav, fpsCap);
+        const info = moveFrom ? await api.instanceMove(moveFrom, target, fpsCap) : await api.launch(a.id, target, fpsCap);
         if (!current()) return;
         launched(a, info);
         setRow(id, n, { stage: { kind: "starting" } });
-        favourite ||= favOf(where) !== null;
       } catch (e) {
         if (!current()) return;
         launchFailed(e);
@@ -158,7 +154,6 @@ async function runLocal(jobs: Job[]) {
       patchLocal(id, () => ({ running: false, cancel: false }));
       step(null);
     }
-    if (favourite) void queryClient.invalidateQueries({ queryKey: qk.favourites });
   }
 }
 
@@ -183,14 +178,13 @@ export async function launchSame(accounts: AccountSummary[], where: Where, opts:
     if (g !== gen) return;
     step(t("launch.step.batch"));
     const delayMs = queryClient.getQueryData<Settings>(qk.settings)?.launchDelayMs ?? 6000;
-    const batchId = await api.bulkLaunch({ accountIds: accounts.map((a) => a.id), target, delayMs, sameServer: opts.sameServer ?? "off", favouriteId: favOf(where), fpsCap: opts.fpsCap || null });
+    const batchId = await api.bulkLaunch({ accountIds: accounts.map((a) => a.id), target, delayMs, sameServer: opts.sameServer ?? "off", fpsCap: opts.fpsCap || null });
     if (g !== gen) return;
     // On show before this returns, even if its first bulk://progress is still on the way.
     const now = bulk()?.batchId === batchId ? null : await api.bulkCurrent().catch(() => null);
     if (g !== gen) return;
     if (now?.batchId === batchId && bulk()?.batchId !== batchId) queryClient.setQueryData(qk.bulk, now);
     set({ local: null });
-    if (favOf(where) !== null) void queryClient.invalidateQueries({ queryKey: qk.favourites });
   } catch (e) {
     if (g === gen) launchFailed(e);
   } finally {
@@ -206,7 +200,7 @@ export const launchStep = () => state.step;
 
 /** The FPS cap typed in Play for this session's launches (0: each account's own, else the default). */
 export const sessionFps = () => state.fps;
-const setSessionFps = (fps: number) => set({ fps });
+export const setSessionFps = (fps: number) => set({ fps });
 export const useSessionFps = (): [number, (fps: number) => void] => [useSyncExternalStore(subscribe, () => state.fps), setSessionFps];
 
 /** LaunchButton: its pill is on its way to the island; until it lands useLaunchActivity is null. */
@@ -303,7 +297,8 @@ export function useLaunchActivity(): LaunchActivity | null {
   const cancelling = useSyncExternalStore(subscribe, () => state.cancelling);
   const p = useBulk().data;
   const instances = useInstances().data;
-  const accounts = useAccounts().data;
+  // As run: a disconnect its group allows is done, not failed, as the backend counts it.
+  const accounts = useRunAccounts();
   const batch = shown(p, !!local);
   const byId = new Map(accounts?.map((a) => [a.id, a]));
   const own = (r: { accountId: number; userId: number }) => {

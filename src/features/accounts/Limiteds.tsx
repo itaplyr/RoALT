@@ -9,14 +9,13 @@ import { Button } from "../../ui/Button";
 import { num, StatGrid, type Stat } from "../../ui/StatGrid";
 import { toast } from "../../ui/Toast";
 import { ago } from "./shared";
-import { countOne, rereadOthers, useValueCount } from "./valueCount";
+import { countOne, rereadOthers } from "./valueCount";
 
-const DEMAND: Key[] = ["value.demand0", "value.demand1", "value.demand2", "value.demand3", "value.demand4"];
-const TREND: Key[] = ["value.trend0", "value.trend1", "value.trend2", "value.trend3", "value.trend4"];
+export const DEMAND: Key[] = ["value.demand0", "value.demand1", "value.demand2", "value.demand3", "value.demand4"];
+export const TREND: Key[] = ["value.trend0", "value.trend1", "value.trend2", "value.trend3", "value.trend4"];
 
 export function Limiteds({ account: a }: { account: AccountSummary }) {
   const value = useAccountValue(a.id);
-  const all = useValueCount();
   const rolimons = useSettings().data?.rolimonsValues ?? false;
   // Keyed, so a count still running shows as busy after the panel was left and opened again.
   const key = ["valueCount", a.id];
@@ -29,15 +28,13 @@ export function Limiteds({ account: a }: { account: AccountSummary }) {
     },
   });
   const v = value.data;
-  const busy = useIsMutating({ mutationKey: key }) > 0 || all.current === a.id;
-  // One count at a time: Home's Count all reads inventories too.
-  const blocked = all.running && !busy;
+  const busy = useIsMutating({ mutationKey: key }) > 0;
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between gap-2">
         <h4 className="label text-fg-2">{t("value.title")}</h4>
         {a.status === "valid" && (
-          <Button size="sm" variant="ghost" icon="refresh" busy={busy} aria-disabled={blocked || undefined} onClick={() => !busy && !blocked && count.mutate()}>
+          <Button size="sm" variant="ghost" icon="refresh" busy={busy} onClick={() => !busy && count.mutate()}>
             {v ? t("value.countAgain") : t("value.count")}
           </Button>
         )}

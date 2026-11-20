@@ -409,7 +409,7 @@ fn create(app: &AppHandle, data_dir: &Path, account_id: i64, user_id: i64, cooki
         wv.hide()?;
         // On this blocking thread: not an async one, so waiting here is allowed.
         let card = zeroize::Zeroizing::new(CARD_JS.to_owned());
-        let pid = tauri::async_runtime::block_on(webview::harden(&wv, Some(cookie), Some(card)))?;
+        let pid = tauri::async_runtime::block_on(webview::harden(&wv, Some(cookie), Some(card), false))?;
         // A Google / Apple sign-in left in this profile goes before the page loads (the account's
         // own cookie, just put in, stays).
         webview::clear_cookies(&wv, false);

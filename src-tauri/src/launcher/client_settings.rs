@@ -181,7 +181,7 @@ fn save(db: &Db, kept: &Kept) {
 
 /// `f`, tried again a few times while Windows refuses it for a moment: access denied, or
 /// another process has the file open (sharing violation, 32).
-pub(super) fn retry<T>(mut f: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+pub(crate) fn retry<T>(mut f: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
     let mut tries = 1;
     loop {
         match f() {

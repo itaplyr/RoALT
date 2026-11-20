@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { FOCUSABLE } from "../a11y";
 import { DUR, EASE, Morph, SPRING, TWEEN, useReducedMotionFlag } from "../motion";
-
-const FOCUSABLE = ":is(button, input, select, textarea, a[href], [tabindex]:not([tabindex='-1'])):not(:disabled)";
 import { useAnchor } from "../Popover";
 
 /** A live activity growing out of the island (a launch, running clients, a notice). It opens its

@@ -2,7 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState, type Dispatch, type React
 import { flushSync } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
 import { api, type AccountSummary, type Favourite, type JoinCandidate, type SameServer } from "../../api";
-import { publicBlock, useBulk, useFavourites, useInstances, useMultiStatus, useNetwork, useRobloxClient, useSetSettings, useSettings } from "../../data";
+import { browseAs } from "../../app/navigation";
+import { publicBlock, useBulk, useFavourites, useGame, useGroups, useInstances, useMultiStatus, useNetwork, useRobloxClient, useSetSettings, useSettings, withGroupDefaults } from "../../data";
 import { fmtNum, t } from "../../i18n";
 import { announce, overlayOpen } from "../../ui/a11y";
 import { Disclosure } from "../../ui/Bits";
@@ -15,7 +16,9 @@ import { toastError } from "../../ui/Toast";
 import { accountName, Avatar } from "../accounts/shared";
 import { AccountPicker } from "./AccountPicker";
 import { FavouriteDialog, FavouritesRow } from "./Favourites";
+import { RecentGames } from "./RecentGames";
 import { JoinDialog } from "./JoinDialog";
+import { LastPlayedDialog } from "./LastPlayedDialog";
 import { LaunchButton } from "./LaunchButton";
 import { launchBlocked, launchOne, launchSame, launchStep, sessionFps, useLaunchActivity, useSessionFps } from "./launchQueue";
 import { LaunchProgress } from "./LaunchProgress";
@@ -117,6 +120,7 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
   const [joinOpen, setJoinOpen] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [lastOpen, setLastOpen] = useState(false);
   const [fps, setFps] = useSessionFps();
   // Open when one of them is set: it applies to the next launch, so it stays in sight.
   const [optionsOpen, setOptionsOpen] = useState(() => fps > 0 || sameServer !== "off");
@@ -135,12 +139,17 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
   const has = new Set(picked);
   const chosen = accounts.filter((a) => a.status === "valid" && has.has(a.id));
   const account = chosen[0] ?? null;
+  // Its own mark or its groups': such a client keeps its window and graphics.
+  const groups = useGroups().data;
+  const fullQuality = !!account && withGroupDefaults(account, groups ?? []).fullQuality;
   const move = useMoveConfirm();
   // Who asks Roblox (friends to join, the signed-in sorts, private servers): the first one picked, else any signed in.
   const asker = account ?? accounts.find((a) => a.status === "valid") ?? null;
   const bulk = chosen.length > 1;
-  // With multi-instance off, one more client ends the one that runs.
-  const replaces = !bulk && !!account && instances.some((i) => isRunning(i) && i.accountId !== account.id);
+  // An untracked Roblox already running (e.g. started from the browser) holds Roblox's singleton lock.
+  const untracked = !!multi && !multi.active && multi.blockedBy.length > 0;
+  // Without multi-instance active, one more client ends either a tracked running client or an untracked Roblox.
+  const replaces = !bulk && !!account && (instances.some((i) => isRunning(i) && i.accountId !== account.id) || untracked);
   // Stacked, a Who with picks folds into one line until opened, so Where and Play are in reach.
   const [whoOpen, setWhoOpen] = useState(() => chosen.length === 0);
   const folded = !wide && !whoOpen && chosen.length > 0;
@@ -239,7 +248,7 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
   };
 
   // What this launch will do, each chip a way to the option it reads.
-  const layoutOn = layout !== "off" && (bulk || !account?.fullQuality);
+  const layoutOn = layout !== "off" && (bulk || !fullQuality);
   const chips = [
     usableTarget && look ? { key: "target", text: `${look.kind} · ${look.detail}`, edit: "#launch-target" } : null,
     bulk ? { key: "delay", text: t("play.apart", { s: fmtNum(delayMs / 1000) }), edit: "#play-opt-delay input" } : null,
@@ -247,7 +256,7 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
     bulk && together ? { key: "same", text: t("launch.sameServer"), edit: "#play-opt-same [role=switch]" } : null,
     bulk && spread ? { key: "spread", text: t("launch.spread"), edit: "#play-opt-spread [role=switch]" } : null,
     layoutOn ? { key: "layout", text: `${t("launch.layout")} · ${t(layout === "fit" ? "launch.layoutFit" : "launch.layoutTiny")}`, edit: "#play-opt-layout [aria-pressed=true]" } : null,
-    settings?.lowGraphics && !account?.fullQuality ? { key: "low", text: t("settings.lowGraphics") } : null,
+    settings?.lowGraphics && !fullQuality ? { key: "low", text: t("settings.lowGraphics") } : null,
   ].filter((c): c is Chip => c !== null);
   const edit = (selector: string) => {
     const details = options.current?.querySelector("details");
@@ -255,6 +264,7 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
     document.querySelector<HTMLElement>(selector)?.focus();
   };
   const seed = parsed?.kind === "target" && "placeId" in parsed.target ? parsed.target.placeId : null;
+  const seedGame = useGame(seed).data?.name;
   const names = chosen.slice(0, 2).map(accountName).join(", ") + (chosen.length > 2 ? ` +${chosen.length - 2}` : "");
 
   return (
@@ -297,9 +307,12 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
                   <span className="flex flex-wrap gap-1">
                     <Button variant="ghost" size="md" icon="accounts" onClick={() => setJoinOpen(true)}>{t("launch.joinSomeone")}</Button>
                     <Button variant="ghost" size="md" icon="servers" onClick={() => setDrawerOpen(true)}>{t("play.browse")}</Button>
+                    {/* roblox.com as the account that asks: a Play or Join there comes back here as the target. */}
+                    <Button variant="ghost" size="md" icon="globe" onClick={() => browseAs((asker ?? accounts[0])?.id ?? 0, "charts", true)}>{t("play.browseGames")}</Button>
                   </span>
                 </div>
                 <FavouritesRow accounts={accounts} active={draft.favId} onPick={onPickFavourite} />
+                <RecentGames skip={seed} onPick={(placeId) => setDraft(draftFor({ kind: "place", placeId, launchData: null }))} onMore={() => setLastOpen(true)} />
                 <TargetField
                   draft={draft}
                   setDraft={setDraft}
@@ -495,6 +508,15 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
 
       {move.dialog}
       <JoinDialog open={joinOpen} onClose={() => setJoinOpen(false)} account={asker} accounts={accounts} onPick={join} />
+      <LastPlayedDialog
+        open={lastOpen}
+        onClose={() => setLastOpen(false)}
+        accounts={accounts}
+        onPick={(target) => {
+          setLastOpen(false);
+          setDraft(draftFor(target));
+        }}
+      />
       <ServerDrawer
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
@@ -511,9 +533,12 @@ export function LaunchView({ accounts, picked, setPicked, sameServer, setSameSer
         accounts={accounts}
         initial={
           fav ?? {
-            name: look ? `${look.kind} · ${look.detail}`.replace(/ · [^·]*••••/, "").slice(0, 60) : "",
+            // The game by its name once RoALT knows it, not "Game · place 1818".
+            name: (seedGame ?? (look ? `${look.kind} · ${look.detail}`.replace(/ · [^·]*••••/, "") : "")).slice(0, 60),
             accountIds: accounts.filter((a) => a.status === "valid" && picked.includes(a.id)).map((a) => a.id),
             inTray: false,
+            // As Play is set now: what a click on Home or the tray launches it with later.
+            options: { sameServer: sameServer === "off" ? null : sameServer, fpsCap: sessionFps() || null, groupIds: [], hotkey: "" },
           }
         }
         resolve={() => (fav ? Promise.resolve(fav.target) : resolveTarget(draft, setDraft))}

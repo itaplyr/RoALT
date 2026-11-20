@@ -22,6 +22,8 @@ jobs:
       - run: npm ci
       # tsc and the Vite build, which also gives tauri::generate_context! its ../dist.
       - run: npm run build
+      - run: npm run test:sounds && npm run test:news && npm run test:liquid && npm run test:look
+        shell: bash
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy

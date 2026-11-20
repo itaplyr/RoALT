@@ -13,7 +13,7 @@ use rusqlite_migration::{M, Migrations};
 
 use crate::commands::now_ms;
 use crate::error::{AppError, Result};
-use crate::model::{AccountPatch, AccountStatus, AccountSummary, Crash, CrashKind, Group, GroupInput, PlaytimeRow, ServerVisit, Settings, VaultMode};
+use crate::model::{AccountPatch, AccountStatus, AccountSummary, Crash, CrashKind, Group, GroupDefaults, GroupInput, PlayedServer, PlaytimeDay, PlaytimeRow, ServerVisit, Settings, VaultMode};
 use crate::vault::{Kdf, RecoveryRecord, VaultRecord};
 
 /// What `upsert_account` writes. `cookie` is the encrypted blob.
@@ -36,6 +36,9 @@ pub struct AccountMeta {
 
 pub struct Db {
     conn: Mutex<Connection>,
+    /// Held across a read, change and save of the settings (`settings_change`), so two changes
+    /// at once don't drop one.
+    settings_change: Mutex<()>,
     /// The database file (its key is `cipher::read_key(file)`); None in memory.
     file: Option<PathBuf>,
 }
@@ -53,7 +56,7 @@ pub struct FavouriteRow {
     pub account_ids: Vec<i64>,
     pub in_tray: bool,
     pub sort_order: i64,
-    pub last_used_at: Option<i64>,
+    pub options: crate::model::FavouriteOptions,
 }
 
 /// Set once `Db::public_guard_off_once` has run.
@@ -65,6 +68,8 @@ const MAX_NOTES: usize = 2000;
 const MAX_GROUP_NAME: usize = 40;
 const MAX_CRASHES: i64 = 200;
 const MAX_SERVERS: i64 = 50;
+/// Days of `playtime_days` kept.
+const PLAYTIME_DAYS: i64 = 90;
 
 /// What `add_crash` writes: one client that ended badly. `log_path` never reaches the UI.
 pub struct NewCrash<'a> {
@@ -83,10 +88,10 @@ const ACCOUNT_SELECT: &str = "SELECT a.id, a.user_id, a.username, a.display_name
      (SELECT group_concat(ag.group_id ORDER BY g.sort_order, g.id) \
         FROM account_groups ag JOIN groups g ON g.id = ag.group_id WHERE ag.account_id = a.id), \
      a.status, a.status_checked_at, a.created_at, a.allow_disconnect, a.launch_args, a.discord_muted, a.fps_cap, a.full_quality, a.is_main, \
-     a.custom_flags \
+     a.custom_flags, a.client_limits, a.profile \
      FROM accounts a";
 
-const GROUP_SELECT: &str = "SELECT id, name, color, sort_order FROM groups";
+const GROUP_SELECT: &str = "SELECT id, name, color, sort_order, defaults FROM groups";
 
 impl Db {
     /// Opens (creating if needed) and migrates. Encrypted (`cipher`: a new database gets a new
@@ -118,13 +123,17 @@ impl Db {
         conn.busy_timeout(Duration::from_secs(5))?;
         // secure_delete: freed pages (removed cookies, old key wraps) are zeroed, not left behind.
         conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON;")?;
-        migrations()
-            .to_latest(&mut conn)
-            .map_err(|e| {
-                log::error!("database migration failed: {e}");
-                AppError::Storage(e.to_string())
-            })?;
-        let db = Db { conn: Mutex::new(conn), file };
+        migrations().to_latest(&mut conn).map_err(|e| {
+            log::error!("database migration failed: {e}");
+            match e {
+                // An older RoALT installed over a newer one's data: say so, the data is fine.
+                rusqlite_migration::Error::MigrationDefinition(rusqlite_migration::MigrationDefinitionError::DatabaseTooFarAhead) => {
+                    AppError::Invalid(tr!("This data was saved by a newer RoALT. Install the newest RoALT to open it. Nothing was changed."))
+                }
+                e => AppError::Storage(e.to_string()),
+            }
+        })?;
+        let db = Db { conn: Mutex::new(conn), settings_change: Mutex::new(()), file };
         db.public_guard_off_once()?;
         db.background_cover_once()?;
         Ok(db)
@@ -287,11 +296,31 @@ impl Db {
         Ok(self.conn().query_row(&format!("{ACCOUNT_SELECT} WHERE a.id = ?1"), [id], account_row)?)
     }
 
-    /// The accounts marked Full quality (read every poll: only their ids).
+    /// The accounts that are Full quality, by their own mark or their groups' (read every poll: only
+    /// their ids, and the groups' members only while a group sets it).
     pub fn full_quality_accounts(&self) -> Result<Vec<i64>> {
+        let groups = self.groups()?;
         let c = self.conn();
         let mut st = c.prepare("SELECT id FROM accounts WHERE full_quality = 1")?;
-        Ok(st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
+        let mut ids: Vec<i64> = st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        if groups.iter().any(|g| g.defaults.full_quality.is_some()) {
+            let mut st = c.prepare("SELECT account_id, group_id FROM account_groups")?;
+            let pairs: Vec<(i64, i64)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+            let mut members: Vec<i64> = pairs.iter().map(|p| p.0).collect();
+            members.sort_unstable();
+            members.dedup();
+            for account in members {
+                if ids.contains(&account) {
+                    continue;
+                }
+                // The first of its groups, in their order, that says anything.
+                let says = groups.iter().filter(|g| pairs.contains(&(account, g.id))).find_map(|g| g.defaults.full_quality);
+                if says == Some(true) {
+                    ids.push(account);
+                }
+            }
+        }
+        Ok(ids)
     }
 
     pub fn account_id_for_user(&self, user_id: i64) -> Result<Option<i64>> {
@@ -315,6 +344,22 @@ impl Db {
              RETURNING id";
         let p = params![a.user_id, a.username, a.display_name, a.cookie, a.status.as_str(), a.checked_at, now_ms()];
         Ok(self.conn().query_row(sql, p, |r| r.get(0))?)
+    }
+
+    /// What the account's next client starts with (`ClientPrefs`), kept as given; None: nothing of
+    /// its own (then its groups', or the defaults). `commands::remember_client` decides which.
+    pub fn set_client_limits(&self, id: i64, prefs: Option<&crate::model::ClientPrefs>) -> Result<()> {
+        let json = prefs.map(serde_json::to_string).transpose().map_err(|e| AppError::Internal(e.to_string()))?;
+        found(self.conn().execute("UPDATE accounts SET client_limits = ?2 WHERE id = ?1", params![id, json])?)
+    }
+
+    /// Each account's own performance profile, by account id; the accounts without one are absent.
+    pub fn account_profiles(&self) -> Result<std::collections::HashMap<i64, crate::performance::Profile>> {
+        let c = self.conn();
+        let mut st = c.prepare("SELECT id, profile FROM accounts WHERE profile IS NOT NULL")?;
+        let rows: Vec<(i64, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        // An unreadable one counts as none, as `account_row` reads it.
+        Ok(rows.into_iter().filter_map(|(id, j)| Some((id, serde_json::from_str(&j).ok()?))).collect())
     }
 
     pub fn set_meta(&self, id: i64, meta: &AccountMeta) -> Result<()> {
@@ -364,9 +409,16 @@ impl Db {
         if let Some(v) = patch.full_quality {
             tx.execute("UPDATE accounts SET full_quality = ?2 WHERE id = ?1", params![id, v])?;
         }
+        if patch.clear_client_limits == Some(true) {
+            tx.execute("UPDATE accounts SET client_limits = NULL WHERE id = ?1", [id])?;
+        }
         if let Some(v) = &patch.custom_flags {
             let json = if v.is_empty() { None } else { Some(serde_json::to_string(v).map_err(|e| AppError::Internal(e.to_string()))?) };
             tx.execute("UPDATE accounts SET custom_flags = ?2 WHERE id = ?1", params![id, json])?;
+        }
+        if let Some(v) = &patch.profile {
+            let json = if *v == Default::default() { None } else { Some(serde_json::to_string(v).map_err(|e| AppError::Internal(e.to_string()))?) };
+            tx.execute("UPDATE accounts SET profile = ?2 WHERE id = ?1", params![id, json])?;
         }
         if let Some(v) = patch.main {
             // One MAIN: marking this one unmarks any other.
@@ -383,6 +435,50 @@ impl Db {
     pub fn account_cookie(&self, id: i64) -> Result<(i64, Vec<u8>)> {
         let sql = "SELECT user_id, cookie FROM accounts WHERE id = ?1";
         Ok(self.conn().query_row(sql, [id], |r| Ok((r.get(0)?, r.get(1)?)))?)
+    }
+
+    /// `(account_id, user_id, encrypted cookie)` for every stored account (used for key rotation).
+    pub fn all_account_cookies(&self) -> Result<Vec<(i64, i64, Vec<u8>)>> {
+        let c = self.conn();
+        let mut st = c.prepare("SELECT id, user_id, cookie FROM accounts")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Atomically commits a vault key rotation: updates the vault record, deletes any stale
+    /// recovery record (bound to the old key), and rewrites every encrypted cookie, favourite,
+    /// and Discord webhook in one transaction, then flushes old pages.
+    pub fn commit_key_rotation(
+        &self,
+        rec: &VaultRecord,
+        cookies: &[(i64, Vec<u8>)],
+        favourites: &[(i64, Vec<u8>)],
+        webhook_hex: Option<&str>,
+    ) -> Result<()> {
+        let (mode, kdf) = match rec.mode {
+            VaultMode::Dpapi => ("dpapi", None),
+            VaultMode::Master => ("master", rec.kdf.as_ref()),
+        };
+        let now = now_ms();
+        let mut c = self.conn();
+        let tx = c.transaction()?;
+        tx.execute(
+            "INSERT OR REPLACE INTO vault (id, mode, wrapped_key, kdf_salt, kdf_m_kib, kdf_t, kdf_p) \
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)",
+            params![mode, rec.wrapped_key, kdf.map(|k| &k.salt), kdf.map(|k| k.m_kib), kdf.map(|k| k.t), kdf.map(|k| k.p)],
+        )?;
+        tx.execute("DELETE FROM vault_recovery", [])?;
+        for (id, blob) in cookies {
+            tx.execute("UPDATE accounts SET cookie = ?2, updated_at = ?3 WHERE id = ?1", params![id, blob, now])?;
+        }
+        for (id, blob) in favourites {
+            tx.execute("UPDATE favourites SET target = ?2 WHERE id = ?1", params![id, blob])?;
+        }
+        if let Some(hex) = webhook_hex {
+            tx.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('discord_webhook', ?1)", [hex])?;
+        }
+        tx.commit()?;
+        flush_old_wraps(&c)
     }
 
     pub fn set_cookie(&self, id: i64, blob: &[u8]) -> Result<()> {
@@ -464,12 +560,79 @@ impl Db {
     pub fn save_group(&self, g: &GroupInput) -> Result<Group> {
         let c = self.conn();
         let id = write_group(&c, g.id, &g.name, g.color.as_deref())?;
+        if let Some(d) = &g.defaults {
+            write_group_defaults(&c, id, d)?;
+        }
         Ok(c.query_row(&format!("{GROUP_SELECT} WHERE id = ?1"), [id], group_row)?)
     }
 
+    /// What the group gives its accounts (the caller validates it).
+    pub fn set_group_defaults(&self, id: i64, d: &GroupDefaults) -> Result<()> {
+        write_group_defaults(&self.conn(), id, d)
+    }
+
+    /// The account as its clients are run and told about: what it doesn't set itself comes from its
+    /// groups (`with_group_defaults`). `NotFound` if missing.
+    pub fn effective(&self, id: i64) -> Result<AccountSummary> {
+        Ok(with_group_defaults(self.account(id)?, &self.groups()?))
+    }
+
+    /// Removes the group, also from the favourites that name it: SQLite gives its id to the next
+    /// group made, whose accounts those favourites would then launch.
     pub fn remove_group(&self, id: i64) -> Result<()> {
-        self.conn().execute("DELETE FROM groups WHERE id = ?1", [id])?;
+        let mut c = self.conn();
+        let tx = c.transaction()?;
+        tx.execute("DELETE FROM groups WHERE id = ?1", [id])?;
+        let with_options: Vec<(i64, String)> = {
+            let mut st = tx.prepare("SELECT id, options FROM favourites WHERE options IS NOT NULL")?;
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
+        };
+        for (favourite, json) in with_options {
+            let Ok(mut o) = serde_json::from_str::<crate::model::FavouriteOptions>(&json) else { continue };
+            if o.group_ids.contains(&id) {
+                o.group_ids.retain(|g| *g != id);
+                let json = (o != Default::default()).then(|| serde_json::to_string(&o)).transpose().map_err(|e| AppError::Internal(e.to_string()))?;
+                tx.execute("UPDATE favourites SET options = ?2 WHERE id = ?1", params![favourite, json])?;
+            }
+        }
+        tx.commit()?;
         Ok(())
+    }
+
+    /// Clears per-account overrides (`fps_cap`, `launch_args`, `client_limits`) on members of
+    /// `group_id` for the fields that the group's own defaults specify, so the group defaults take
+    /// effect immediately. Returns how many accounts were updated.
+    pub fn clear_group_overrides(&self, group_id: i64) -> Result<u32> {
+        let g = self.groups()?.into_iter().find(|g| g.id == group_id).ok_or(AppError::NotFound)?;
+        let d = &g.defaults;
+        let mut sets = Vec::new();
+        if d.fps_cap.is_some() {
+            sets.push("fps_cap = NULL");
+        }
+        if d.launch_args.is_some() {
+            sets.push("launch_args = NULL");
+        }
+        if d.client.is_some() {
+            sets.push("client_limits = NULL");
+        }
+        if d.full_quality.is_some() {
+            sets.push("full_quality = 0");
+        }
+        if d.allow_disconnect.is_some() {
+            sets.push("allow_disconnect = 0");
+        }
+        if d.discord_muted.is_some() {
+            sets.push("discord_muted = 0");
+        }
+        if sets.is_empty() {
+            return Ok(0);
+        }
+        let sql = format!(
+            "UPDATE accounts SET {}, updated_at = ?2 WHERE id IN (SELECT account_id FROM account_groups WHERE group_id = ?1)",
+            sets.join(", ")
+        );
+        let n = self.conn().execute(&sql, params![group_id, now_ms()])?;
+        Ok(n as u32)
     }
 
     /// Existing group id for this name (case-insensitive), or a new group.
@@ -509,6 +672,12 @@ impl Db {
             .unwrap_or_default())
     }
 
+    /// Taken by whoever reads the settings to save a changed copy, until it is saved. Off the main
+    /// thread, never held while waiting for the main thread (`set_settings_on_main`).
+    pub fn settings_change(&self) -> MutexGuard<'_, ()> {
+        self.settings_change.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     pub fn save_settings(&self, s: &Settings) -> Result<()> {
         let json = serde_json::to_string(s).map_err(|e| AppError::Internal(e.to_string()))?;
         self.conn().execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('settings', ?1)", [json])?;
@@ -529,12 +698,11 @@ impl Db {
         Ok(())
     }
 
-    /// Favourites in order:`(id, name, encrypted target, account ids, in tray, sort order, last used)`.
+    /// Favourites in order:`(id, name, encrypted target, account ids, in tray, sort order)`. The
+    /// table's `last_used_at` column is no longer written or read.
     pub fn favourites(&self) -> Result<Vec<FavouriteRow>> {
         let c = self.conn();
-        let mut st = c.prepare(
-            "SELECT id, name, target, account_ids, in_tray, sort_order, last_used_at FROM favourites ORDER BY sort_order, id",
-        )?;
+        let mut st = c.prepare("SELECT id, name, target, account_ids, in_tray, sort_order, options FROM favourites ORDER BY sort_order, id")?;
         let rows = st.query_map([], |r| {
             let (id, ids): (i64, String) = (r.get(0)?, r.get(3)?);
             Ok(FavouriteRow {
@@ -546,10 +714,19 @@ impl Db {
                     .unwrap_or_default(),
                 in_tray: r.get(4)?,
                 sort_order: r.get(5)?,
-                last_used_at: r.get(6)?,
+                options: r
+                    .get::<_, Option<String>>(6)?
+                    .and_then(|j| serde_json::from_str(&j).inspect_err(|e| log::warn!("favourite {id}: options unreadable ({e}); using the defaults")).ok())
+                    .unwrap_or_default(),
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// How favourite `id` launches (`FavouriteOptions`); the defaults are stored as none.
+    pub fn set_favourite_options(&self, id: i64, options: &crate::model::FavouriteOptions) -> Result<()> {
+        let json = if *options == Default::default() { None } else { Some(serde_json::to_string(options).map_err(|e| AppError::Internal(e.to_string()))?) };
+        found(self.conn().execute("UPDATE favourites SET options = ?2 WHERE id = ?1", params![id, json])?)
     }
 
     /// Insert (`id: None`, goes last) or update; the name is trimmed, 1..=60 chars.
@@ -601,11 +778,6 @@ impl Db {
         Ok(())
     }
 
-    pub fn touch_favourite(&self, id: i64, at: i64) -> Result<()> {
-        self.conn().execute("UPDATE favourites SET last_used_at = ?2 WHERE id = ?1", params![id, at])?;
-        Ok(())
-    }
-
     /// Records a server the account's client reached, unless it was already the latest; only its
     /// newest `MAX_SERVERS` are kept.
     pub fn add_server(&self, account_id: i64, v: &ServerVisit) -> Result<()> {
@@ -629,11 +801,38 @@ impl Db {
         Ok(())
     }
 
+    /// The servers of `place_id` any account joined since `since` (Unix ms), by job id.
+    pub fn servers_since(&self, place_id: i64, since: i64) -> Result<Vec<String>> {
+        let c = self.conn();
+        let mut st = c.prepare("SELECT DISTINCT job_id FROM server_history WHERE place_id = ?1 AND joined_at >= ?2")?;
+        Ok(st.query_map([place_id, since], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// The account's servers, newest first.
     pub fn servers(&self, account_id: i64) -> Result<Vec<ServerVisit>> {
         let c = self.conn();
         let mut st = c.prepare("SELECT place_id, job_id, private, joined_at FROM server_history WHERE account_id = ?1 ORDER BY id DESC")?;
         let rows = st.query_map([account_id], |r| Ok(ServerVisit { place_id: r.get(0)?, job_id: r.get(1)?, private: r.get(2)?, joined_at: r.get(3)? }))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The servers all accounts reached, newest first: one row a server, with who was in it.
+    pub fn recent_servers(&self) -> Result<Vec<PlayedServer>> {
+        let c = self.conn();
+        let mut st = c.prepare(
+            "SELECT place_id, job_id, MAX(private), MAX(joined_at), group_concat(DISTINCT account_id) FROM server_history \
+             GROUP BY place_id, job_id ORDER BY MAX(joined_at) DESC, MAX(id) DESC LIMIT 30",
+        )?;
+        let rows = st.query_map([], |r| {
+            let ids: String = r.get(4)?;
+            Ok(PlayedServer {
+                place_id: r.get(0)?,
+                job_id: r.get(1)?,
+                private: r.get(2)?,
+                joined_at: r.get(3)?,
+                account_ids: ids.split(',').filter_map(|s| s.parse().ok()).collect(),
+            })
+        })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -649,8 +848,61 @@ impl Db {
                  ON CONFLICT (account_id, place_id) DO UPDATE SET ms = ms + excluded.ms, last_played = MAX(last_played, excluded.last_played)",
                 params![account_id, place_id, ms, at],
             )?;
+            // The same time under the local day it ended on (`at`).
+            tx.execute(
+                "INSERT INTO playtime_days (account_id, day, ms) \
+                 SELECT ?1, CAST(strftime('%Y%m%d', ?3 / 1000, 'unixepoch', 'localtime') AS INTEGER), ?2 \
+                 WHERE EXISTS (SELECT 1 FROM accounts WHERE id = ?1) \
+                 ON CONFLICT (account_id, day) DO UPDATE SET ms = ms + excluded.ms",
+                params![account_id, ms, at],
+            )?;
         }
+        tx.execute(
+            "DELETE FROM playtime_days WHERE day < CAST(strftime('%Y%m%d', ?1 / 1000 - ?2 * 86400, 'unixepoch', 'localtime') AS INTEGER)",
+            params![at, PLAYTIME_DAYS],
+        )?;
         tx.commit()?;
+        Ok(())
+    }
+
+    /// Every account's time in games per local day, the oldest day first.
+    pub fn playtime_days(&self) -> Result<Vec<PlaytimeDay>> {
+        let c = self.conn();
+        let mut st = c.prepare("SELECT account_id, day, ms FROM playtime_days ORDER BY day, account_id")?;
+        let rows = st.query_map([], |r| Ok(PlaytimeDay { account_id: r.get(0)?, day: r.get(1)?, ms: r.get(2)? }))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The recorded ends as a CSV's cells, newest first: local time, account, kind, seconds it
+    /// ran, place id, reason, verdict.
+    pub fn crash_cells(&self) -> Result<Vec<[String; 7]>> {
+        let c = self.conn();
+        let mut st = c.prepare(
+            "SELECT COALESCE(strftime('%Y-%m-%d %H:%M:%S', c.at / 1000, 'unixepoch', 'localtime'), ''), a.username, c.kind, \
+             CAST(c.uptime_ms / 1000 AS TEXT), COALESCE(CAST(c.place_id AS TEXT), ''), COALESCE(c.reason, ''), COALESCE(c.verdict, '') \
+             FROM crashes c JOIN accounts a ON a.id = c.account_id ORDER BY c.id DESC",
+        )?;
+        let rows = st.query_map([], |r| Ok([r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?]))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Playtime by day as a CSV's cells, oldest first: date (YYYY-MM-DD), account, minutes.
+    pub fn playtime_day_cells(&self) -> Result<Vec<[String; 3]>> {
+        let c = self.conn();
+        let mut st = c.prepare(
+            "SELECT printf('%04d-%02d-%02d', d.day / 10000, d.day / 100 % 100, d.day % 100), a.username, CAST(CAST(ROUND(d.ms / 60000.0) AS INTEGER) AS TEXT) \
+             FROM playtime_days d JOIN accounts a ON a.id = d.account_id ORDER BY d.day, a.sort_order",
+        )?;
+        let rows = st.query_map([], |r| Ok([r.get(0)?, r.get(1)?, r.get(2)?]))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// What the autopsy made of the newest recorded end of `instance_id`.
+    pub fn set_crash_verdict(&self, instance_id: &str, verdict: &str) -> Result<()> {
+        self.conn().execute(
+            "UPDATE crashes SET verdict = ?2 WHERE id = (SELECT MAX(id) FROM crashes WHERE instance_id = ?1)",
+            params![instance_id, verdict],
+        )?;
         Ok(())
     }
 
@@ -680,7 +932,7 @@ impl Db {
     pub fn crashes(&self) -> Result<Vec<Crash>> {
         let c = self.conn();
         let mut st = c.prepare(
-            "SELECT id, instance_id, account_id, kind, at, uptime_ms, reason, place_id, log_path IS NOT NULL \
+            "SELECT id, instance_id, account_id, kind, at, uptime_ms, reason, place_id, log_path IS NOT NULL, verdict \
              FROM crashes ORDER BY id DESC",
         )?;
         let rows = st.query_map([], |r| {
@@ -701,6 +953,7 @@ impl Db {
                 reason: r.get(6)?,
                 place_id: r.get(7)?,
                 has_log: r.get(8)?,
+                verdict: r.get(9)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -730,6 +983,19 @@ impl Db {
             params![key, value, fetched_at],
         )?;
         Ok(())
+    }
+
+    /// At start: drops what Browse left behind and nothing reads any more. Profiles and game
+    /// stats over a day old (the longest `cache_minutes`), and the limiteds counted for players
+    /// who aren't accounts here once they are a month old (an account's own count is kept: it is
+    /// shown at any age). Without this the table only grows. How many rows went.
+    pub fn prune_cache(&self, now: i64) -> Result<usize> {
+        const DAY_MS: i64 = 24 * 3_600_000;
+        Ok(self.conn().execute(
+            "DELETE FROM cache WHERE (fetched_at < ?1 AND (key LIKE 'player:%' OR key LIKE 'gamestats:%')) \
+             OR (fetched_at < ?2 AND key LIKE 'value:%' AND CAST(substr(key, 7) AS INTEGER) NOT IN (SELECT user_id FROM accounts))",
+            params![now - DAY_MS, now - 30 * DAY_MS],
+        )?)
     }
 
     /// Replaces the saved tracked clients with `rows` (instance id, JSON).
@@ -769,6 +1035,11 @@ fn migrations() -> Migrations<'static> {
         M::up(include_str!("migrations/012_drop_macros.sql")),
         M::up(include_str!("migrations/013_custom_flags.sql")),
         M::up(include_str!("migrations/014_playtime.sql")),
+        M::up(include_str!("migrations/015_client_limits.sql")),
+        M::up(include_str!("migrations/016_favourite_options.sql")),
+        M::up(include_str!("migrations/017_history.sql")),
+        M::up(include_str!("migrations/018_group_defaults.sql")),
+        M::up(include_str!("migrations/019_account_profile.sql")),
     ])
 }
 
@@ -827,11 +1098,21 @@ fn account_row(r: &Row) -> rusqlite::Result<AccountSummary> {
             let json: Option<String> = r.get(19)?;
             json.and_then(|j| serde_json::from_str(&j).inspect_err(|e| log::warn!("account custom flags unreadable, none used: {e}")).ok()).unwrap_or_default()
         },
+        client_limits: {
+            let json: Option<String> = r.get(20)?;
+            json.and_then(|j| serde_json::from_str(&j).inspect_err(|e| log::warn!("account client limits unreadable, none used: {e}")).ok())
+        },
+        profile: {
+            let json: Option<String> = r.get(21)?;
+            json.and_then(|j| serde_json::from_str(&j).inspect_err(|e| log::warn!("account profile unreadable, none used: {e}")).ok())
+        },
     })
 }
 
 fn group_row(r: &Row) -> rusqlite::Result<Group> {
-    Ok(Group { id: r.get(0)?, name: r.get(1)?, color: r.get(2)?, sort_order: r.get(3)? })
+    // Unreadable defaults (a newer RoALT's?) count as none.
+    let defaults = r.get::<_, Option<String>>(4)?.and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default();
+    Ok(Group { id: r.get(0)?, name: r.get(1)?, color: r.get(2)?, sort_order: r.get(3)?, defaults })
 }
 
 /// Rows changed by a write → `NotFound` when none.
@@ -903,6 +1184,33 @@ fn replace_groups(c: &Connection, account_id: i64, group_ids: &[i64]) -> Result<
 }
 
 /// Validates, then inserts (`id: None`) or updates a group; returns its id.
+/// `a` with what it doesn't set itself taken from its groups: each field from the first of them, in
+/// `groups`' order (the list's), that sets it. An account's own switch only counts when it is on
+/// (it has no "off on purpose"), and limits it keeps of its own win over a group's. Pure.
+pub fn with_group_defaults(mut a: AccountSummary, groups: &[Group]) -> AccountSummary {
+    let mine: Vec<&GroupDefaults> = groups.iter().filter(|g| a.group_ids.contains(&g.id)).map(|g| &g.defaults).collect();
+    let switch = |own: bool, of: fn(&GroupDefaults) -> Option<bool>| own || mine.iter().find_map(|d| of(d)).unwrap_or(false);
+    a.full_quality = switch(a.full_quality, |d| d.full_quality);
+    a.discord_muted = switch(a.discord_muted, |d| d.discord_muted);
+    a.allow_disconnect = switch(a.allow_disconnect, |d| d.allow_disconnect);
+    a.fps_cap = a.fps_cap.or_else(|| mine.iter().find_map(|d| d.fps_cap));
+    a.launch_args = a.launch_args.or_else(|| mine.iter().find_map(|d| d.launch_args.clone()));
+    a.client_limits = a.client_limits.or_else(|| mine.iter().find_map(|d| d.client));
+    a
+}
+
+/// Stores a group's defaults; blank arguments and a 0 cap are "not set", and all unset is NULL.
+fn write_group_defaults(c: &Connection, id: i64, d: &GroupDefaults) -> Result<()> {
+    let d = GroupDefaults {
+        fps_cap: d.fps_cap.filter(|f| *f > 0),
+        launch_args: d.launch_args.as_deref().map(str::trim).filter(|a| !a.is_empty()).map(str::to_owned),
+        client: d.client.filter(|p| *p != Default::default()),
+        ..d.clone()
+    };
+    let json = (d != GroupDefaults::default()).then(|| serde_json::to_string(&d)).transpose().map_err(|e| AppError::Internal(e.to_string()))?;
+    found(c.execute("UPDATE groups SET defaults = ?2 WHERE id = ?1", params![id, json])?)
+}
+
 fn write_group(c: &Connection, id: Option<i64>, name: &str, color_in: Option<&str>) -> Result<i64> {
     let name = name.trim();
     if !(1..=MAX_GROUP_NAME).contains(&name.chars().count()) {
@@ -968,7 +1276,7 @@ mod tests {
     }
 
     fn group(db: &Db, name: &str) -> i64 {
-        db.save_group(&GroupInput { id: None, name: name.into(), color: None }).unwrap().id
+        db.save_group(&GroupInput { id: None, name: name.into(), color: None, defaults: None }).unwrap().id
     }
 
     fn order(db: &Db) -> Vec<i64> {
@@ -991,6 +1299,16 @@ mod tests {
         assert!(db.accounts().unwrap().is_empty());
         assert!(db.groups().unwrap().is_empty());
         assert!(db.vault_record().unwrap().is_none());
+    }
+
+    #[test]
+    fn a_newer_versions_data_is_named_not_a_storage_error() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "user_version", 99).unwrap();
+        match Db::init(conn, None) {
+            Err(AppError::Invalid(m)) => assert!(m.contains("newer RoALT"), "{m}"),
+            other => panic!("expected the newer-data message, got {:?}", other.map(drop)),
+        }
     }
 
     #[test]
@@ -1160,10 +1478,21 @@ mod tests {
             full_quality: None,
             main: None,
             custom_flags: None,
+            clear_client_limits: None,
+            profile: None,
         };
 
         db.update_account(id, &p).unwrap();
         db.reorder_accounts(&[id, other]).unwrap();
+        // What a client was given stays with its account (also over a new sign-in, below), until cleared.
+        let prefs = crate::model::ClientPrefs { limits: crate::model::Limits { cpu_cap: Some(25), eco: true, ..Default::default() }, anti_afk: false };
+        db.set_client_limits(id, Some(&prefs)).unwrap();
+        assert_eq!(db.account(other).unwrap().client_limits, None);
+        // Kept as given, the defaults too: that is how an account opts out of its group's.
+        db.set_client_limits(other, Some(&Default::default())).unwrap();
+        assert_eq!(db.account(other).unwrap().client_limits, Some(Default::default()));
+        db.set_client_limits(other, None).unwrap();
+        assert_eq!(db.account(other).unwrap().client_limits, None);
 
         let new = NewAccount {
             user_id: 2,
@@ -1187,6 +1516,9 @@ mod tests {
         assert_eq!(db.account_id_for_user(2).unwrap(), Some(id));
         assert_eq!(db.account_id_for_user(99).unwrap(), None);
         assert_eq!(db.accounts().unwrap().len(), 2);
+        assert_eq!(a.client_limits, Some(prefs));
+        db.update_account(id, &AccountPatch { clear_client_limits: Some(true), ..Default::default() }).unwrap();
+        assert_eq!(db.account(id).unwrap().client_limits, None);
     }
 
     #[test]
@@ -1207,6 +1539,34 @@ mod tests {
         assert_eq!(order(&db), vec![ids[2], ids[0], ids[1], ids[3]]);
         let sorts: Vec<i64> = db.accounts().unwrap().iter().map(|a| a.sort_order).collect();
         assert_eq!(sorts, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn prune_keeps_what_is_still_read() {
+        let db = Db::open_in_memory().unwrap();
+        let own = db.account(add(&db, 1)).unwrap().user_id;
+        const DAY: i64 = 24 * 3_600_000;
+        let now = 100 * DAY;
+        let rows = [
+            ("player:5", now - 2 * DAY, false),
+            ("player:6", now - DAY / 2, true),
+            ("gamestats:7", now - 2 * DAY, false),
+            ("game:8", 0, true),
+            ("rolimons", 0, true),
+            ("value:999", now - 31 * DAY, false),
+            ("value:998", now - 2 * DAY, true),
+        ];
+        for (k, at, _) in rows {
+            db.cache_put(k, "{}", at).unwrap();
+        }
+        db.cache_put(&format!("value:{own}"), "{}", 0).unwrap();
+        db.cache_put(&format!("info:{own}"), "{}", 0).unwrap();
+        assert_eq!(db.prune_cache(now).unwrap(), 3);
+        for (k, _, kept) in rows {
+            assert_eq!(db.cache_get(k, i64::MAX / 2, now).unwrap().is_some(), kept, "{k}");
+        }
+        assert!(db.cache_get(&format!("value:{own}"), i64::MAX / 2, now).unwrap().is_some(), "an account's own count");
+        assert!(db.cache_get(&format!("info:{own}"), i64::MAX / 2, now).unwrap().is_some());
     }
 
     #[test]
@@ -1267,6 +1627,7 @@ mod tests {
             id,
             name: name.into(),
             color: color.map(Into::into),
+            defaults: None,
         };
         let g = db.save_group(&input(None, "  PvP ", Some("#ABCDEF"))).unwrap();
         assert_eq!((g.name.as_str(), g.color.as_deref(), g.sort_order), ("PvP", Some("#abcdef"), 0));
@@ -1357,12 +1718,30 @@ mod tests {
         db.add_server(id, &visit("a", 1)).unwrap();
         db.add_server(id, &visit("a", 2)).unwrap();
         assert_eq!(db.servers(id).unwrap().len(), 1, "the same server again isn't a new visit");
+        assert_eq!(db.servers_since(7, 1).unwrap(), ["a"]);
+        assert!(db.servers_since(7, 2).unwrap().is_empty() && db.servers_since(8, 0).unwrap().is_empty(), "older, or another game's");
         for i in 0..MAX_SERVERS + 5 {
             db.add_server(id, &visit(&format!("job{i}"), i)).unwrap();
         }
         let all = db.servers(id).unwrap();
         assert_eq!(all.len() as i64, MAX_SERVERS);
         assert_eq!(all[0].job_id, format!("job{}", MAX_SERVERS + 4), "newest first");
+    }
+
+    #[test]
+    fn recent_servers_lists_each_server_once_with_its_accounts() {
+        let db = Db::open_in_memory().unwrap();
+        let (a, b) = (add(&db, 1), add(&db, 2));
+        let visit = |job: &str, private, at| ServerVisit { place_id: 7, job_id: job.into(), private, joined_at: at };
+        db.add_server(a, &visit("old", false, 1)).unwrap();
+        db.add_server(a, &visit("shared", false, 2)).unwrap();
+        db.add_server(b, &visit("shared", false, 5)).unwrap();
+        db.add_server(b, &visit("vip", true, 3)).unwrap();
+        let got = db.recent_servers().unwrap();
+        assert_eq!(got.iter().map(|s| s.job_id.as_str()).collect::<Vec<_>>(), ["shared", "vip", "old"], "newest visit first");
+        let mut ids = got[0].account_ids.clone();
+        ids.sort_unstable();
+        assert_eq!((ids, got[0].joined_at, got[1].private), (vec![a, b], 5, true));
     }
 
     #[test]
@@ -1375,6 +1754,53 @@ mod tests {
         assert_eq!(db.full_quality_accounts().unwrap(), [id]);
     }
 
+    #[test]
+    fn group_defaults_fill_what_an_account_leaves_unset() {
+        let db = Db::open_in_memory().unwrap();
+        let (a, b) = (add(&db, 1), add(&db, 2));
+        let group = |name: &str, d: GroupDefaults| db.save_group(&GroupInput { id: None, name: name.into(), color: None, defaults: Some(d) }).unwrap();
+        let prefs = crate::model::ClientPrefs { anti_afk: false, ..Default::default() };
+        let first = group("first", GroupDefaults { fps_cap: Some(30), full_quality: Some(false), client: Some(prefs), ..Default::default() });
+        let second = group(
+            "second",
+            GroupDefaults { fps_cap: Some(60), full_quality: Some(true), launch_args: Some("  -x ".into()), allow_disconnect: Some(true), ..Default::default() },
+        );
+        assert_eq!(second.defaults.launch_args.as_deref(), Some("-x"), "trimmed");
+        db.set_account_groups(a, &[second.id, first.id]).unwrap();
+
+        // Each field from the first group, in the list's order, that sets it.
+        let e = db.effective(a).unwrap();
+        assert_eq!((e.fps_cap, e.full_quality, e.launch_args.as_deref(), e.allow_disconnect, e.discord_muted), (Some(30), false, Some("-x"), true, false));
+        assert_eq!(e.client_limits, Some(prefs));
+        assert!(db.full_quality_accounts().unwrap().is_empty(), "the first group says no");
+        // What is stored for the account is untouched, and so is an account outside the groups.
+        assert_eq!(db.account(a).unwrap().fps_cap, None);
+        assert_eq!(db.effective(b).unwrap(), db.account(b).unwrap());
+
+        // The account's own values win.
+        db.update_account(a, &patch(|p| p.fps_cap = Some(15))).unwrap();
+        db.update_account(a, &patch(|p| p.full_quality = Some(true))).unwrap();
+        let e = db.effective(a).unwrap();
+        assert_eq!((e.fps_cap, e.full_quality), (Some(15), true));
+        assert_eq!(db.full_quality_accounts().unwrap(), [a]);
+
+        // Only the second group: Full quality comes from it. Nothing set is nothing stored.
+        db.update_account(a, &patch(|p| p.full_quality = Some(false))).unwrap();
+        db.set_account_groups(a, &[second.id]).unwrap();
+        db.set_account_groups(b, &[second.id]).unwrap();
+        assert_eq!(db.full_quality_accounts().unwrap(), [a, b]);
+        db.set_group_defaults(second.id, &GroupDefaults { fps_cap: Some(0), launch_args: Some(" ".into()), client: Some(Default::default()), ..Default::default() }).unwrap();
+        assert_eq!(db.groups().unwrap().iter().find(|g| g.id == second.id).unwrap().defaults, GroupDefaults::default());
+        assert!(db.full_quality_accounts().unwrap().is_empty());
+
+        // A removed group leaves the favourites that named it: its id goes to the next group made.
+        let fav = db.save_favourite(None, "f", b"target", &[], false).unwrap();
+        db.set_favourite_options(fav, &crate::model::FavouriteOptions { group_ids: vec![first.id, second.id], ..Default::default() }).unwrap();
+        db.remove_group(second.id).unwrap();
+        assert_eq!(db.favourites().unwrap()[0].options.group_ids, [first.id]);
+        db.remove_group(first.id).unwrap();
+        assert!(db.favourites().unwrap()[0].options.group_ids.is_empty());
+    }
     #[test]
     fn playtime_adds_up_and_goes_with_its_account() {
         let db = Db::open_in_memory().unwrap();
@@ -1389,6 +1815,42 @@ mod tests {
         assert_eq!(rows[0].ms, 3_000, "most played first");
         db.remove_accounts(&[a]).unwrap();
         assert!(db.playtime().unwrap().iter().all(|r| r.account_id == b), "goes with its account");
+    }
+
+    #[test]
+    fn playtime_is_also_kept_by_day_for_90_days() {
+        let db = Db::open_in_memory().unwrap();
+        let a = add(&db, 1);
+        const DAY: i64 = 86_400_000;
+        // Noon UTC is the same date in every timezone but the far ones, and 100 days apart is 100 dates apart everywhere.
+        let then = 1_700_000_000_000 / DAY * DAY + DAY / 2;
+        db.add_playtime(&[(a, 7, 1_000), (a, 9, 500), (9_999, 7, 1)], then).unwrap();
+        let days = db.playtime_days().unwrap();
+        assert_eq!((days.len(), days[0].account_id, days[0].ms), (1, a, 1_500), "both places on one day, no row for a removed account");
+        assert!((20_231_114..=20_231_115).contains(&days[0].day), "{}", days[0].day);
+        db.add_playtime(&[(a, 7, 200)], then + 89 * DAY).unwrap();
+        assert_eq!(db.playtime_days().unwrap().len(), 2, "89 days back is kept");
+        db.add_playtime(&[(a, 7, 300)], then + 100 * DAY).unwrap();
+        let days = db.playtime_days().unwrap();
+        assert_eq!(days.iter().map(|d| d.ms).collect::<Vec<_>>(), [200, 300], "older than 90 days is dropped, oldest first");
+        db.add_playtime(&[(a, 7, 89_000)], then + 100 * DAY).unwrap();
+        let cells = db.playtime_day_cells().unwrap();
+        assert_eq!(cells[1][1..], ["user1", "1"].map(String::from), "89.3 s is a minute");
+        assert!(cells[1][0].starts_with("2024-02-2"), "{}", cells[1][0]);
+    }
+
+    #[test]
+    fn an_accounts_profile_is_kept_and_an_empty_one_removes_it() {
+        let db = Db::open_in_memory().unwrap();
+        let (id, other) = (add(&db, 1), add(&db, 2));
+        let p = crate::performance::Profile { fps_cap: Some(10), tiny_on_launch: Some(true), ..Default::default() };
+        db.update_account(id, &AccountPatch { profile: Some(p.clone()), ..Default::default() }).unwrap();
+        assert_eq!(db.account(id).unwrap().profile, Some(p.clone()));
+        assert_eq!(db.account(other).unwrap().profile, None);
+        assert_eq!(db.account_profiles().unwrap(), [(id, p)].into());
+        db.update_account(id, &AccountPatch { profile: Some(Default::default()), ..Default::default() }).unwrap();
+        assert_eq!(db.account(id).unwrap().profile, None);
+        assert!(db.account_profiles().unwrap().is_empty());
     }
 
     #[test]
@@ -1437,6 +1899,16 @@ mod tests {
         assert_eq!((list[0].at, list[0].kind, list[0].has_log), (204, CrashKind::Hang, true));
         assert_eq!((list[1].kind, list[1].has_log, list[199].at), (CrashKind::Disconnect, false, 5));
         assert_eq!(db.crash_log(list[0].id).unwrap(), log);
+        // The verdict lands on the newest end of that instance.
+        assert_eq!(list[0].verdict, None);
+        db.set_crash_verdict("i", "early").unwrap();
+        db.set_crash_verdict("no such instance", "hang").unwrap();
+        let list = db.crashes().unwrap();
+        assert_eq!((list[0].verdict.as_deref(), list[1].verdict.as_deref()), (Some("early"), None));
+        let cells = db.crash_cells().unwrap();
+        assert_eq!(cells.len(), 200);
+        assert_eq!(cells[0][1..], ["user1", "hang", "0", "", "Reason: 267", "early"].map(String::from), "when: {}", cells[0][0]);
+        assert_eq!(cells[0][0].len(), 19, "a local date and time");
         assert!(matches!(db.crash_log(list[1].id), Err(AppError::NotFound)));
         // They go with the account.
         db.remove_accounts(&[id]).unwrap();
@@ -1470,11 +1942,17 @@ mod tests {
         assert_eq!(list.iter().map(|f| (f.id, f.name.as_str())).collect::<Vec<_>>(), vec![(a, "Sky"), (b, "VIP")]);
         assert_eq!((list[0].account_ids.clone(), list[0].in_tray, list[0].target.clone()), (vec![1, 2], true, b"t1".to_vec()));
         db.save_favourite(Some(a), "Sky 2", b"t3", &[3], false).unwrap();
+        // How it launches is kept beside it, and an edit of the rest leaves that alone.
+        let options = crate::model::FavouriteOptions { same_server: Some(crate::model::SameServer::RandomPublic), fps_cap: Some(30), group_ids: vec![4], hotkey: "Ctrl+Alt+1".into() };
+        db.set_favourite_options(a, &options).unwrap();
+        db.save_favourite(Some(a), "Sky 2", b"t3", &[3], false).unwrap();
+        let rows = db.favourites().unwrap();
+        assert_eq!(rows.iter().find(|f| f.id == a).unwrap().options, options);
+        assert_eq!(rows.iter().find(|f| f.id == b).unwrap().options, Default::default());
         db.reorder_favourites(&[b]).unwrap();
-        db.touch_favourite(a, 42).unwrap();
         let list = db.favourites().unwrap();
         assert_eq!(list.iter().map(|f| f.id).collect::<Vec<_>>(), vec![b, a]);
-        assert_eq!((list[1].name.as_str(), list[1].last_used_at), ("Sky 2", Some(42)));
+        assert_eq!(list[1].name, "Sky 2");
         db.remove_favourite(b).unwrap();
         assert_eq!(db.favourites().unwrap().len(), 1);
     }

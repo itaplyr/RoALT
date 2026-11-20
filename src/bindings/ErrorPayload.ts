@@ -3,4 +3,8 @@
 /**
  * What a rejected `invoke` carries to the UI.
  */
-export type ErrorPayload = { kind: string, message: string, };
+export type ErrorPayload = { kind: string, message: string, 
+/**
+ * Optional sub-kind for friendly UI messages (e.g. `"forbidden"` for a Roblox HTTP 403).
+ */
+code?: string, };

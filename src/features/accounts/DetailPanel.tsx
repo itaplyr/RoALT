@@ -7,13 +7,14 @@ import { IconButton } from "../../ui/Button";
 import { EASE } from "../../ui/motion";
 import { Tabs } from "../../ui/Tabs";
 import { DetailCookie } from "./DetailCookie";
+import { DetailHistory } from "./DetailHistory";
 import { DetailOverrides } from "./DetailOverrides";
 import { clip, DetailOverview } from "./DetailOverview";
 import { accountName, Avatar } from "./shared";
 
-export type DetailTab = "overview" | "overrides" | "cookie";
+export type DetailTab = "overview" | "overrides" | "history" | "cookie";
 
-/** One account: who it is (and the copies of its names) on top, then Overview, Overrides and Cookie.
+/** One account: who it is (and the copies of its names) on top, then Overview, Overrides, History and Cookie.
  * Only the open tab is mounted. The parent keys this by account, so nothing typed or revealed for
  * one account carries over to the next. */
 export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, checking, instance, tab, onTab, onValidate, onRemove, onLaunch, onMenu, menuOpen = false, onClose }: {
@@ -44,6 +45,7 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
   const tabs: { value: DetailTab; label: string }[] = [
     { value: "overview", label: t("dashboard.tabs.overview") },
     { value: "overrides", label: t("accounts.detail.overrides") },
+    { value: "history", label: t("accounts.detail.history") },
     { value: "cookie", label: t("accounts.detail.cookie") },
   ];
 
@@ -87,6 +89,8 @@ export function DetailPanel({ account: a, groups, vaultMode, clipboardSeconds, c
             <DetailOverview account={a} groups={groups} checking={checking} instance={instance} onValidate={onValidate} onLaunch={onLaunch} onRemove={onRemove} />
           ) : tab === "overrides" ? (
             <DetailOverrides account={a} />
+          ) : tab === "history" ? (
+            <DetailHistory account={a} />
           ) : (
             <DetailCookie account={a} vaultMode={vaultMode} clipboardSeconds={clipboardSeconds} />
           )}

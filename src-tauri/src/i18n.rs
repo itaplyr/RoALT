@@ -97,7 +97,11 @@ fn system_language() -> String {
 
 #[cfg(not(windows))]
 fn system_language() -> String {
-    String::new()
+    ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .into_iter()
+        .find_map(|key| std::env::var(key).ok().filter(|v| !v.is_empty()))
+        .map(|v| v.split('.').next().unwrap_or(&v).replace('_', "-"))
+        .unwrap_or_default()
 }
 
 /// CLDR plural category of a whole number in `lang`.

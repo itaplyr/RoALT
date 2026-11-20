@@ -1,9 +1,13 @@
 # Linux port progress
 
-This describes the Linux fork of RoALT after the v1.1.0 merge. It is not a
-statement about the upstream Windows application. Upstream removed macros in
-v1.0.1, so macros are no longer a Linux port gap. The Mocktail backend is a
-Linux-fork switch, not an upstream feature; it is listed as experimental.
+This describes the Linux fork of RoALT after the v1.3.0 merge (upstream
+v1.2.0 through v1.3.0). It is not a statement about the upstream Windows
+application. Upstream removed macros in v1.0.1, so macros are not a Linux port
+gap. It removed Clips, Trades, Outfits, owning or buying private servers and the
+Friend requests view in v1.3.0, so those are not port gaps either; joining a
+private server by link and the Servers › Private tab remain. The Mocktail
+backend is a Linux-fork switch, not an upstream feature; it is listed as
+experimental.
 
 ![Linux port status](images/linux-port-status.svg)
 
@@ -19,31 +23,35 @@ Linux-fork switch, not an upstream feature; it is listed as experimental.
 The SVG uses green for ported areas and gray for partial, untested, missing, or
 not-applicable areas.
 
-Current totals: **15 ported, 24 partial, untested or missing** across 39 areas.
+Current totals: **14 ported, 31 partial, untested or missing** across 45 areas.
 
 ## Summary
 
 | Category | Status | Coverage | Summary |
 |---|---|---:|---|
-| Accounts | Ported | 100% | Sign-in, vault, imports, groups, presence, account checks |
+| Accounts | Ported | 100% | Sign-in, vault, imports, groups, presence, account checks; v1.3.0 sign-in hardening is present |
+| First-run setup | Untested | 70% | Shared React setup and saved `onboarded` setting; vault step still says Windows sign-in |
 | Limiteds | Untested | 0% | Shared inventory and Rolimons code; not run on Linux |
 | Launching | Partial | 65% | Direct Cordial launch works; the game does not always open directly |
-| Launch queue | Partial | 70% | One-at-a-time queue is shared by Play, Home, Servers and recent servers; needs a Linux run |
+| Launch queue | Partial | 70% | One-at-a-time queue shared by Play, Home, Servers and recent servers; needs a Linux run |
 | Batches and same server | Partial | 75% | Shared batch engine and same-server picking; needs a Linux run |
-| Multi-client | Ported | 100% | One Cordial profile per account |
-| Mocktail backend | Partial | 40% | Experimental launcher; multi-instance uses per-account copies, no previews, cookie seeded from the vault |
+| Take control | Partial | 85% | Shared backend; Linux window restore, focus and `pactl` unmute; not exercised |
+| Multi-client | Ported | 100% | One Cordial profile per account; Cordial is the tested multi path |
+| Mocktail backend | Partial | 40% | Experimental launcher; multi-instance uses per-account copies and isolated data, no previews, cookie seeded from the vault |
 | Headless | Partial | 75% | Cage mode, previews and audio disable work; Show restarts, resolution is limited |
-| Previews | Ported | 100% | Cordial devctl screenshots, including headless clients |
+| Previews | Partial | 90% | Cordial devctl screenshots, including headless clients; v1.3.0 Off/1 FPS and cap untested |
 | Rejoin | Ported | 100% | Auto-rejoin/restart verified by closing a client |
 | Servers | Ported | 100% | Server browser, private servers, same-server batches |
-| Browse and details | Untested | 0% | v1.1.0 child webview, game and player details; not exercised under WebKitGTK |
+| Browse and details | Untested | 0% | Upstream child webview is Windows-only; Linux uses a kept-profile session window, details panes absent |
 | FPS cap | Partial | 60% | Passed through `CORDIAL_FLAGS`; some builds/settings still ignore it |
 | Discord | Ported | 100% | Webhook alerts and rich presence tested |
 | Alerts | Partial | 90% | Newer batch and client alert kinds use the existing Discord path; not yet run on Linux |
 | Limits | Partial | 95% | Applied to the whole Cordial process family; trim is a no-op |
 | Metrics | Partial | 70% | CPU, memory and disk I/O; no GPU counters |
 | Window controls | Partial | 80% | Hyprland/Sway/X11 focus, micro and tile; free drag resize is compositor-managed |
+| Tray | Partial | 90% | Shared Tauri tray and the stuck-in-tray fix; not re-tested on Linux |
 | Roblox updates | Ported | 100% | Handled automatically by Cordial |
+| Default launcher | Missing | 0% | Upstream writes Windows registry handlers; no Linux `roblox://` switch |
 | Anti-AFK | Partial | 80% | Hyprland/Sway/X11 F13 where tools exist; no idle detection |
 | Free resizing | Partial | 50% | Compositor-managed; the Windows mouse-hook path is a no-op |
 | Window layouts | Partial | 80% | Fit/Tiny and micro/tile through the compositor where tools exist |
@@ -51,12 +59,14 @@ Current totals: **15 ported, 24 partial, untested or missing** across 39 areas.
 | Re-authentication | Ported | 100% | Master password; Windows Hello is not available |
 | Self-update | Ported | 100% | Checks the Linux fork release, verifies SHA-256 and restarts |
 | Interface | Ported | 100% | Account tabs, layouts, drag sorting, themes |
+| Custom themes | Untested | 90% | Shared editor and CSS tokens; not run under WebKitGTK after the merge |
 | Online counts | Untested | 0% | v1.1.0 title-bar counts and refresh; shared code, not run on Linux |
 | Island redesign | Ported | 100% | Seen working under WebKitGTK in the v1.0.0 dev run |
 | Languages | Partial | 90% | 18 catalogs; some newer and Linux-only strings fall back to English |
 | Max alts | Partial | 80% | FPS, fair cap, render flags and compositor tiny windows; trim still does not |
 | Usage stats | Ported | 100% | Process-tree PSS and CPU/I/O reporting |
-| Logs | Partial | 95% | Diagnostics and Linux log-tail autopsy work; no crash dumps/event log |
+| Logs | Partial | 95% | v1.3.0 diagnostics report and Linux log-tail autopsy work; no crash dumps/event log |
+| Modpacks | Partial | 30% | Library import/export/on-off shared; applying skipped because Cordial counts as a bootstrapper |
 | News | Ported | 100% | Loaded real RoALT, DevForum and Roblox news in the v1.0.0 dev run |
 | Cookie export | Ported | 100% | `localtime_r` and atomic file writes on Linux |
 | UI sounds | Untested | 90% | Shared frontend, off by default; not run under WebKitGTK |
@@ -76,6 +86,23 @@ Ported.
 - Avatars, presence, Robux, friends, followers, subscriptions and 2-step status.
 - Import from Roblox Account Manager.
 - Per-account FPS cap, Full quality and launch arguments.
+- v1.3.0's safer sign-in (Roblox/Google/Apple hosts only, its own browser
+  profile, auth cookies deleted after the window) matches what
+  `webview_linux.rs` already does; the hardening itself has not had a dedicated
+  Linux run.
+
+## First-run setup
+
+Untested.
+
+- The setup and tour are a shared React flow (`src/features/onboarding/`) backed
+  by the saved `onboarded` setting; it opens on its own only when there are no
+  accounts, so an upgrade never sees it.
+- **Settings › About › Setup and tour** replays it.
+- On Linux the vault step still presents the default mode as **Windows
+  sign-in**, while the vault actually unlocks with the machine-id device key.
+  That wording needs a Linux pass.
+- Not run under WebKitGTK after the merge.
 
 ## Limiteds
 
@@ -94,21 +121,19 @@ Untested.
 
 Untested.
 
-- v1.1.0 adds **Browse**: roblox.com inside the RoALT window, signed in as one
-  stored account at a time, with **Popular**, **Playtime**, game pages and
-  profile pages.
-- Browse is a Tauri child webview (`browse.rs`, `Window::add_child`); RoALT
-  builds against Tauri's `unstable` feature for it. On Linux that would be a
-  WebKitGTK child of the main window, which is the untested part.
-- **Game details** and **Player details** are pages inside Browse: players,
-  visits, favourites, likes, server count, age rating, places, passes, badges,
-  and a player's groups, badges, games and limiteds.
-- RoALT keeps Browse on Roblox and refuses Robux-spending requests while
-  **Lock purchases** is on.
-- Not verified under WebKitGTK on Linux. If creating the child webview fails,
-  `browse_open` rejects and the Browse pane shows the error. **Open on
-  roblox.com** is itself Browse, so the external fallback is **Open profile** in
-  the account menu.
+- v1.1.0 adds **Browse**, with **Popular**, **Playtime**, game pages and profile
+  pages; v1.2.0/v1.3.0 added Browse games, Last played, the Limiteds list and
+  purchase lock.
+- Upstream Browse is a WebView2 child webview (`browse.rs`,
+  `Window::add_child`); that is Windows-only.
+- On Linux `browse_linux.rs` opens the account's roblox.com session in its own
+  kept-profile window (`webview::open_session`) instead. Page geometry, the
+  profile card and page events are no-ops, so the RoALT-rendered **Popular**,
+  **Playtime**, game-details and player-details panes are not available there,
+  and `set_lock` is a no-op, so the purchase lock is not enforced in that
+  window.
+- The session window itself has not been verified under WebKitGTK. If it fails,
+  use **Open profile** in the account menu or roblox.com in your own browser.
 
 ## Launching
 
@@ -152,6 +177,21 @@ Partial.
 - Cancel and re-pick the accounts that did not launch.
 - The v1.0.0 batch code is shared with upstream and still needs a Linux run.
 
+## Take control
+
+Partial.
+
+- Marking a running client **Take control** sets its `held` flag; until it closes
+  or is handed back, RoALT does not rejoin, restart, close, press anti-AFK keys
+  in, limit or lay it out.
+- Taking it restores its window size, unmutes it and brings it to the front.
+  On Linux that goes through `window_linux.rs` and `pactl`, which already back
+  the manual show/unmute actions.
+- The command (`instance_take_control`) and card state are shared, but the flow
+  has not been exercised on Linux.
+- The upstream Windows-singleton **Take over** is different and does not apply:
+  Cordial profiles provide multi-instance.
+
 ## Multi-client
 
 Ported.
@@ -167,9 +207,10 @@ Partial.
 - RoALT prefers `mocktail` on `PATH`, then `~/.local/bin/mocktail`, then `/usr/bin/mocktail`, and otherwise
   uses the Cordial path above. `ROALT_LAUNCHER=/usr/bin/cordial-run` forces
   Cordial when both are installed.
-- Single-instance only: one Roblox client at a time. Mocktail has no
-  per-account profile to separate a second client, so Cordial remains the
-  multi-instance option.
+- Upstream Mocktail is single-instance by policy. With Multi-instance on, RoALT
+  copies the launcher per account and gives each account its own auth, cache,
+  state and Android data roots. That path is experimental and has no signed-in
+  launch behind it; Cordial remains the tested multi-instance launcher.
 - No live preview and no dev-control: Mocktail exposes no devctl socket, so
   Home has no preview frames and the headless screenshot path has nothing to
   read.
@@ -203,11 +244,16 @@ Caveats:
 
 ## Previews
 
-Ported.
+Partial.
 
 - Previews come from Cordial's dev-control socket, not from a host window.
 - They work for headless clients.
 - The 0.9 preview header (status, hidden flag, sequence and age) is implemented.
+- v1.3.0 adds **Off** and **1 FPS** preview rates, a cap across all previews,
+  and slowing down while RoALT isn't in front. Those are shared frontend
+  settings and have not been run under WebKitGTK; Linux previews are devctl
+  screenshots, so the Windows capture changes (no GPU wait, redraw on change)
+  do not apply.
 
 ## Rejoin and restart
 
@@ -268,6 +314,20 @@ Caveats:
 - There is no Windows job-object equivalent for a hard CPU cap.
 - Limits apply to the tracked process; the engine child is not independently
   limited.
+
+## Modpacks
+
+Partial.
+
+- The library is shared: importing a zip as a modpack, exporting it, turning
+  each on or off and ordering them all work through `src-tauri/src/mods/`.
+- Applying them is **skipped on Linux**: `mods/runtime.rs` returns early when
+  the client is a bootstrapper, and Cordial is presented as a bootstrapper, so
+  the launch message is "Modpacks weren't applied".
+- The runtime copy also targets a Windows Roblox version folder
+  (`RobloxPlayerBeta.exe`), which does not match Cordial's Android runtime.
+- Net effect: no modded client on Linux until a Cordial-compatible path exists.
+  Shown at 30% for the shared library.
 
 ## Metrics
 
@@ -339,6 +399,17 @@ Ported.
 - Cordial updates its own Roblox build automatically.
 - RoALT does not run Roblox's Windows installer on Linux.
 
+## Default Roblox launcher
+
+Missing.
+
+- Upstream's setting (`launcher::links`) writes `roblox://` and `roblox-player:`
+  handlers into `HKCU` and launches through the program it picked.
+- The fork has no Linux handler switch, so the desktop's current `roblox://`
+  handler is unchanged and RoALT does not take it over.
+- The shared settings row calls `roblox_launchers`; treat the feature as
+  Windows-only until a Linux implementation exists.
+
 ## Anti-AFK
 
 Partial.
@@ -374,7 +445,7 @@ Partial.
 Ported.
 
 - Checks the Linux fork's latest release at startup and every five minutes.
-- Compares four-part Linux tags such as `v0.9.2.2` and the expected `v1.1.0.1`.
+- Compares four-part Linux tags such as `v0.9.2.2` and the expected `v1.3.0.1`.
 - Downloads the `roalt-linux-x86_64` asset and its SHA-256 sidecar.
 - Replaces the running executable and restarts RoALT.
 - The installer script remains the way to install Cordial, Cage and the desktop entry.
@@ -391,6 +462,28 @@ Ported.
 - Themes, accent colours and background images.
 - Performance profiles and the Performance tab.
 - Headless resolution controls (display/window size only).
+
+## Custom themes
+
+Untested.
+
+- The colour editor and built-in themes (**Midnight**, **Sakura**, **Terminal**,
+  **Ocean**, **Paper**), corner shape and share-as-code are shared frontend and
+  CSS token work.
+- Themes and accent colours worked before the merge; this editor has not been
+  run under WebKitGTK after it.
+
+## Tray
+
+Partial.
+
+- The tray icon and menu are shared Tauri code (`src-tauri/src/tray.rs`):
+  favourites, window tools, Play all again, the Anti-AFK switch and a tooltip
+  with the running client count.
+- v1.2.3 fixed RoALT getting stuck in the tray and becoming unresponsive. The
+  fix is shared, but it has not been re-tested on Linux after the merge.
+- Resting in the tray hides the page so polls, previews and animations stop. The
+  extra WebView2 memory trim remains Windows-only.
 
 ## Online counts and title-bar refresh
 
@@ -419,7 +512,7 @@ Ported.
 - The v1.0.0 island replaces the old title-bar navigation with a pill that holds
   every section and grows launch progress and running clients out of its side.
 - It was seen working under WebKitGTK in the v1.0.0 dev run.
-- Re-check it after the v1.1.0 merge along with the rest of the shell.
+- Re-check it after the v1.3.0 merge along with the rest of the shell.
 
 ## Settings search and registry
 
@@ -459,6 +552,17 @@ Ported.
 - Linux uses `localtime_r` and the same atomic file write and cleanup path as
   Windows. The file remains in the RoALT data folder until its timer or restart.
 
+## Clips, Trades, Outfits and Friend requests (removed upstream)
+
+Not areas. Upstream removed them in v1.3.0:
+
+- **Clips**, **Trades**, **Outfits**, owning or buying private servers, and the
+  **Friend requests** view are gone from upstream and from this fork. There is
+  no `src/features/clips`, `trades` or `outfits` to port.
+- What stays: joining a private server by link, the Servers › **Private** tab,
+  making friends between your own accounts, Limiteds and Browse's purchase lock.
+- Do not list these as missing Linux features; they are not in the product.
+
 ## Macros (removed upstream)
 
 Not an area. Upstream removed macros in v1.0.1:
@@ -497,7 +601,7 @@ Partial.
 
 - 18 language catalogs are present.
 - Language switching and right-to-left layout work.
-- Some newer strings, including Linux-only headless strings and v1.0.0/v1.1.0
+- Some newer strings, including Linux-only headless strings and v1.0.0–v1.3.0
   additions, fall back to English until translated.
 
 ## Max alts
@@ -524,7 +628,9 @@ Works:
 
 - RoALT's own rotating logs.
 - Client stdout/stderr logs under `logs/clients/`.
-- Diagnostics report with redaction.
+- Diagnostics report with redaction (`diagnostics.rs`): tickets, cookies, user
+  names, IP addresses, UUIDs and query secrets are masked or dropped before the
+  report is copied or saved.
 - Linux autopsy: crash kind, uptime, reason, clues, and the redacted end of the
   client log.
 

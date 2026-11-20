@@ -9,14 +9,23 @@
 
 .PARAMETER Dev
   Also keeps a copy as installers\RoALT-Setup-<version>-dev-<yyyyMMdd-HHmm>.exe: one installer
-  per change, earlier ones never overwritten.
+  per change, earlier ones never overwritten. The build never offers a RoALT update (ROALT_DEV,
+  self_update.rs): the published release would replace it with older code.
+
+.PARAMETER Qa
+  The QA team's build: as -Dev (no RoALT updates, symbols kept), named
+  installers\RoALT-Setup-<version>-qa-<yyyyMMdd-HHmm>.exe, and the first-run setup replays every time
+  RoALT starts (VITE_ROALT_QA, features/onboarding/qa.ts). Never published: release.yml passes neither.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1 -Dev
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1 -Qa
 #>
-param([switch]$Dev)
+param([switch]$Dev, [switch]$Qa)
+$indev = $Dev -or $Qa
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -62,7 +71,15 @@ $perl = @("C:\Strawberry\perl\bin", "$env:ProgramFiles\Strawberry\perl\bin", $(i
 if (-not $perl) { Stop-Build 'Strawberry Perl was not found (OpenSSL, for the encrypted database, needs it to build)' 'winget install StrawberryPerl.StrawberryPerl, then run this again' }
 $env:PATH = "$perl;$env:PATH"
 
-Write-Host "Building RoALT $version (release)"
+Write-Host "Building RoALT $version (release$(if ($Qa) { ', QA' }))"
+# Set or cleared for every build: a release must never inherit them from the shell.
+$env:ROALT_DEV = if ($indev) { '1' } else { $null }
+$env:VITE_ROALT_QA = if ($Qa) { '1' } else { $null }
+# An indev build's PDB has RoALT's function names (debug info goes in the PDB, not the exe), so a
+# stuck main thread's stack in the log (`watchdog`) can be named. LTO makes them internal: public
+# symbols alone don't name them.
+$env:CARGO_PROFILE_RELEASE_STRIP = if ($indev) { 'none' } else { $null }
+$env:CARGO_PROFILE_RELEASE_DEBUG = if ($indev) { 'line-tables-only' } else { $null }
 Push-Location $root
 try {
     if (-not (Test-Path node_modules)) {
@@ -91,9 +108,13 @@ foreach ($try in 1..2) {
 if ($LASTEXITCODE -ne 0) { Stop-Build "ISCC failed (exit $LASTEXITCODE)" 'fix the error ISCC names above, then run this again' }
 
 $setup = Get-Item "$root\dist-installer\RoALT-Setup-$version.exe"
-if ($Dev) {
+if ($indev) {
     New-Item -ItemType Directory -Force "$root\installers" | Out-Null
-    $setup = Copy-Item $setup.FullName "$root\installers\RoALT-Setup-$version-dev-$(Get-Date -Format 'yyyyMMdd-HHmm').exe" -PassThru
+    $kind = if ($Qa) { 'qa' } else { 'dev' }
+    $setup = Copy-Item $setup.FullName "$root\installers\RoALT-Setup-$version-$kind-$(Get-Date -Format 'yyyyMMdd-HHmm').exe" -PassThru
+    # This build's exe and PDB beside it: what names its frames in a watchdog log line.
+    $syms = New-Item -ItemType Directory -Force ($setup.FullName -replace '\.exe$', '-symbols')
+    Copy-Item $exe, ($exe -replace '\.exe$', '.pdb') $syms.FullName
 }
 Write-Host ''
 Write-Host "Installer: $($setup.FullName)" -ForegroundColor Green

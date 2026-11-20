@@ -29,7 +29,7 @@ export function Counted({ k, n }: { k: Key; n: number }) {
 
 /** The header's one pill. At rest: check, export, add. With rows ticked it morphs into what applies to
  * them; reasons for what won't work show in the line under it, never in a tooltip alone. */
-export function AccountsToolbar({ total, selected, groups, playable, friendable, mainSkipped, checking, befriending, onCheckAll, onCheck, onExport, onAdd, onPlay, onBefriend, onAddToGroup, onRemove, onClear }: {
+export function AccountsToolbar({ total, selected, groups, playable, friendable, mainSkipped, checking, befriending, onCheckAll, onCheck, onExport, onAdd, onPlay, onBefriend, onAddToGroup, onEdit, onRemove, onClear }: {
   total: number;
   /** Ticked account ids. */
   selected: number[];
@@ -49,6 +49,8 @@ export function AccountsToolbar({ total, selected, groups, playable, friendable,
   onPlay: () => void;
   onBefriend: () => void;
   onAddToGroup: (g: Group) => void;
+  /** The ticked accounts' overrides, all at once. */
+  onEdit: () => void;
   onRemove: () => void;
   onClear: () => void;
 }) {
@@ -171,6 +173,9 @@ export function AccountsToolbar({ total, selected, groups, playable, friendable,
           <Button variant="ghost" size="md" iconEnd="chevron" popoverTarget={GROUP_MENU} style={groupMenu.style}>
             {t("accounts.addToGroup")}
           </Button>
+          <Button variant="ghost" size="md" icon="pencil" aria-haspopup="dialog" onClick={onEdit}>
+            {t("accounts.bulk.edit")}
+          </Button>
           <Button variant="ghost" size="md" icon="download" onClick={() => onExport(selected)}>
             {t("accounts.exportCookiesEllipsis")}
           </Button>
@@ -212,6 +217,7 @@ export function AccountsToolbar({ total, selected, groups, playable, friendable,
       <Popover id={MORE_MENU} anchor={moreMenu.name} placement="below-end" role="menu" label={t("home.more")}>
         <MenuItem icon="accounts" disabled={!canBefriend} onSelect={befriend}>{t("accounts.befriendEllipsis")}</MenuItem>
         <MenuItem icon="download" onSelect={() => onExport(selected)}>{t("accounts.exportCookiesEllipsis")}</MenuItem>
+        <MenuItem icon="pencil" onSelect={onEdit}>{t("accounts.bulk.edit")}</MenuItem>
         <MenuSeparator />
         <MenuLabel>{t("accounts.addToGroup")}</MenuLabel>
         {groupItems}

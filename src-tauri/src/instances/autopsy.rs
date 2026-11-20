@@ -22,14 +22,51 @@ const MAX_LINE: usize = 300;
 const HANDLER_HEAD: u64 = 64 * 1024;
 const CLIENT_EXE: &str = "RobloxPlayerBeta.exe";
 
-/// Logs the whole autopsy. Blocking (it reads files and asks Windows): on a thread of its own.
-pub fn report(c: &Ended) {
+/// What the evidence points to, first of all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verdict {
+    /// It stopped responding and was given up on.
+    Hang,
+    /// Roblox disconnected it: not a crash.
+    Disconnect,
+    /// A crash dump or Windows' record of a fault: the client itself crashed.
+    Crashed,
+    /// It ended before writing a log.
+    NoLog,
+    /// It ended by itself within 30 s, with no crash recorded.
+    Early,
+    /// It ended with no crash recorded.
+    Unknown,
+}
+
+impl Verdict {
+    /// Kept with the recorded end (`Db::set_crash_verdict`); the UI words it.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Hang => "hang",
+            Self::Disconnect => "disconnect",
+            Self::Crashed => "crashed",
+            Self::NoLog => "noLog",
+            Self::Early => "early",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// Logs the whole autopsy and says what it points to. Blocking (it reads files and asks Windows):
+/// on a thread of its own.
+pub fn report(c: &Ended) -> Verdict {
     let id = &c.instance_id;
     let launched = UNIX_EPOCH + Duration::from_millis(c.started_at.max(0) as u64);
     let logs = logwatch::logs_dir();
-    let dumps = logs.as_deref().map_or_else(Vec::new, |d| dumps_since(d, launched));
-    let faults = windows_faults(c);
-    log::warn!("autopsy {id}: {}", verdict(c, c.log.is_some(), !dumps.is_empty(), !faults.is_empty()));
+    // Its own dump is written as it dies: one from another client's crash earlier in this run isn't its.
+    let died = c.died_after_ms.map_or(c.at - 120_000, |ms| c.started_at + ms - 30_000).max(c.started_at).max(0);
+    let dumps = logs.as_deref().map_or_else(Vec::new, |d| dumps_since(d, UNIX_EPOCH + Duration::from_millis(died as u64)));
+    // Not for a disconnect: it is no crash, and a server shutting down ends many clients at once,
+    // each of which would start a wevtutil.exe while RoALT relaunches them.
+    let faults = if c.kind == CrashKind::Disconnect { Vec::new() } else { windows_faults(c) };
+    let found = judge(c, c.log.is_some(), !dumps.is_empty(), !faults.is_empty());
+    log::warn!("autopsy {id}: {}", words(found, c));
     let lived = c.died_after_ms.map_or_else(|| "unknown".to_owned(), |ms| format!("{} s", ms / 1000));
     log::info!("autopsy {id}: {:?} of account {}, lived {lived}, seen as ended after {} s; {}", c.kind, c.account_id, c.uptime_ms / 1000, c.clues);
     let others = process::roblox_processes().len();
@@ -51,18 +88,30 @@ pub fn report(c: &Ended) {
             None => log::info!("autopsy {id}: no crash handler log names this client's"),
         }
     }
+    found
 }
 
-/// What the evidence points to, first of all (pure).
-fn verdict(c: &Ended, has_log: bool, dump: bool, fault: bool) -> String {
-    let early = c.died_after_ms.is_some_and(|ms| ms < 30_000);
-    match () {
-        _ if matches!(c.kind, CrashKind::Hang) => "the client stopped responding and was given up on: look at the end of its log for what it was doing".to_owned(),
-        _ if matches!(c.kind, CrashKind::Disconnect) => format!("Roblox disconnected it, reason {:?}: not a crash", c.reason),
-        _ if dump || fault => "the client itself crashed: see the crash dump and Windows' record below".to_owned(),
-        _ if !has_log => "it ended before writing a log, with no crash recorded: it didn't get to start properly (look at antivirus, a damaged Roblox install or the client's version)".to_owned(),
-        _ if early => "it ended early by itself with no crash recorded: something closed it or it closed itself (look at the end of its log, an update or the anti-cheat)".to_owned(),
-        _ => "it ended with no crash recorded: closed by hand, by another program or by itself (Roblox can't tell RoALT which)".to_owned(),
+/// The verdict, by the strongest evidence (pure).
+fn judge(c: &Ended, has_log: bool, dump: bool, fault: bool) -> Verdict {
+    match c.kind {
+        CrashKind::Hang => Verdict::Hang,
+        CrashKind::Disconnect => Verdict::Disconnect,
+        _ if dump || fault => Verdict::Crashed,
+        _ if !has_log => Verdict::NoLog,
+        _ if c.died_after_ms.is_some_and(|ms| ms < 30_000) => Verdict::Early,
+        _ => Verdict::Unknown,
+    }
+}
+
+/// The verdict in the log's words.
+fn words(v: Verdict, c: &Ended) -> String {
+    match v {
+        Verdict::Hang => "the client stopped responding and was given up on: look at the end of its log for what it was doing".to_owned(),
+        Verdict::Disconnect => format!("Roblox disconnected it, reason {:?}: not a crash", c.reason),
+        Verdict::Crashed => "the client itself crashed: see the crash dump and Windows' record below".to_owned(),
+        Verdict::NoLog => "it ended before writing a log, with no crash recorded: it didn't get to start properly (look at antivirus, a damaged Roblox install or the client's version)".to_owned(),
+        Verdict::Early => "it ended early by itself with no crash recorded: something closed it or it closed itself (look at the end of its log, an update or the anti-cheat)".to_owned(),
+        Verdict::Unknown => "it ended with no crash recorded: closed by hand, by another program or by itself (Roblox can't tell RoALT which)".to_owned(),
     }
 }
 
@@ -178,13 +227,14 @@ mod tests {
     #[test]
     fn the_verdict_goes_by_the_strongest_evidence() {
         let early = ended(CrashKind::Crash, Some(8_000));
-        assert!(verdict(&early, true, true, false).contains("itself crashed"));
-        assert!(verdict(&early, false, false, true).contains("itself crashed"));
-        assert!(verdict(&early, false, false, false).contains("before writing a log"));
-        assert!(verdict(&early, true, false, false).contains("ended early"));
-        assert!(verdict(&ended(CrashKind::Crash, Some(900_000)), true, false, false).contains("no crash recorded"));
-        assert!(verdict(&ended(CrashKind::Disconnect, None), true, true, true).contains("not a crash"));
-        assert!(verdict(&ended(CrashKind::Hang, None), true, true, true).contains("stopped responding"));
+        assert_eq!(judge(&early, true, true, false), Verdict::Crashed);
+        assert_eq!(judge(&early, false, false, true), Verdict::Crashed);
+        assert_eq!(judge(&early, false, false, false), Verdict::NoLog);
+        assert_eq!(judge(&early, true, false, false), Verdict::Early);
+        assert_eq!(judge(&ended(CrashKind::Crash, Some(900_000)), true, false, false), Verdict::Unknown);
+        assert_eq!(judge(&ended(CrashKind::Disconnect, None), true, true, true), Verdict::Disconnect);
+        assert_eq!(judge(&ended(CrashKind::Hang, None), true, true, true), Verdict::Hang);
+        assert!(words(Verdict::Disconnect, &early).contains("not a crash"));
     }
 
     #[test]

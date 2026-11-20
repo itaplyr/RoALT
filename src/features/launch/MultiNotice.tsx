@@ -52,7 +52,7 @@ export function MultiNotice({ wanted, replaces, className = "" }: { wanted: bool
   const { toggle, dialog } = useMultiToggle();
   const run = () => {
     setBusy(true);
-    (confirm === "takeOver" ? api.multiInstanceTakeOver() : api.robloxCloseAll(false))
+    (confirm === "takeOver" ? api.multiInstanceTakeOver() : api.robloxCloseAll())
       .then(apply, toastError)
       .finally(() => {
         setBusy(false);

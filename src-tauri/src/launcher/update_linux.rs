@@ -40,6 +40,10 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+pub(crate) async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
+    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| AppError::Internal(e.to_string()))?
+}
+
 pub fn is_version(s: &str) -> bool {
     s.strip_prefix("version-").is_some_and(|h| h.len() == 16 && h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
 }
@@ -68,9 +72,10 @@ pub async fn update_hold(_s: &App, _closing: usize) -> Option<String> {
 pub fn note_started(_s: &App, _exe: &client::ClientExe, _production: bool, _pid: u32, _started: u64) {}
 
 /// Linux has no RoALT-managed client update; the launcher is supplied by Cordial/Sober. The
-/// production channel flag is what a normal launch uses.
-pub async fn launch_client(_s: &App) -> Result<(client::ClientExe, bool)> {
-    Ok((client::find()?, true))
+/// production channel flag is what a normal launch uses; nothing updates itself (Cordial owns
+/// the build).
+pub async fn launch_client(_s: &App) -> Result<(client::ClientExe, bool, bool)> {
+    Ok((client::find()?, true, false))
 }
 
 pub fn client(_s: &App) -> RobloxClient {

@@ -2,6 +2,12 @@ name = "roalt-online"
 main = "worker.js"
 compatibility_date = "2026-10-01"
 
+# No Workers Logs: every ping (and its Durable Object call) was an observability event, millions a
+# day, and the counter has nothing worth reading in them. Turn on with a low head_sampling_rate
+# when debugging.
+[observability]
+enabled = false
+
 [[durable_objects.bindings]]
 name = "COUNTER"
 class_name = "Counter"

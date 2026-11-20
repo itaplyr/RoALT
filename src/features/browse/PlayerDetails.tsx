@@ -12,7 +12,6 @@ import { Drawer } from "../../ui/Drawer";
 import { num, StatGrid, type Stat } from "../../ui/StatGrid";
 import { Tabs } from "../../ui/Tabs";
 import { TopItems, ValueFacts } from "../accounts/Limiteds";
-import { useValueCount } from "../accounts/valueCount";
 import { Listed, useGameDetails } from "./GameDetails";
 import { Problem } from "./Native";
 
@@ -174,8 +173,6 @@ function Body({ p, accountId, onGame }: { p: PlayerStats; accountId: number; onG
 function Value({ accountId, userId }: { accountId: number; userId: number }) {
   const qc = useQueryClient();
   const rolimons = useSettings().data?.rolimonsValues ?? false;
-  // Home's Count all reads inventories too: one count at a time.
-  const all = useValueCount();
   const key = qk.playerValue(accountId, userId);
   const value = useQuery({ queryKey: key, queryFn: () => api.playerValue(accountId, userId), staleTime: Infinity, retry: false });
   const recount = useMutation({
@@ -195,7 +192,7 @@ function Value({ accountId, userId }: { accountId: number; userId: number }) {
         <h3 className="label text-fg-2">{t("value.title")}</h3>
         {/* Also after "private": who may see an inventory can change (a friend, the owner's setting). */}
         {r && (
-          <Button size="sm" variant="ghost" icon="refresh" busy={busy} aria-disabled={(all.running && !busy) || undefined} onClick={() => !busy && !all.running && recount.mutate()}>
+          <Button size="sm" variant="ghost" icon="refresh" busy={busy} onClick={() => !busy && recount.mutate()}>
             {v ? t("value.countAgain") : t("value.count")}
           </Button>
         )}

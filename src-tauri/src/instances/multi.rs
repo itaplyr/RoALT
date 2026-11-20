@@ -33,7 +33,7 @@ use crate::model::MultiInstanceStatus;
 pub const SINGLETON_NAME: &str = "ROBLOX_singletonEvent";
 
 fn running() -> String {
-    tr!("Roblox is already running. Close it (including its tray icon) to run several clients.")
+    tr!("Roblox is already running. Close it (including its tray icon) or take it over so a new launch doesn't replace it.")
 }
 
 fn elevated() -> String {

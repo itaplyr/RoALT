@@ -103,18 +103,18 @@ impl Preview {
     }
 }
 
-/// The client's preview, asking for a newer picture at most `max_w` pixels wide (its aspect kept)
-/// unless it is minimized: then its last picture stays. Never waits, for the capture or the client.
-/// `pid`: None while only its bootstrapper is seen.
-pub fn preview(pid: Option<u32>, max_w: u32) -> Preview {
+/// The client's preview, asking for a newer picture at most `max_w` pixels wide (its aspect kept;
+/// None: no new one) unless it is minimized: then its last picture stays. Never waits, for the
+/// capture or the client. `pid`: None while only its bootstrapper is seen.
+pub fn preview(pid: Option<u32>, max_w: Option<u32>) -> Preview {
     let Some((hwnd, iconic)) = pid.and_then(process::main_window) else {
         return Preview { status: status_of(None, false, false), hidden: false, shot: None };
     };
-    if !iconic {
+    if !iconic && let Some(max_w) = max_w {
         super::capture::request(hwnd, max_w);
     }
     let shot = super::capture::last(hwnd);
-    Preview { status: status_of(Some(iconic), shot.is_some(), super::capture::unsupported()), hidden: iconic, shot }
+    Preview { status: status_of(Some(iconic), shot.is_some(), super::capture::unsupported(hwnd)), hidden: iconic, shot }
 }
 
 /// An older RoALT's ghost: these extended style bits, drawn at alpha 1. Only ever read, to bring
@@ -414,12 +414,21 @@ fn saved() -> MutexGuard<'static, Vec<(String, u32, WINDOWPLACEMENT)>> {
 }
 
 /// Minimizes the client without taking the focus (Minimize on launch); nothing if it has no window
-/// or is minimized already.
+/// or is minimized already. First one picture of it, for up to `LAUNCH_PICTURE_WAIT`: a minimized
+/// client draws nothing, and its card would stay empty.
 pub fn hide_on_launch(pid: u32) {
-    if let Some((hwnd, false)) = process::main_window(pid) {
-        hide(hwnd);
+    let Some((hwnd, false)) = process::main_window(pid) else { return };
+    let until = Instant::now() + LAUNCH_PICTURE_WAIT;
+    while super::capture::last(hwnd).is_none() && !super::capture::unsupported(hwnd) && Instant::now() < until {
+        super::capture::request(hwnd, LAUNCH_PICTURE_W);
+        std::thread::sleep(Duration::from_millis(100));
     }
+    hide(hwnd);
 }
+
+const LAUNCH_PICTURE_WAIT: Duration = Duration::from_secs(2);
+/// The card's picture width on most screens (`useThumbnail`): the card asks again at its own.
+const LAUNCH_PICTURE_W: u32 = 480;
 
 /// The client's main window, for changing it: an error while it has none or doesn't respond
 /// (sizing a hung window would wait until it does).
@@ -499,7 +508,7 @@ pub fn micro(id: &str, pid: u32, on: bool, size: (u32, u32)) -> Result<(u32, u32
     size_set_now(pid);
     if on {
         remember(id, pid, hwnd);
-        normal(hwnd, false);
+        normal(hwnd);
         let (fw, fh) = frame(hwnd).unwrap_or((0, 0));
         free_resize(hwnd, (0, 0, size.0 as i32 + fw, size.1 as i32 + fh), true);
         // Only now: until the tracker has it as tiny too, `sweep` would drop it.
@@ -643,7 +652,7 @@ pub fn place(id: &str, pid: u32, rect: (i32, i32, i32, i32), small: Option<(u32,
     } else {
         saved().retain(|(i, p, _)| !(i == id && *p == pid));
     }
-    normal(hwnd, false);
+    normal(hwnd);
     free_resize(hwnd, rect, false);
     // Only now: until the tracker has it as tiny too, `sweep` would drop it.
     set_tiny(pid, small);
@@ -700,13 +709,12 @@ fn remember(id: &str, pid: u32, hwnd: HWND) {
     }
 }
 
-/// Out of maximized or minimized, without taking the focus, so it can be sized; `queued`
-/// posts it (ahead of a queued resize) instead of waiting for the client.
-fn normal(hwnd: HWND, queued: bool) {
+/// Out of maximized or minimized, without taking the focus, so it can be sized.
+fn normal(hwnd: HWND) {
     // SAFETY: reads and sets one top-level window's state.
     unsafe {
         if IsIconic(hwnd).as_bool() || IsZoomed(hwnd).as_bool() {
-            let _ = if queued { ShowWindowAsync(hwnd, SW_SHOWNOACTIVATE) } else { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         }
     }
 }
@@ -727,11 +735,6 @@ fn client_size(hwnd: HWND) -> Option<(u32, u32)> {
     // SAFETY: reads one window's client size into a local.
     unsafe { GetClientRect(hwnd, &mut r) }.ok()?;
     Some(((r.right - r.left).max(0) as u32, (r.bottom - r.top).max(0) as u32))
-}
-
-/// BGRX to opaque RGBA (pure).
-pub fn to_rgba(bgra: &[u8]) -> Vec<u8> {
-    bgra.as_chunks::<4>().0.iter().flat_map(|p| [p[2], p[1], p[0], 255]).collect()
 }
 
 #[cfg(test)]
@@ -915,11 +918,6 @@ mod tests {
         let none = Preview { status: Status::NoWindow, hidden: false, shot: None }.to_bytes(0);
         assert_eq!(none.len(), 24);
         assert_eq!(word(&none, 2), 2);
-    }
-
-    #[test]
-    fn pictures_turn_rgba() {
-        assert_eq!(to_rgba(&[1, 2, 3, 0, 4, 5, 6, 9]), [3, 2, 1, 255, 6, 5, 4, 255]);
     }
 
     #[test]

@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
 import "./accounts.css";
 import { api, type AccountStatus, type AccountSummary, type Density, type Group, type Presence, type VaultMode } from "../../api";
-import { qk, setAccounts, useInstances, usePresence, useSettings, useUpdateAccount } from "../../data";
+import { accountValueQuery, qk, setAccounts, useInstances, usePresence, useSettings, useUpdateAccount } from "../../data";
 import { isRtl, t, type Key } from "../../i18n";
 import { announce, overlayOpen } from "../../ui/a11y";
 import { Kbd } from "../../ui/Bits";
@@ -12,19 +12,21 @@ import { ConfirmDialog } from "../../ui/Dialog";
 import { Input } from "../../ui/Field";
 import { Icon } from "../../ui/Icon";
 import { SPRING, Swap, TWEEN, useReducedMotionFlag } from "../../ui/motion";
-import { MenuRadioItem, Popover, useAnchor } from "../../ui/Popover";
+import { MenuCheckItem, MenuRadioItem, Popover, useAnchor } from "../../ui/Popover";
 import { Divider, usePanelWidth } from "../../ui/Resizer";
 import { toast } from "../../ui/Toast";
 import { isLive } from "../launch/Running";
 import { AccountMenu, type MenuAt } from "./AccountMenu";
 import { AccountsTable } from "./AccountsTable";
 import { AccountsToolbar, Counted } from "./AccountsToolbar";
+import { BulkEditDialog } from "./BulkEditDialog";
+import { colLabel, COLS, colText, nextSort, sorted, useCols, useSort, type Col, type Extra } from "./columns";
 import { DetailPanel, type DetailTab } from "./DetailPanel";
 import { ExportCookies } from "./ExportCookies";
 import { GroupChips } from "./GroupsNav";
-import { ago, useRemoveAccounts } from "./shared";
+import { accountName, ago, useRemoveAccounts } from "./shared";
 
-type Filter = "all" | "inGame" | "online" | "offline" | Exclude<AccountStatus, "valid"> | "fav";
+type Filter = "all" | "inGame" | "online" | "offline" | Exclude<AccountStatus, "valid"> | "fav" | "own";
 // The filters match what the Status column shows.
 const FILTERS: { key: Filter; label: Key }[] = [
   { key: "all", label: "accounts.filter.all" },
@@ -35,7 +37,12 @@ const FILTERS: { key: Filter; label: Key }[] = [
   { key: "challenged", label: "accounts.status.challenged" },
   { key: "unknown", label: "accounts.status.unknown" },
   { key: "fav", label: "accounts.filter.fav" },
+  { key: "own", label: "accounts.detail.overrides" },
 ];
+
+/** The account has a setting of its own (its Overrides tab): what the "Overrides" filter keeps. */
+const hasOwn = (a: AccountSummary) =>
+  a.fpsCap !== null || a.launchArgs !== null || a.fullQuality || a.discordMuted || a.allowDisconnect || Object.keys(a.customFlags).length > 0;
 
 /** What the Status cell shows: presence for a valid cookie (Studio counts as online), else the cookie status. */
 const shownKey = (a: AccountSummary, p?: Presence): Filter | "valid" => {
@@ -43,7 +50,7 @@ const shownKey = (a: AccountSummary, p?: Presence): Filter | "valid" => {
   if (!p || p.kind === "unknown") return "valid";
   return p.kind === "studio" ? "online" : p.kind;
 };
-const inFilter = (a: AccountSummary, f: Filter, p?: Presence) => f === "all" || (f === "fav" ? a.favourite : shownKey(a, p) === f);
+const inFilter = (a: AccountSummary, f: Filter, p?: Presence) => f === "all" || (f === "fav" ? a.favourite : f === "own" ? hasOwn(a) : shownKey(a, p) === f);
 const isTyping = (el: EventTarget | null) =>
   el instanceof HTMLElement && (el.matches("textarea, select, input:not([type=checkbox]):not([type=radio])") || el.isContentEditable);
 /** Main narrower than this: the details become a sheet over the list. */
@@ -72,6 +79,9 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
   const sheetRef = useRef<HTMLElement>(null);
   const filterInput = useRef<HTMLInputElement>(null);
   const statusMenu = useAnchor();
+  const colsMenu = useAnchor();
+  const [cols, setCols] = useCols();
+  const [sort, setSort] = useSort();
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [checked, setChecked] = useState<Set<number>>(() => new Set());
@@ -82,6 +92,8 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
   const [narrow, setNarrow] = useState(false);
   const [sheet, setSheet] = useState(false);
   const [befriendOpen, setBefriendOpen] = useState(false);
+  // The bulk edit of the ticked accounts' overrides.
+  const [editing, setEditing] = useState(false);
   // Accounts whose cookies "Export cookies" writes: null for all, undefined while closed.
   const [exportIds, setExportIds] = useState<number[] | null | undefined>(undefined);
   const [order, setOrder] = useState<number[] | null>(null);
@@ -114,7 +126,8 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
   // A group deleted while it was the filter means no filter.
   const inGroup = group === null || !groupById.has(group) ? ordered : ordered.filter((a) => a.groupIds.includes(group));
   const needle = q.trim().toLowerCase();
-  const matching = inGroup.filter((a) => !needle || `${a.alias}\n${a.displayName}\n@${a.username}\n${a.userId}`.toLowerCase().includes(needle));
+  // Notes too: they are where people write what an alt is for.
+  const matching = inGroup.filter((a) => !needle || `${a.alias}\n${a.displayName}\n@${a.username}\n${a.userId}\n${a.notes}`.toLowerCase().includes(needle));
   // Presence only for rows that can be on screen, and only for valid cookies (DESIGN: visible rows only).
   // Not per search: a new sweep for each result. ponytail: the first 100 unless a status filter
   // needs them all (one request per account each minute); past that, rows show Ready.
@@ -127,7 +140,21 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
     [inGroup.map((a) => `${a.id}:${a.status}`).join(), filter],
   );
   const presence = usePresence(presenceIds).data;
-  const shown = matching.filter((a) => inFilter(a, filter, presence?.get(a.id)));
+  // What the optional columns show that isn't on the account: read only for a column that is on.
+  // All from this PC: playtime RoALT counted, Robux and limiteds as last read (nothing is asked of Roblox).
+  const has = (c: Col) => cols.includes(c);
+  const playtime = useQuery({ queryKey: ["playtime"], queryFn: api.playtimeList, enabled: has("playtime"), staleTime: 60_000 }).data;
+  const robux = useQuery({ queryKey: ["accountsRobux"], queryFn: api.accountsRobux, enabled: has("robux"), staleTime: 60_000 }).data;
+  const values = useQueries({ queries: has("rap") ? accounts.map((a) => accountValueQuery(a.id)) : [] });
+  const extra: Extra = {
+    playtime: new Map(),
+    robux: new Map(robux ?? []),
+    rap: new Map(values.flatMap((v, i) => (v.data ? [[accounts[i]!.id, v.data.rap] as const] : []))),
+  };
+  for (const r of playtime ?? []) extra.playtime.set(r.accountId, (extra.playtime.get(r.accountId) ?? 0) + r.ms);
+  // A sort by a column that was switched off is the user's own order again.
+  const sortNow = sort.by === "order" || sort.by === "name" || has(sort.by) ? sort : { by: "order" as const, desc: false };
+  const shown = sorted(matching.filter((a) => inFilter(a, filter, presence?.get(a.id))), sortNow, extra, accountName);
   const checkedIds = accounts.filter((a) => checked.has(a.id)).map((a) => a.id);
   const canPlay = (id: number) => byId.get(id)?.status === "valid" && !live.has(id);
   const current = (selected !== null && byId.get(selected)) || shown[0] || null;
@@ -136,6 +163,8 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
   const needsSignIn = accounts.filter((a) => a.status === "invalid").length;
   const lastChecked = Math.max(0, ...accounts.map((a) => a.statusCheckedAt ?? 0)) || null;
   const activeGroup = group === null ? null : groupById.get(group) ?? null;
+  // A group with nobody in it is not a search that found nothing: it says how accounts get in.
+  const emptyText = activeGroup && accounts.length && !inGroup.length ?t("accounts.groupEmpty", { name: activeGroup.name }) : t("accounts.noMatch");
   const friendable = checkedIds.filter((id) => byId.get(id)?.status === "valid").length;
   const mainAccount = accounts.find((a) => a.main);
   const mainToBefriend = checkedIds.map((id) => byId.get(id)).find((a) => a?.main && a.status === "valid");
@@ -166,7 +195,9 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
   useEffect(() => {
     if (validatedThisSession || !accounts.length) return;
     validatedThisSession = true;
-    validate.mutate(undefined);
+    // The sign-in watch (or a check a moment ago) already asked Roblox: not twice in a row.
+    const fresh = accounts.every((a) => a.statusCheckedAt !== null && Date.now() - a.statusCheckedAt < 10 * 60_000);
+    if (!fresh) validate.mutate(undefined);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const checking = validate.isPending ? (validate.variables ?? null) : undefined;
   const isChecking = (id: number) => checking === null || (checking !== undefined && checking.includes(id));
@@ -271,7 +302,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
   useEffect(() => {
     if (lastFilter.current === filterKey) return;
     lastFilter.current = filterKey;
-    const timer = setTimeout(() => announce(shownCount ? t("accounts.shown", { count: shownCount }) : t("accounts.noMatch")), 600);
+    const timer = setTimeout(() => announce(shownCount ? t("accounts.shown", { count: shownCount }) : emptyText), 600);
     return () => clearTimeout(timer);
   }, [filterKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -416,6 +447,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
             onPlay={() => onLaunch(checkedIds)}
             onBefriend={() => setBefriendOpen(true)}
             onAddToGroup={addToGroup}
+            onEdit={() => setEditing(true)}
             onRemove={() => removing.ask(checkedIds)}
             onClear={clear}
           />
@@ -495,6 +527,25 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
                   </MenuRadioItem>
                 ))}
               </Popover>
+              <button type="button" className="chip" popoverTarget="account-cols" style={colsMenu.style} data-on={cols.length > 0 || undefined} aria-haspopup="menu">
+                <Icon name="grid" size={14} />
+                {t("accounts.columns")}
+                <Icon name="chevron" size={12} />
+              </button>
+              <Popover id="account-cols" anchor={colsMenu.name} role="menu" label={t("accounts.columns")}>
+                {COLS.map((c) => (
+                  <MenuCheckItem key={c.id} checked={has(c.id)} onChange={(on) => setCols(on ? COLS.map((x) => x.id).filter((id) => id === c.id || has(id)) : cols.filter((id) => id !== c.id))}>
+                    {colLabel(c.id)}
+                  </MenuCheckItem>
+                ))}
+              </Popover>
+              {/* Sorted, the rows can't be dragged: this is the way back to the order they were dragged into. */}
+              {sortNow.by !== "order" && (
+                <button type="button" className="chip" onClick={() => setSort({ by: "order", desc: false })}>
+                  <Icon name="x" size={12} />
+                  {t("accounts.myOrder")}
+                </button>
+              )}
               <GroupChips groups={groups} accounts={accounts} active={activeGroup?.id ?? null} onPick={setGroup} />
             </div>
 
@@ -523,7 +574,12 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
                   onLaunch={(id) => onLaunch([id])}
                   menuId={menu && !menu.solo ? menu.id : undefined}
                   onReorder={applyOrder}
+                  emptyText={emptyText}
                   onClearFilters={clearFilters}
+                  cols={cols}
+                  cellsOf={(a) => cols.map((c) => colText(c, a, extra, now)).join("\t")}
+                  sort={sortNow}
+                  onSort={(by) => setSort(nextSort(sortNow, by))}
                 />
                 <footer className="h-9 flex-none flex items-center gap-4 px-4 meta border-t border-line">
                   <span>{lastChecked ? t("accounts.footerChecked", { when: ago(lastChecked, now) }) : t("accounts.footerNotChecked")}</span>
@@ -569,6 +625,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
         at={menu}
         account={menu ? byId.get(menu.id) : undefined}
         selection={checkedIds}
+        byId={byId}
         live={live}
         canLaunch={canPlay}
         onClose={() => setMenu(null)}
@@ -577,6 +634,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
         onRemove={removing.ask}
       />
       {removing.dialogs}
+      <BulkEditDialog accounts={editing ? checkedIds.flatMap((id) => byId.get(id) ?? []) : null} groups={groups} onClose={() => setEditing(false)} />
       <ConfirmDialog
         open={befriendOpen}
         onClose={() => setBefriendOpen(false)}

@@ -11,6 +11,7 @@ use std::path::Path;
 
 use super::tracker::Ended;
 use crate::diagnostics::redact;
+use crate::model::CrashKind;
 
 /// How much of the end of a client log is read.
 const TAIL_BYTES: u64 = 32 * 1024;
@@ -23,13 +24,56 @@ const MAX_CLUES: usize = 500;
 /// Characters across all of the client log's lines, so one pathological line can't flood the log.
 const MAX_REPORT_CHARS: usize = 6 * 1024;
 
-/// Logs the whole autopsy. Blocking (it reads a file): called on a thread of its own.
-pub fn report(c: &Ended) {
+/// What the evidence points to, first of all (the same set the Windows autopsy reports).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum Verdict {
+    /// It stopped responding and was given up on.
+    Hang,
+    /// Roblox disconnected it: not a crash.
+    Disconnect,
+    /// A crash was recorded: the client itself crashed.
+    Crashed,
+    /// It ended before writing a log.
+    NoLog,
+    /// It ended by itself within 30 s, with no crash recorded.
+    Early,
+    /// It ended with no crash recorded.
+    Unknown,
+}
+
+impl Verdict {
+    /// Kept with the recorded end (`Db::set_crash_verdict`); the UI words it.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Hang => "hang",
+            Self::Disconnect => "disconnect",
+            Self::Crashed => "crashed",
+            Self::NoLog => "noLog",
+            Self::Early => "early",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// Logs the whole autopsy and says what it points to. Blocking (it reads a file): called on a
+/// thread of its own.
+pub fn report(c: &Ended) -> Verdict {
     let id = &c.instance_id;
+    // Linux has no crash dump or Application event log here: the client's own log and the
+    // tracker's kind are all the evidence there is.
+    let found = match c.kind {
+        CrashKind::Hang => Verdict::Hang,
+        CrashKind::Disconnect => Verdict::Disconnect,
+        _ if c.log.is_none() => Verdict::NoLog,
+        _ if c.died_after_ms.is_some_and(|ms| ms < 30_000) => Verdict::Early,
+        _ => Verdict::Unknown,
+    };
     let lived = c.died_after_ms.map_or_else(|| "unknown".to_owned(), |ms| format!("{} s", ms / 1000));
     let reason = c.reason.as_deref().map_or_else(|| "none".to_owned(), |r| safe(r, MAX_LINE));
     log::warn!(
-        "autopsy {id}: {} of account {} ended after {} s (seen gone after {lived}); reason: {reason}",
+        "autopsy {id}: {} ({}) of account {} ended after {} s (seen gone after {lived}); reason: {reason}",
+        found.code(),
         c.kind.as_str(),
         c.account_id,
         c.uptime_ms / 1000,
@@ -40,6 +84,7 @@ pub fn report(c: &Ended) {
         Some(path) => log_tail(id, path),
         None => log::info!("autopsy {id}: no client log names this launch"),
     }
+    found
 }
 
 /// The last lines of the client log `path`, if it can be read.

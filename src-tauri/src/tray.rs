@@ -1,17 +1,19 @@
-//! The tray icon (`tray-icon` feature): left click shows the window; the menu has Show RoALT,
-//! Favourites (those with `in_tray`), Close all clients, Kill all Roblox, Lock vault
-//! (master-password mode), Quit.
+//! The tray icon (`tray-icon` feature): left click shows the window; its tooltip counts the running
+//! clients; the menu has Show RoALT, Favourites (those with `in_tray`), the window tools (Tile,
+//! Minimize all, Restore all), Play all again, Anti-AFK, Close all clients, Kill all Roblox, Lock
+//! vault (master-password mode), Quit.
 
 use std::sync::{Mutex, MutexGuard};
 
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, Wry};
+use tauri::{AppHandle, Emitter, Manager, Wry};
 
 use crate::App;
 use crate::commands::{self, notice};
 use crate::error::{AppError, Result};
-use crate::model::{AccountStatus, BulkRequest, SameServer, VaultMode};
+use crate::instances::window::Show;
+use crate::model::{AccountStatus, AntiAfk, BulkRequest, InstanceState, SameServer, SettingsPatch, VaultMode};
 
 const TRAY: &str = "main";
 
@@ -22,7 +24,12 @@ struct View {
     favourites: Vec<(i64, String)>,
     locked: bool,
     master: bool,
-    running: bool,
+    /// How many clients run (the tooltip says so).
+    running: usize,
+    /// Some client ended and is still listed: Play all again has something to start.
+    ended: bool,
+    /// Anti-AFK is on (its tick).
+    afk: bool,
     /// The menu's language (`i18n::current`).
     lang: &'static str,
 }
@@ -39,7 +46,7 @@ fn shown() -> MutexGuard<'static, Option<View>> {
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let view = view(app);
     let mut tray = TrayIconBuilder::with_id(TRAY)
-        .tooltip("RoALT")
+        .tooltip(tooltip(&view))
         .menu(&menu(app, &view)?)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, e| on_menu(app, e.id().as_ref()))
@@ -75,6 +82,9 @@ pub fn refresh(app: &AppHandle) {
             log::warn!("tray icon missing; menu not updated");
             return;
         };
+        if let Err(e) = tray.set_tooltip(Some(tooltip(&view))) {
+            log::debug!("could not update the tray tooltip: {e}");
+        }
         match menu(&handle, &view).and_then(|m| tray.set_menu(Some(m))) {
             Ok(()) => *shown() = Some(view),
             Err(e) => log::warn!("could not update the tray menu: {e}"),
@@ -94,12 +104,25 @@ fn view(app: &AppHandle) -> View {
             Vec::new()
         }
     };
+    let list = s.tracker.list();
     View {
         favourites,
         locked: s.vault.is_locked(),
         master: s.vault.mode() == VaultMode::Master,
-        running: s.tracker.any_running(),
+        running: s.tracker.clients().len(),
+        ended: list.iter().any(|i| i.state == InstanceState::Exited),
+        afk: s.db.settings().is_ok_and(|v| v.anti_afk.enabled),
         lang: crate::i18n::current(),
+    }
+}
+
+/// "RoALT", whether locked, and how many clients run while any does.
+fn tooltip(v: &View) -> String {
+    match (v.locked, v.running) {
+        (true, 0) => format!("RoALT · {}", tr!("Locked")),
+        (true, n) => format!("RoALT · {} · {}: {}", tr!("Locked"), tr!("Roblox clients"), n),
+        (false, 0) => "RoALT".into(),
+        (false, n) => format!("RoALT · {}: {}", tr!("Roblox clients"), n),
     }
 }
 
@@ -116,12 +139,21 @@ fn menu(app: &AppHandle, v: &View) -> tauri::Result<Menu<Wry>> {
             favourites.append(&item(&format!("fav:{id}"), &name.replace('&', "&&"), true)?)?;
         }
     }
+    let running = v.running > 0;
     let menu = Menu::with_items(
         app,
         &[
             &item("show", &tr!("Show RoALT"), true)?,
             &favourites,
-            &item("close-all", &tr!("Close all clients"), v.running)?,
+            &PredefinedMenuItem::separator(app)?,
+            &item("tile", &tr!("Tile windows"), running)?,
+            &item("minimize-all", &tr!("Minimize all"), running)?,
+            &item("restore-all", &tr!("Restore all"), running)?,
+            // The window does the starting (its launch queue and its rules); locked, it can't.
+            &item("play-again", &tr!("Play all again"), v.ended && !v.locked)?,
+            &CheckMenuItem::with_id(app, "afk", tr!("Anti-AFK"), true, v.afk, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &item("close-all", &tr!("Close all clients"), running)?,
             &item("kill-all", &tr!("Stop all Roblox"), true)?,
         ],
     )?;
@@ -147,21 +179,64 @@ pub fn show_main(app: &AppHandle) {
 }
 
 /// Menu ids: "show" → show, unminimize and focus the main window; "close-all" →
-/// `commands::instances_close_all(force: false)` logic; "kill-all" → `commands::kill_all`
+/// `commands::close_running`; "kill-all" → `commands::kill_all`
 /// (no confirmation: it is the panic button); "lock" → `commands::lock_vault`;
 /// "quit" → exit the app; "fav:<id>" → `launch_favourite`.
-fn on_menu(app: &AppHandle, id: &str) {
+pub(crate) fn on_menu(app: &AppHandle, id: &str) {
     match id {
         "show" => show_main(app),
+        // A global key (`hotkeys`): the window when it isn't in front, the tray when it is.
+        "toggle" => match app.get_webview_window("main") {
+            Some(w) if w.is_visible().unwrap_or(false) && w.is_focused().unwrap_or(false) => {
+                if let Err(e) = w.hide() {
+                    log::warn!("could not hide the main window to the tray: {e}");
+                }
+                crate::set_main_shown(app, false);
+            }
+            _ => show_main(app),
+        },
         "close-all" => {
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = commands::close_running(&app.state::<App>(), false).await {
+                if let Err(e) = commands::close_running(&app.state::<App>()).await {
                     notice(&app, true, tr!("Couldn't close the clients: {why}", why = e.message()));
                 }
             });
         }
         "kill-all" => kill_all(app),
+        "tile" | "minimize-all" | "restore-all" => {
+            let (app, id) = (app.clone(), id.to_owned());
+            tauri::async_runtime::spawn(async move {
+                let s = app.state::<App>();
+                let done = match id.as_str() {
+                    "tile" => commands::instances_tile(app.clone(), s, false).await.map(drop),
+                    "minimize-all" => commands::instances_show_all(app.clone(), s, Show::Minimize).await,
+                    _ => commands::instances_show_all(app.clone(), s, Show::Restore).await,
+                };
+                if let Err(e) = done {
+                    notice(&app, true, e.message());
+                }
+            });
+        }
+        // The page starts them, as its own Play all again does.
+        "play-again" => {
+            let _ = app.emit("app://play-again", ());
+        }
+        "afk" => {
+            let s = app.state::<App>();
+            let set = s.db.settings().and_then(|v| {
+                let anti_afk = Some(AntiAfk { enabled: !v.anti_afk.enabled, ..v.anti_afk });
+                commands::set_settings(app, &s, SettingsPatch { anti_afk, ..Default::default() })
+            });
+            match set {
+                // The page shows the switch too.
+                Ok(_) => drop(app.emit("settings://changed", ())),
+                Err(e) => notice(app, true, e.message()),
+            }
+            // Also when it failed: Windows ticked the item by itself.
+            *shown() = None;
+            refresh(app);
+        }
         "lock" if app.state::<App>().vault.mode() == VaultMode::Master => commands::lock_vault(app),
         "quit" => app.exit(0),
         _ => {
@@ -202,10 +277,8 @@ async fn launch(app: &AppHandle, id: i64) -> Result<()> {
     let s = app.state::<App>();
     let row = s.db.favourites()?.into_iter().find(|f| f.id == id).ok_or(AppError::NotFound)?;
     let fav = commands::favourite_of(&s, row)?;
-    let ids: Vec<i64> = fav
-        .account_ids
-        .iter()
-        .copied()
+    let valid: Vec<i64> = commands::favourite_accounts(&s, &fav)?
+        .into_iter()
         .filter(|&a| match s.db.account(a) {
             Ok(a) => a.status == AccountStatus::Valid,
             Err(e) => {
@@ -214,6 +287,12 @@ async fn launch(app: &AppHandle, id: i64) -> Result<()> {
             }
         })
         .collect();
+    // Skip members already running so refilling dead accounts from the tray works in one click.
+    let ids: Vec<i64> = valid.iter().copied().filter(|&a| !s.tracker.has_live_client(a)).collect();
+    if ids.is_empty() && !valid.is_empty() {
+        notice(app, false, tr!("Every account of \"{name}\" is already running.", name = fav.name));
+        return Ok(());
+    }
     match ids.len() {
         0 => {
             show_main(app);
@@ -227,7 +306,7 @@ async fn launch(app: &AppHandle, id: i64) -> Result<()> {
                 return Ok(());
             }
             let _single = s.bulk.begin_single_launch()?;
-            commands::launch_tracked(app, &s, ids[0], fav.target, Some(fav.id), None, None, true, None).await?;
+            commands::launch_tracked(app, &s, ids[0], fav.target, None, fav.options.fps_cap, true, None).await?;
         }
         _ => {
             let delay_ms = s.db.settings()?.launch_delay_ms;
@@ -235,9 +314,8 @@ async fn launch(app: &AppHandle, id: i64) -> Result<()> {
                 account_ids: ids,
                 target: fav.target,
                 delay_ms,
-                same_server: SameServer::PickFirst,
-                favourite_id: Some(fav.id),
-                fps_cap: None,
+                same_server: fav.options.same_server.unwrap_or(SameServer::PickFirst),
+                fps_cap: fav.options.fps_cap,
             };
             crate::launcher::bulk::start(app.clone(), req)?;
         }

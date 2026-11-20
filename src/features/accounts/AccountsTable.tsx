@@ -7,6 +7,7 @@ import { announce } from "../../ui/a11y";
 import { Button } from "../../ui/Button";
 import { Icon } from "../../ui/Icon";
 import { riseIn, STAGGER } from "../../ui/motion";
+import { colLabel, type Col, type Sort } from "./columns";
 import { accountName, ago, Avatar, MainBadge, Status } from "./shared";
 
 /** What a row does. The rows read it when they act, so they can stay memoized while it changes. */
@@ -35,7 +36,7 @@ const OVERSCAN = 12;
 /** The accounts list. Its columns follow the table's own width (the `acc-table` container). Rows glide
  * to a new order (FLIP) and new ones rise in, on WAAPI and never with motion components: the drag sets
  * the row's transform inline. */
-export function AccountsTable({ rows, ordered, groupById, presence, compact, now, currentId, checked, all, some, live, isChecking, onTick, onTickAll, onOpen, onMenu, onLaunch, menuId, onReorder, onClearFilters }: {
+export function AccountsTable({ rows, ordered, groupById, presence, compact, now, currentId, checked, all, some, live, isChecking, onTick, onTickAll, onOpen, onMenu, onLaunch, menuId, onReorder, emptyText, onClearFilters, cols, cellsOf, sort, onSort }: {
   /** What the filters show, in list order. */
   rows: AccountSummary[];
   /** Every account in list order: a drop lands among them. */
@@ -60,9 +61,28 @@ export function AccountsTable({ rows, ordered, groupById, presence, compact, now
   /** The row whose "…" menu is open. */
   menuId?: number;
   onReorder: (ids: number[]) => void;
+  /** Why no row shows: nothing matches, or the group on show has no accounts. */
+  emptyText: string;
   onClearFilters: () => void;
+  /** The optional columns shown, and each row's cells for them, tab-separated (one string, so a
+   * row re-renders only when a cell's text changes). */
+  cols: Col[];
+  cellsOf: (a: AccountSummary) => string;
+  /** How `rows` are sorted; "order" is the user's own, the only one rows can be dragged in. */
+  sort: Sort;
+  onSort: (by: "name" | Col) => void;
 }) {
   const update = useUpdateAccount();
+  const fixed = sort.by !== "order";
+  /** A header that sorts by its column on a click: says how it is sorted now. */
+  const sortHead = (by: "name" | Col, label: string, className?: string) => (
+    <th key={by} className={className} aria-sort={sort.by === by ? (sort.desc ? "descending" : "ascending") : undefined}>
+      <button type="button" className="acc-sort" onClick={() => onSort(by)}>
+        {label}
+        {sort.by === by && <Icon name="chevron" size={12} className={sort.desc ? "" : "rotate-180"} />}
+      </button>
+    </th>
+  );
   const scroller = useRef<HTMLDivElement>(null);
   const tbody = useRef<HTMLTableSectionElement>(null);
   const windowed = rows.length > WINDOW_FROM;
@@ -131,7 +151,8 @@ export function AccountsTable({ rows, ordered, groupById, presence, compact, now
   /** Moves `id` so it sits before rows[over] (or after the last row shown). */
   function dropAt(id: number, over: number) {
     const from = rows.findIndex((a) => a.id === id);
-    if (from < 0 || over < 0 || over > rows.length || over === from || over === from + 1) return false;
+    // Sorted by a column, the rows are where the sort puts them.
+    if (fixed || from < 0 || over < 0 || over > rows.length || over === from || over === from + 1) return false;
     // The MAIN is pinned first: it doesn't move, and nothing goes above it.
     if (rows[from].main || (over === 0 && rows[0]?.main)) return false;
     const ids = ordered.map((a) => a.id).filter((x) => x !== id);
@@ -273,16 +294,17 @@ export function AccountsTable({ rows, ordered, groupById, presence, compact, now
                 />
               </span>
             </th>
-            <th>{t("accounts.colAccount")}</th>
+            {sortHead("name", t("accounts.colAccount"))}
             <th className="acc-c-status">{t("accounts.colStatus")}</th>
             <th className="acc-c-groups">{t("accounts.groups.title")}</th>
+            {cols.map((c) => sortHead(c, colLabel(c), "acc-c-extra"))}
             <th className="acc-c-act">
               <span className="sr-only">{t("launch.running.actions")}</span>
             </th>
           </tr>
         </thead>
         <tbody ref={tbody}>
-          {first > 0 && <Spacer height={first * rowH.current} />}
+          {first > 0 && <Spacer height={first * rowH.current} span={5 + cols.length} />}
           {shownSlice.map((a, j) => (
             <AccountRow
               key={a.id}
@@ -299,17 +321,19 @@ export function AccountsTable({ rows, ordered, groupById, presence, compact, now
               checking={isChecking(a.id)}
               playable={a.status === "valid" && !live.has(a.id)}
               swap={swap}
+              cells={cellsOf(a)}
+              fixed={fixed}
               drag={drag?.id === a.id}
               drop={dropLine === first + j ? "top" : dropLine === rows.length && first + j === rows.length - 1 ? "bottom" : undefined}
               act={act}
             />
           ))}
-          {last < rows.length && <Spacer height={(rows.length - last) * rowH.current} />}
+          {last < rows.length && <Spacer height={(rows.length - last) * rowH.current} span={5 + cols.length} />}
         </tbody>
       </table>
       {rows.length === 0 && (
         <div className="empty enter m-4">
-          {t("accounts.noMatch")}
+          {emptyText}
           <Button size="md" onClick={onClearFilters}>
             {t("accounts.clearFilters")}
           </Button>
@@ -320,15 +344,15 @@ export function AccountsTable({ rows, ordered, groupById, presence, compact, now
 }
 
 /** Stands in for the rows out of the window. */
-const Spacer = ({ height }: { height: number }) => (
+const Spacer = ({ height, span }: { height: number; span: number }) => (
   <tr aria-hidden="true">
-    <td colSpan={5} className="p-0" style={{ height }} />
+    <td colSpan={span} className="p-0" style={{ height }} />
   </tr>
 );
 
 /** One account's row. Memoized on what it shows: a tick, an open or a presence update re-renders the
  * rows it changes, not all 300. */
-const AccountRow = memo(function AccountRow({ index, tabbable, menuOpen, a, p, groupById, compact, checkedAgo, current, checked, checking, playable, swap, drag, drop, act }: {
+const AccountRow = memo(function AccountRow({ index, tabbable, menuOpen, a, p, groupById, compact, checkedAgo, current, checked, checking, playable, swap, cells, fixed, drag, drop, act }: {
   /** aria-rowindex, while the list is windowed. */
   index: number | undefined;
   /** Its controls are the list's Tab stop; the other rows' are reached with the arrow keys. */
@@ -347,6 +371,10 @@ const AccountRow = memo(function AccountRow({ index, tabbable, menuOpen, a, p, g
   playable: boolean;
   /** A check's result pops in (short lists only). */
   swap: boolean;
+  /** Its cells for the optional columns, tab-separated; "" with none. */
+  cells: string;
+  /** The list is sorted by a column: no row can be dragged. */
+  fixed: boolean;
   drag: boolean;
   /** Where the dragged row would land: above or below this one. */
   drop: "top" | "bottom" | undefined;
@@ -379,7 +407,9 @@ const AccountRow = memo(function AccountRow({ index, tabbable, menuOpen, a, p, g
         }}
       >
         <span className="acc-pick">
-          {a.main ? (
+          {fixed ? (
+            <span aria-hidden="true" className="grip acc-pin" />
+          ) : a.main ? (
             // Pinned first: it can't be dragged, and says why on hover.
             <span aria-hidden="true" className="grip acc-pin" data-tip={t("accounts.detail.mainHint")}>
               <Icon name="lock" size={12} />
@@ -443,6 +473,12 @@ const AccountRow = memo(function AccountRow({ index, tabbable, menuOpen, a, p, g
           ))}
         </div>
       </td>
+      {cells !== "" &&
+        cells.split("\t").map((text, i) => (
+          <td key={i} className="acc-c-extra pe-3 mono text-xs text-fg-2 whitespace-nowrap">
+            {text}
+          </td>
+        ))}
       <td className="pe-2">
         <span className="flex items-center justify-end gap-0.5">
           <button

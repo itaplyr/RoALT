@@ -28,7 +28,7 @@ struct Target {
 #[derive(Default)]
 pub struct Pending(Mutex<Option<Target>>);
 
-pub fn start(app: &AppHandle, w: &WebviewWindow, _skip_splash: bool) -> tauri::Result<()> {
+pub fn start(app: &AppHandle, w: &WebviewWindow, _skip_splash: bool, hidden: bool) -> tauri::Result<()> {
     w.restore_state(StateFlags::all() - StateFlags::VISIBLE)?;
     let maximized = w.is_maximized()?;
     if maximized {
@@ -47,6 +47,13 @@ pub fn start(app: &AppHandle, w: &WebviewWindow, _skip_splash: bool) -> tauri::R
     }
     if maximized && let Some(m) = &monitor {
         rect = area(m);
+    }
+    // Started in the tray (a Play click on roblox.com): keep the window where it is, unshown,
+    // without the splash.
+    if hidden {
+        w.set_size(PhysicalSize::new(rect.w as u32, rect.h as u32))?;
+        w.set_position(PhysicalPosition::new(rect.x, rect.y))?;
+        return Ok(());
     }
     let s = centered(rect, (SPLASH.0 * scale) as i32, (SPLASH.1 * scale) as i32);
     w.set_size(PhysicalSize::new(s.w as u32, s.h as u32))?;

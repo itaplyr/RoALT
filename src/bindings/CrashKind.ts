@@ -3,4 +3,4 @@
 /**
  * Why a client ended badly (`crashes_list`).
  */
-export type CrashKind = "crash" | "disconnect" | "hang" | "mem";
+export type CrashKind = "crash" | "disconnect" | "hang" | "mem" | "timed";

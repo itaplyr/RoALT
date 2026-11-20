@@ -9,6 +9,7 @@ import { ConfirmDialog } from "../../ui/Dialog";
 import { Num } from "../../ui/motion";
 import { Popover } from "../../ui/Popover";
 import { toast } from "../../ui/Toast";
+import { GroupDefaultsDialog } from "./GroupDefaultsDialog";
 import { SWATCHES } from "./shared";
 
 const EDITOR = "acc-group-editor";
@@ -27,6 +28,9 @@ export function GroupChips({ groups, accounts, active, onPick }: {
   const [editing, setEditing] = useState<number | "new" | null>(null);
   const [deleting, setDeleting] = useState<Group | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  // The group whose defaults are being set (kept while its dialog closes).
+  const [defaultsOf, setDefaultsOf] = useState<Group | null>(null);
+  const [defaultsOpen, setDefaultsOpen] = useState(false);
   const chips = useRef<HTMLDivElement>(null);
   const deleted = useRef(false);
   const counts = useMemo(() => {
@@ -55,6 +59,8 @@ export function GroupChips({ groups, accounts, active, onPick }: {
     onSuccess: (_, g) => {
       qc.setQueryData<Group[]>(qk.groups, (list) => list?.filter((x) => x.id !== g.id));
       qc.invalidateQueries({ queryKey: qk.accounts });
+      // It left the favourites that named it.
+      qc.invalidateQueries({ queryKey: qk.favourites });
       if (active === g.id) onPick(null);
       deleted.current = true;
       setEditing(null);
@@ -117,6 +123,14 @@ export function GroupChips({ groups, accounts, active, onPick }: {
             group={group}
             groups={groups}
             onDone={() => editor()?.hidePopover()}
+            onDefaults={
+              group &&
+              (() => {
+                setDefaultsOf(group);
+                setDefaultsOpen(true);
+                editor()?.hidePopover();
+              })
+            }
             onDelete={
               group &&
               (() => {
@@ -137,14 +151,17 @@ export function GroupChips({ groups, accounts, active, onPick }: {
         text={tx("accounts.groups.deleteText", { name: <span className="text-fg font-medium">{deleting?.name}</span> })}
         confirmLabel={t("accounts.groups.delete")}
       />
+      <GroupDefaultsDialog group={defaultsOpen ? (groups.find((g) => g.id === defaultsOf?.id) ?? null) : null} onClose={() => setDefaultsOpen(false)} />
     </>
   );
 }
 
-function GroupEditor({ group, groups, onDone, onDelete }: {
+function GroupEditor({ group, groups, onDone, onDefaults, onDelete }: {
   group?: Group;
   groups: Group[];
   onDone: () => void;
+  /** Opens the group's defaults (an existing group only). */
+  onDefaults?: () => void;
   onDelete?: () => void;
 }) {
   const save = useSaveGroup();
@@ -191,6 +208,11 @@ function GroupEditor({ group, groups, onDone, onDelete }: {
           />
         ))}
       </div>
+      {onDefaults && (
+        <Button size="md" variant="ghost" icon="sliders" className="self-start" aria-haspopup="dialog" onClick={onDefaults}>
+          {t("groups.defaultsEllipsis")}
+        </Button>
+      )}
       <div className="flex items-center gap-2 pt-1">
         {onDelete && <IconButton icon="trash" label={t("accounts.groups.delete")} className="acc-danger" onClick={onDelete} />}
         <Button size="md" variant="ghost" className="ms-auto" onClick={onDone}>{t("common.cancel")}</Button>

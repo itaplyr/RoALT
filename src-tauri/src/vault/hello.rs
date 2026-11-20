@@ -40,7 +40,7 @@ pub async fn hello_available() -> bool {
 fn verify(hwnd: HWND, message: &HSTRING) -> Result<()> {
     let available = UserConsentVerifier::CheckAvailabilityAsync().and_then(|op| op.join()).map_err(failed)?;
     if available != UserConsentVerifierAvailability::Available {
-        return Err(AppError::Invalid(tr!("Windows Hello isn't set up. Set a master password in Settings to reveal cookies.")));
+        return Err(AppError::Invalid(tr!("Windows Hello isn't set up. Set a master password in Settings to reveal, copy, or export cookies.")));
     }
     let interop = factory::<UserConsentVerifier, IUserConsentVerifierInterop>().map_err(failed)?;
     // SAFETY: `hwnd` is the live main window; the call only reads it to parent the prompt.

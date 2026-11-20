@@ -1,12 +1,30 @@
 name: Release
 
-# On a v* tag, or by hand (Actions > Release > Run workflow): builds the installer, signs it for
-# RoALT's self-updater (RoALT-Setup-<version>.exe.sig, ECDSA P-256 with the ROALT_UPDATE_KEY
-# secret), then puts both with their SHA-256 on a draft release v<version>. Nothing is published:
-# a maintainer reviews the draft and publishes it, which creates the tag when a manual run made it.
+# Builds the installer, signs it for RoALT's self-updater (RoALT-Setup-<version>.exe.sig, ECDSA
+# P-256 with the ROALT_UPDATE_KEY secret), then puts both with their SHA-256 on release v<version>.
+# - A push to main PUBLISHES it at once: every installed RoALT is offered it. Its version is the
+#   next patch after the latest published release, unless tauri.conf.json already names a newer
+#   one (a release bumped by hand). The bump is written into this build only, not committed.
+#   Its notes are its section of CHANGELOG.md, or else the commits since the last release. Published with the job's own token, so
+#   winget.yml (on "released") does not run for it.
+# - By hand (Actions > Release > Run workflow): a draft of tauri.conf.json's version, which a
+#   maintainer reviews and publishes.
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+    # Nothing in these reaches the app: no release for them. Not release.yml itself: a fix to it
+    # ships the commits waiting behind it.
+    paths-ignore:
+      - README.md
+      - CHANGELOG.md
+      - NOTICE.md
+      - LICENSE
+      - .gitignore
+      - docs/**
+      - server/**
+      - .github/FUNDING.yml
+      - .github/workflows/ci.yml
+      - .github/workflows/winget.yml
   workflow_dispatch:
 
 permissions:
@@ -40,20 +58,58 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
       tag: ${{ steps.v.outputs.tag }}
+      prev: ${{ steps.v.outputs.prev }}
       signed: ${{ env.HAS_SIGNPATH }}
     env:
       HAS_SIGNPATH: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v7
       - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           $version = (Get-Content -Raw src-tauri\tauri.conf.json | ConvertFrom-Json).version
           if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$version") {
             echo "::error::tag $env:GITHUB_REF_NAME is not v$version, the version in src-tauri/tauri.conf.json: tag v$version instead, or set the version in tauri.conf.json, package.json and src-tauri/Cargo.toml first"
             exit 1
           }
+          $prev = ''
+          if ($env:GITHUB_EVENT_NAME -eq 'push') {
+            # What installed copies run now (the updater reads this same URL).
+            $prev = gh api "repos/$env:GITHUB_REPOSITORY/releases/latest" --jq .tag_name
+            if ($LASTEXITCODE -ne 0 -or -not ($prev -match '^v(\d+)\.(\d+)\.(\d+)$')) {
+              echo "::error::the latest published release could not be read (got '$prev'): no version to follow"
+              exit 1
+            }
+            $major, $minor, $patch = $Matches[1..3]
+            # A re-run of an older push (or of the one already out) must not ship as the newest.
+            # Roll main back with a revert commit, not a force-push: a commit behind $prev is refused.
+            $status = gh api "repos/$env:GITHUB_REPOSITORY/compare/$prev...$env:GITHUB_SHA" --jq .status
+            if ($LASTEXITCODE -ne 0 -or $status -notin 'ahead', 'diverged') {
+              echo "::error::$env:GITHUB_SHA is '$status' of $prev, the latest release: nothing newer to publish (a re-run of an older push?)"
+              exit 1
+            }
+            if ([version]$version -le [version]"$major.$minor.$patch") {
+              $version = "$major.$minor.$([int]$patch + 1)"
+              # The same three files build-installer.ps1 checks agree, plus the two lock files.
+              npm version $version --no-git-tag-version
+              if ($LASTEXITCODE -ne 0) { exit 1 }
+              foreach ($f in @(
+                @('src-tauri\tauri.conf.json', '^(\s*"version":\s*")[^"]+'),
+                @('src-tauri\Cargo.toml', '^(version\s*=\s*")[^"]+'),
+                @('src-tauri\Cargo.lock', '^(name = "roalt"\r?\nversion = ")[^"]+')
+              )) {
+                $path = "$PWD\$($f[0])"
+                $text = [IO.File]::ReadAllText($path)
+                $re = [regex]::new($f[1], 'Multiline')
+                if (-not $re.IsMatch($text)) { echo "::error::no version found in $($f[0])"; exit 1 }
+                [IO.File]::WriteAllText($path, $re.Replace($text, "`${1}$version", 1))
+              }
+            }
+          }
           "version=$version" >> $env:GITHUB_OUTPUT
           "tag=v$version" >> $env:GITHUB_OUTPUT
+          "prev=$prev" >> $env:GITHUB_OUTPUT
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -62,6 +118,12 @@ jobs:
         # Installs it, or upgrades a preinstalled older 6.x (the .iss needs 6.6).
         run: choco upgrade innosetup --no-progress -y
       - run: powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1
+      # Before anything is signed: no signed installer from a commit whose tests fail.
+      - run: cargo test --locked
+        working-directory: src-tauri
+      # CI's checks too: nothing waits for CI before a push is published.
+      - run: npm run test:sounds && npm run test:news && npm run test:liquid && npm run test:look
+        shell: bash
       # Optional, until SignPath has approved the project: SIGNPATH_API_TOKEN (secret) and
       # SIGNPATH_ORGANIZATION_ID (variable). Before the updater's signature, which covers the
       # installer's exact bytes.
@@ -132,13 +194,14 @@ jobs:
         with:
           name: windows
           path: dist
-      - name: Draft release with SHA-256 sums
+      - name: Release with SHA-256 sums
         working-directory: dist
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.windows.outputs.tag }}
           VERSION: ${{ needs.windows.outputs.version }}
+          PREV: ${{ needs.windows.outputs.prev }}
           SIGNED: ${{ needs.windows.outputs.signed }}
         run: |
           sha256sum -- * > SHA256SUMS.txt
@@ -146,28 +209,39 @@ jobs:
           test -s "RoALT-Setup-$VERSION.exe.sig" || { echo "::error::RoALT-Setup-$VERSION.exe.sig is missing"; exit 1; }
           signing="No Authenticode signature yet: SmartScreen warns."
           if [ "$SIGNED" = true ]; then signing="Code signed."; fi
-          cat > ../notes.md <<EOF
-          $signing The SHA-256 sums are below and in SHA256SUMS.txt; RoALT-Setup-$VERSION.exe.sig is the signature RoALT's built-in updater checks before it runs the installer.
+          # A push publishes; a run by hand stays a draft.
+          if [ "$GITHUB_EVENT_NAME" = push ]; then draft=false; else draft=true; fi
+          changes=""
+          if [ -n "$PREV" ]; then
+            changes=$(gh api "repos/$GH_REPO/compare/$PREV...$GITHUB_SHA" --jq '.commits[] | "- " + (.commit.message | split("\n")[0])')
+          fi
+          # This version's section of CHANGELOG.md when it has one, else the commits.
+          log=$(gh api -H 'Accept: application/vnd.github.raw' "repos/$GH_REPO/contents/CHANGELOG.md?ref=$GITHUB_SHA" 2>/dev/null || true)
+          section=$(printf '%s\n' "$log" | awk -v v="$VERSION" '/^## /{p = ($2 == v); next} p')
+          { if [ -n "$section" ]; then printf '%s\n\n' "$section"; elif [ -n "$changes" ]; then printf '## Changes\n\n%s\n\n' "$changes"; fi; cat <<EOF
+          $signing
 
-          - **Windows** 10 1809 or later, or Windows 11, x64: RoALT-Setup-$VERSION.exe. SmartScreen warns on first run: More info → Run anyway.
-          - Needs the Microsoft Edge WebView2 Runtime (Windows 11 has it). Setup checks, and offers Microsoft's download when it is missing.
+          - **Windows** 10 1809 or later, or Windows 11, x64: download and run `RoALT-Setup-$VERSION.exe`. If Windows SmartScreen warns on first run, click **More info → Run anyway**.
+          - Needs the Microsoft Edge WebView2 Runtime (built into Windows 11). Setup checks and offers Microsoft's download when missing.
+          - *(Optional)* SHA-256 checksums are below and in `SHA256SUMS.txt`. `RoALT-Setup-$VERSION.exe.sig` is the signature RoALT's built-in updater checks before running an update.
 
           ~~~
           $(cat SHA256SUMS.txt)
           ~~~
           EOF
+          } > ../notes.md
           # A manual run must not attach a build of one commit to a tag on another.
           if tag_sha=$(gh api "repos/$GH_REPO/commits/refs/tags/$TAG" --jq .sha 2>/dev/null) && [ "$tag_sha" != "$GITHUB_SHA" ]; then
             echo "::error::tag $TAG is at $tag_sha, not $GITHUB_SHA: raise the version, or run the workflow from the tag"
             exit 1
           fi
-          if draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); then
-            if [ "$draft" != true ]; then
+          if is_draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$is_draft" != true ]; then
               echo "::error::release $TAG is already published: raise the version for a new release"
               exit 1
             fi
             gh release upload "$TAG" ./* --clobber
-            gh release edit "$TAG" --target "$GITHUB_SHA" --notes-file ../notes.md
+            gh release edit "$TAG" --target "$GITHUB_SHA" --notes-file ../notes.md --draft="$draft"
           else
-            gh release create "$TAG" ./* --draft --target "$GITHUB_SHA" --title "RoALT $VERSION" --notes-file ../notes.md
+            gh release create "$TAG" ./* --draft="$draft" --target "$GITHUB_SHA" --title "RoALT $VERSION" --notes-file ../notes.md
           fi

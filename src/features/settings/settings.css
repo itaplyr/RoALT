@@ -1,20 +1,107 @@
 /* Settings' screen, and the settings kit's rows (Performance and Discord draw them too). */
 @layer views {
-  .set-page {
-    max-width: 840px;
+  /* Settings' page: a list of its blocks at the side, which stays put, and every block in one scroll. */
+  .set-map {
+    display: grid;
+    grid-template-columns: clamp(172px, 22%, 216px) minmax(0, 1fr);
+    gap: 32px;
+    align-items: start;
+    max-width: 1120px;
     margin-inline: auto;
   }
-  .set-head {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px 24px;
-    margin-bottom: 24px;
+  /* Goals are sentences: their list gets a wider column. */
+  .set-map[data-by="goals"] {
+    grid-template-columns: clamp(216px, 30%, 288px) minmax(0, 1fr);
   }
-  .set-search {
-    flex: 0 1 280px;
-    min-width: 200px;
+  .set-side {
+    position: sticky;
+    /* Measured from inside the page's padding, so 0 holds it where it starts. */
+    top: 0;
+    display: grid;
+    gap: 8px;
+    /* The window less the title bar and the page's padding; past that the list scrolls by itself.
+       The 2px keep focus rings inside that scroll. */
+    max-height: calc(100vh - var(--titlebar-h) - var(--page-pt) - 16px);
+    margin: -2px;
+    padding: 2px;
+    overflow: auto;
+    scrollbar-width: thin;
+  }
+  .set-by {
+    justify-self: start;
+  }
+  .set-lead {
+    padding-inline: 12px;
+    color: var(--fg-3);
+    font-size: var(--fs-meta);
+  }
+  .set-nav {
+    display: grid;
+    gap: 1px;
+  }
+  /* 34px: the eleven goals then fit the smallest window (600px tall) without scrolling. */
+  .set-nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: var(--h-md);
+    padding: 5px 12px;
+    border-radius: var(--r-md);
+    color: var(--fg-2);
+    font-size: var(--fs-small);
+    font-weight: 500;
+    line-height: 1.3;
+    text-align: start;
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out);
+  }
+  .set-nav-item > svg {
+    flex: none;
+  }
+  .set-nav-item:hover {
+    background: var(--hover);
+    color: var(--fg);
+  }
+  .set-nav-item[aria-current] {
+    background: var(--surface-3);
+    color: var(--fg);
+  }
+  /* An area's groups, under it while the page is in that area. */
+  .set-nav-subs {
+    display: grid;
+    gap: 1px;
+    padding-block: 2px 6px;
+    padding-inline-start: 38px;
+  }
+  .set-nav-sub {
+    width: 100%;
+    min-height: var(--h-sm);
+    padding: 0 10px;
+    border-radius: var(--r-pill);
+    color: var(--fg-3);
+    font-size: var(--fs-small);
+    text-align: start;
+    transition: color var(--dur-fast) var(--ease-out);
+  }
+  .set-nav-sub:hover,
+  .set-nav-sub[aria-current] {
+    color: var(--fg);
+  }
+  .set-nav-sub[aria-current] {
+    font-weight: 500;
+  }
+
+  /* A part of the page (an area, a goal): its title, then its groups. */
+  .set-area + .set-area {
+    margin-top: 56px;
+  }
+  .set-area-title {
+    margin-bottom: 16px;
+  }
+  .set-goal-head {
+    margin-bottom: 24px;
   }
 
   /* A group: its heading, then one panel of rows. More room above a heading than below it. */
@@ -245,6 +332,50 @@
   .set-custom:has(:focus-visible) {
     outline: 2px solid var(--focus);
     outline-offset: 2px;
+  }
+
+  /* A built-in theme's chip: its ground, text and accent as three dots. */
+  .look-dots {
+    display: inline-flex;
+  }
+  .look-dots i {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px var(--line);
+  }
+  .look-dots i + i {
+    margin-inline-start: -3px;
+  }
+  /* The custom look's parts, under its row: swatch, name and a reset, in as many columns as fit. */
+  .look-editor {
+    display: grid;
+    gap: 12px;
+    padding-top: 12px;
+  }
+  .look-parts {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 4px 16px;
+  }
+  .look-part {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: var(--h-md);
+    min-width: 0;
+  }
+  .look-swatch {
+    width: 28px;
+    height: 28px;
+  }
+  .look-name {
+    flex: 1;
+    min-width: 0;
+    font-size: var(--fs-small);
+  }
+  .look-advanced .look-parts {
+    padding-top: 8px;
   }
 
   .set-thumb {

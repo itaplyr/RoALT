@@ -149,6 +149,8 @@ export const fmtNum = (n: number, o?: Intl.NumberFormatOptions) => {
   if (!f) formats.set(key, (f = new Intl.NumberFormat(lang, o)));
   return f.format(n);
 };
+/** A file's size in MB; a tiny one shows as 0.1 MB, not 0. */
+export const fmtSize = (bytes: number) => t("mods.size", { mb: fmtNum(Math.max(0.1, bytes / 1_048_576), { maximumFractionDigits: bytes < 10_485_760 ? 1 : 0 }) });
 /** A date, time or both in the current language. */
 export const fmtDate = (d: Date | number, o?: Intl.DateTimeFormatOptions) => new Date(d).toLocaleString(lang, o);
 /** A list like "a, b and c" in the current language. */

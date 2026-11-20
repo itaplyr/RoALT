@@ -51,7 +51,8 @@ export function Tabs<T extends string | number>({ label, value, onChange, items,
             onClick={() => !on && onChange(i.value)}
           >
             {i.icon && <Icon name={i.icon} size={14} />}
-            {i.label}
+            {/* Its own box: a tab strip that lets tabs shrink (accounts' details) cuts it with "…". */}
+            <span className="truncate">{i.label}</span>
             {i.count !== undefined && <span className="text-fg-3 tabular-nums">{i.count}</span>}
           </button>
         );
