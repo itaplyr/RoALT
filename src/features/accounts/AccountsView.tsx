@@ -154,7 +154,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
   for (const r of playtime ?? []) extra.playtime.set(r.accountId, (extra.playtime.get(r.accountId) ?? 0) + r.ms);
   // A sort by a column that was switched off is the user's own order again.
   const sortNow = sort.by === "order" || sort.by === "name" || has(sort.by) ? sort : { by: "order" as const, desc: false };
-  const shown = sorted(matching.filter((a) => inFilter(a, filter, presence?.get(a.id))), sortNow, extra, accountName);
+  const shown = sorted(matching.filter((a) => inFilter(a, filter, presence?.[a.id])), sortNow, extra, accountName);
   const checkedIds = accounts.filter((a) => checked.has(a.id)).map((a) => a.id);
   const canPlay = (id: number) => byId.get(id)?.status === "valid" && !live.has(id);
   const current = (selected !== null && byId.get(selected)) || shown[0] || null;
@@ -358,7 +358,7 @@ export function AccountsView({ accounts, groups, density, vaultMode, clipboardSe
     }
   }
 
-  const counts = (f: Filter) => matching.filter((a) => inFilter(a, f, presence?.get(a.id))).length;
+  const counts = (f: Filter) => matching.filter((a) => inFilter(a, f, presence?.[a.id])).length;
   const clearFilters = () => {
     setQ("");
     setFilter("all");

@@ -1,6 +1,6 @@
 [package]
 name = "roalt"
-version = "1.3.0"
+version = "1.3.11"
 description = "Local-only Roblox account manager"
 authors = ["inspectsoftware"]
 license = "MIT"
@@ -47,6 +47,12 @@ zip = { version = "9", default-features = false, features = ["deflate-flate2-zli
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Browse's embedded child webview on Linux: WebKitGTK puts it in the window's `gtk::Box`, where
+# Tauri's `set_bounds` is a no-op, so `browse_linux` re-parents it into a `gtk::Overlay`/`gtk::Fixed`.
+# Same versions wry/tauri-runtime-wry already pull in.
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

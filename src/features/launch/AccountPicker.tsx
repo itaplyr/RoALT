@@ -252,7 +252,7 @@ function Tiles({ accounts, picked, onPicked, label, onAdd, onAccounts, className
               can={a.status === "valid"}
               live={live.has(a.id)}
               focusable={a.id === focusable}
-              presence={presence?.get(a.id)}
+              presence={presence?.[a.id]}
               i={i}
               flip={few}
               onToggle={onToggle}

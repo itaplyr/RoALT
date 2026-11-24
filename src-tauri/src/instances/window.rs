@@ -19,7 +19,7 @@ use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, M
 use windows::Win32::UI::WindowsAndMessaging::{
     GWL_EXSTYLE, GWL_STYLE, GetClientRect, GetForegroundWindow, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, HWND_TOP, IsIconic, IsZoomed, LWA_ALPHA,
     SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SW_SHOWMINNOACTIVE,
-    SW_SHOWNOACTIVATE, SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow, ShowWindowAsync, WINDOWPLACEMENT,
+    SW_SHOWNOACTIVATE, SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindowAsync, WINDOWPLACEMENT,
     WPF_RESTORETOMAXIMIZED, WS_CAPTION, WS_EX_LAYERED, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU,
     WS_THICKFRAME,
 };
@@ -148,6 +148,12 @@ static RESIZING: Mutex<Vec<isize>> = Mutex::new(Vec::new());
 /// How long a `free_resize` waits for one already at its window.
 const RESIZE_WAITS: u32 = 100;
 const RESIZE_GAP: Duration = Duration::from_millis(20);
+/// Smallest client-area dimension RoALT will ever record or apply (matches `commands::check_window_size`).
+const MIN_CLIENT_SIZE: u32 = 16;
+
+fn sane_client_size((w, h): (u32, u32)) -> bool {
+    w >= MIN_CLIENT_SIZE && h >= MIN_CLIENT_SIZE
+}
 
 fn size_set_now(pid: u32) {
     TINY_TRIED.lock().unwrap_or_else(|e| e.into_inner()).insert(pid, Instant::now());
@@ -162,7 +168,7 @@ fn set_tiny(pid: u32, size: Option<(u32, u32)>) {
     size_set_now(pid);
     let mut t = tiny();
     t.retain(|e| e.0 != pid);
-    if let Some(size) = size {
+    if let Some(size) = size.filter(|&s| sane_client_size(s)) {
         t.push((pid, size));
     }
 }
@@ -216,7 +222,7 @@ pub fn user_sized(pid: u32, hwnd: HWND) {
     if unsafe { IsIconic(hwnd).as_bool() || IsZoomed(hwnd).as_bool() } {
         return;
     }
-    if let Some(size) = client_size(hwnd)
+    if let Some(size) = client_size(hwnd).filter(|&s| sane_client_size(s))
         && let Some(e) = tiny().iter_mut().find(|e| e.0 == pid)
     {
         e.1 = size;
@@ -225,13 +231,13 @@ pub fn user_sized(pid: u32, hwnd: HWND) {
 
 /// Back to the size "Make it tiny" gave it, unless the user maximized it since. Waits for the client.
 fn back_to_tiny(pid: u32, hwnd: HWND) {
-    let Some(size) = tiny().iter().find(|e| e.0 == pid).map(|e| e.1) else { return };
+    let Some(size) = tiny().iter().find(|e| e.0 == pid).map(|e| e.1).filter(|&s| sane_client_size(s)) else { return };
     // SAFETY: reads one window's state.
     if unsafe { IsIconic(hwnd).as_bool() || IsZoomed(hwnd).as_bool() } || client_size(hwnd) == Some(size) {
         return;
     }
     size_set_now(pid);
-    let (fw, fh) = frame(hwnd).unwrap_or((0, 0));
+    let (fw, fh) = frame_or_default(hwnd);
     free_resize(hwnd, (0, 0, size.0 as i32 + fw, size.1 as i32 + fh), true);
 }
 
@@ -240,10 +246,10 @@ fn back_to_tiny(pid: u32, hwnd: HWND) {
 /// On a thread of its own. If it won't go that small, what it stays at is its tiny size from then on.
 /// `recent`: its size was set on purpose within `TINY_RETRY`.
 fn keep_tiny(pid: u32, hwnd: HWND, recent: bool) {
-    let Some(size) = tiny().iter().find(|e| e.0 == pid).map(|e| e.1) else { return };
+    let Some(size) = tiny().iter().find(|e| e.0 == pid).map(|e| e.1).filter(|&s| sane_client_size(s)) else { return };
     let h = hwnd.0 as isize;
     // SAFETY: reads which window is in front and one window's state.
-    if recent || client_size(hwnd) == Some(size) || unsafe { GetForegroundWindow() == hwnd || IsZoomed(hwnd).as_bool() } || process::hung(pid) {
+    if recent || client_size(hwnd) == Some(size) || unsafe { GetForegroundWindow() == hwnd || IsIconic(hwnd).as_bool() || IsZoomed(hwnd).as_bool() } || process::hung(pid) {
         return;
     }
     {
@@ -257,7 +263,10 @@ fn keep_tiny(pid: u32, hwnd: HWND, recent: bool) {
     std::thread::spawn(move || {
         let hwnd = HWND(h as *mut _);
         back_to_tiny(pid, hwnd);
-        if let Some(now) = client_size(hwnd).filter(|now| *now != size)
+        // Never record (0, 0) or a collapsed size from a window minimized/maximized mid-resize:
+        // that would poison `TINY` and collapse the window to a thin sliver on its next restore.
+        if !unsafe { IsIconic(hwnd).as_bool() || IsZoomed(hwnd).as_bool() }
+            && let Some(now) = client_size(hwnd).filter(|&now| sane_client_size(now) && now != size)
             && let Some(e) = tiny().iter_mut().find(|e| e.0 == pid && e.1 == size)
         {
             log::info!("client {pid}: stays at {now:?}, not {size:?}");
@@ -487,16 +496,22 @@ pub fn free_resize(hwnd: HWND, (x, y, w, h): (i32, i32, i32, i32), keep_place: b
         log::debug!("resize skipped: another resize of that window is still going");
         return;
     }
-    let style = style_of(hwnd);
-    set_style(hwnd, borderless(style as u32) as isize);
-    let place = if keep_place { SWP_NOMOVE } else { Default::default() };
-    // SAFETY: window-manager calls on a top-level window.
-    if let Err(e) = unsafe { SetWindowPos(hwnd, None, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE | place) } {
-        log::debug!("resize failed: {e}");
+    let w = w.max(MIN_CLIENT_SIZE as i32);
+    let h = h.max(MIN_CLIENT_SIZE as i32);
+    // SAFETY: reads one window's state. Never strip styles or resize a minimized window: doing so
+    // corrupts its restored geometry.
+    if !unsafe { IsIconic(hwnd).as_bool() } {
+        let style = style_of(hwnd);
+        set_style(hwnd, borderless(style as u32) as isize);
+        let place = if keep_place { SWP_NOMOVE } else { Default::default() };
+        // SAFETY: window-manager calls on a top-level window.
+        if let Err(e) = unsafe { SetWindowPos(hwnd, None, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE | place) } {
+            log::debug!("resize failed: {e}");
+        }
+        set_style(hwnd, style);
+        // SAFETY: as above; only makes the frame follow the style again.
+        let _ = unsafe { SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED) };
     }
-    set_style(hwnd, style);
-    // SAFETY: as above; only makes the frame follow the style again.
-    let _ = unsafe { SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED) };
     RESIZING.lock().unwrap_or_else(|e| e.into_inner()).retain(|b| *b != id);
 }
 
@@ -509,8 +524,12 @@ pub fn micro(id: &str, pid: u32, on: bool, size: (u32, u32)) -> Result<(u32, u32
     if on {
         remember(id, pid, hwnd);
         normal(hwnd);
-        let (fw, fh) = frame(hwnd).unwrap_or((0, 0));
-        free_resize(hwnd, (0, 0, size.0 as i32 + fw, size.1 as i32 + fh), true);
+        // SAFETY: reads one window's state. If restoring from minimized didn't finish, skip the
+        // resize now and let `unhide` / `keep_tiny` apply `size` once it is normal.
+        if !unsafe { IsIconic(hwnd).as_bool() } {
+            let (fw, fh) = frame_or_default(hwnd);
+            free_resize(hwnd, (0, 0, size.0 as i32 + fw, size.1 as i32 + fh), true);
+        }
         // Only now: until the tracker has it as tiny too, `sweep` would drop it.
         set_tiny(pid, Some(size));
     } else {
@@ -709,25 +728,50 @@ fn remember(id: &str, pid: u32, hwnd: HWND) {
     }
 }
 
-/// Out of maximized or minimized, without taking the focus, so it can be sized.
+/// Out of maximized or minimized, without taking the focus, waiting until the window settles so
+/// subsequent `frame` / `free_resize` calls never measure or resize an iconic/zoomed window.
 fn normal(hwnd: HWND) {
+    // SAFETY: reads one top-level window's state.
+    if unsafe { IsIconic(hwnd).as_bool() } {
+        un_iconify(hwnd);
+    }
     // SAFETY: reads and sets one top-level window's state.
-    unsafe {
-        if IsIconic(hwnd).as_bool() || IsZoomed(hwnd).as_bool() {
-            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    if unsafe { IsZoomed(hwnd).as_bool() } {
+        let _ = unsafe { ShowWindowAsync(hwnd, SW_SHOWNOACTIVATE) };
+        for _ in 0..RESTORE_WAITS {
+            if !unsafe { IsZoomed(hwnd).as_bool() } {
+                return;
+            }
+            std::thread::sleep(RESTORE_GAP);
         }
     }
 }
 
-/// How much bigger the window is than its client area (its borders and title bar).
+/// How much bigger the window is than its client area (its borders and title bar). None while
+/// minimized, empty, or mid-transition (negative/bogus delta).
 fn frame(hwnd: HWND) -> Option<(i32, i32)> {
+    // SAFETY: reads one window's state and rectangles into locals.
+    if unsafe { IsIconic(hwnd).as_bool() } {
+        return None;
+    }
     let (mut w, mut c) = (RECT::default(), RECT::default());
-    // SAFETY: reads one window's rectangles into locals.
     unsafe {
         GetWindowRect(hwnd, &mut w).ok()?;
         GetClientRect(hwnd, &mut c).ok()?;
     }
-    Some((w.right - w.left - c.right, w.bottom - w.top - c.bottom))
+    if c.right <= 0 || c.bottom <= 0 {
+        return None;
+    }
+    let (fw, fh) = (w.right - w.left - c.right, w.bottom - w.top - c.bottom);
+    ((0..=128).contains(&fw) && (0..=128).contains(&fh)).then_some((fw, fh))
+}
+
+/// `frame(hwnd)`, falling back to `default_frame()` for a titled window when `frame` is
+/// temporarily unreadable.
+fn frame_or_default(hwnd: HWND) -> (i32, i32) {
+    frame(hwnd).unwrap_or_else(|| {
+        if (style_of(hwnd) as u32) & WS_CAPTION.0 != 0 { default_frame() } else { (0, 0) }
+    })
 }
 
 fn client_size(hwnd: HWND) -> Option<(u32, u32)> {
@@ -970,5 +1014,18 @@ mod tests {
         assert_eq!(restore_cmd(min, true), max);
         assert_eq!(restore_cmd(min, false), quiet);
         assert_eq!(restore_cmd(normal, false), quiet);
+    }
+
+    #[test]
+    fn collapsed_tiny_sizes_are_rejected() {
+        const PID: u32 = 4_000_000_099;
+        for bad in [(0, 0), (1, 240), (240, 1), (15, 15)] {
+            set_tiny(PID, Some(bad));
+            assert!(!tiny().iter().any(|e| e.0 == PID), "{bad:?} must not be stored");
+        }
+        set_tiny(PID, Some((320, 240)));
+        assert_eq!(tiny().iter().find(|e| e.0 == PID).map(|e| e.1), Some((320, 240)));
+        set_tiny(PID, None);
+        TINY_TRIED.lock().unwrap().remove(&PID);
     }
 }

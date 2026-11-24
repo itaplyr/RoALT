@@ -21,8 +21,10 @@ use windows::Win32::Foundation::{
     CompareObjectHandles, DUPLICATE_CLOSE_SOURCE, DUPLICATE_HANDLE_OPTIONS, DuplicateHandle, ERROR_ACCESS_DENIED, ERROR_INVALID_HANDLE,
     GENERIC_READ, HANDLE, STATUS_INFO_LENGTH_MISMATCH,
 };
+use windows::Win32::System::Memory::{FILE_MAP_READ, OpenFileMappingW};
 use windows::Win32::System::Threading::{
-    CreateMutexW, GetCurrentProcess, OpenEventW, OpenMutexW, OpenProcess, PROCESS_DUP_HANDLE, SYNCHRONIZATION_SYNCHRONIZE,
+    CreateMutexW, GetCurrentProcess, OpenEventW, OpenMutexW, OpenProcess, OpenSemaphoreW, OpenWaitableTimerW, PROCESS_DUP_HANDLE,
+    SYNCHRONIZATION_SYNCHRONIZE,
 };
 use windows::core::{HSTRING, Owned};
 
@@ -103,18 +105,38 @@ impl Multi {
     }
 
     /// Takes the lock while Roblox runs (the user confirmed it): closes the singleton event in
-    /// every running client, then takes the name as `enable` does. No-op when held.
+    /// every running client and any other process holding it, then takes the name as `enable`
+    /// does. No-op when held.
     pub fn take_over(&self) -> Result<()> {
-        let mut pids: Vec<u32> = process::roblox_processes().iter().map(|p| p.pid).collect();
-        if pids.is_empty() {
-            pids = self.holders(SINGLETON_NAME).unwrap_or_default().into_iter().map(|(pid, _)| pid).collect();
+        let mut pids: BTreeSet<u32> = process::roblox_processes().iter().map(|p| p.pid).collect();
+        self.clear_holders_cache();
+        if let Ok(extra) = find_holders(SINGLETON_NAME) {
+            pids.extend(extra.into_iter().map(|(pid, _)| pid));
         }
+        let pids: Vec<u32> = pids.into_iter().collect();
         self.take_over_at(SINGLETON_NAME, &pids)
+    }
+
+    /// Drops the cached `holders` lookup so the next status check inspects the handle table fresh.
+    pub fn clear_holders_cache(&self) {
+        *self.holders.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    /// Roblox helper processes (`RobloxCrashHandler.exe`, `RobloxPlayerLauncher.exe`) currently
+    /// holding `ROBLOX_singletonEvent`, as `(pid, start_time)` for `close_all`.
+    pub fn roblox_helper_holders(&self) -> Vec<(u32, Option<u64>)> {
+        find_holders(SINGLETON_NAME)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(_, exe)| process::is_roblox_helper(exe))
+            .map(|(pid, _)| (pid, process::start_time(pid)))
+            .collect()
     }
 
     /// Releases the mutex and the files.
     pub fn disable(&self) {
         *self.held() = None;
+        self.clear_holders_cache();
     }
 
     pub fn is_active(&self) -> bool {
@@ -226,11 +248,13 @@ impl Multi {
             let mutex = create_mutex(name);
             *self.why() = mutex.as_ref().err().map(AppError::message);
             *held = Some(Held { _mutex: mutex?, files: Vec::new(), survivors });
+            self.clear_holders_cache();
         }
         Ok(())
     }
 
-    /// Who holds Roblox's event `name` (`find_holders`), kept for `HOLDERS_FOR`.
+    /// Who holds Roblox's event `name` (`find_holders`), kept for `HOLDERS_FOR`. An empty `Ok`
+    /// result is not cached, so a transient race or retry never sticks for 30 s.
     fn holders(&self, name: &str) -> Holders {
         let mut cache = self.holders.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((at, h)) = cache.as_ref()
@@ -244,7 +268,11 @@ impl Multi {
             Err(e) => log::info!("multi-instance: who holds Roblox's lock can't be found: {e}"),
             Ok(_) => {}
         }
-        *cache = Some((Instant::now(), h.clone()));
+        if !matches!(&h, Ok(list) if list.is_empty()) {
+            *cache = Some((Instant::now(), h.clone()));
+        } else {
+            *cache = None;
+        }
         h
     }
 
@@ -307,23 +335,58 @@ fn survivors_alive(h: &mut Held) -> bool {
 }
 
 /// Success, with or without ERROR_ALREADY_EXISTS (another tool's mutex blocks clients the same
-/// way), means held. ERROR_INVALID_HANDLE means the name belongs to an event, i.e. Roblox's.
-/// ERROR_ACCESS_DENIED means its creator has more rights (it runs as administrator): a mutex of
-/// another tool still blocks clients, so opening it is enough; anything else is that program's.
+/// way), means held. ERROR_INVALID_HANDLE means a different kernel object type holds the name:
+/// another tool's semaphore/timer/file-mapping blocks Roblox's CreateEventW the same way a mutex
+/// does, so opening it is enough; an existing Event is Roblox's (or an elevated program's when
+/// OpenEventW is denied — Windows reports ERROR_INVALID_HANDLE before checking access on
+/// CreateMutexW against an elevated Event). ERROR_ACCESS_DENIED means its creator has more rights
+/// (it runs as administrator): a mutex of another tool still blocks clients, so opening it is
+/// enough; anything else is that program's.
 fn create_mutex(name: &str) -> Result<Singleton> {
-    let name = HSTRING::from(name);
-    // SAFETY: CreateMutexW and OpenMutexW only read the name; on success the handle is ours to close.
-    let h = match unsafe { CreateMutexW(None, false, &name) } {
+    let hname = HSTRING::from(name);
+    // SAFETY: CreateMutexW and Open*W only read the name; on success the handle is ours to close.
+    let h = match unsafe { CreateMutexW(None, false, &hname) } {
         Ok(h) => h,
-        Err(e) if e.code() == ERROR_INVALID_HANDLE.to_hresult() => return Err(AppError::Invalid(running())),
+        Err(e) if e.code() == ERROR_INVALID_HANDLE.to_hresult() => {
+            if let Some(h) = open_blocking_non_event(&hname) {
+                log::info!("multi-instance: another program's non-event object holds {name}; it blocks clients the same way");
+                h
+            } else {
+                // SAFETY: OpenEventW only reads the name; closed immediately if opened.
+                return match unsafe { OpenEventW(SYNCHRONIZATION_SYNCHRONIZE, false, &hname) } {
+                    Ok(ev) => {
+                        let _ = unsafe { Owned::new(ev) };
+                        Err(AppError::Invalid(running()))
+                    }
+                    Err(ev_err) if ev_err.code() == ERROR_ACCESS_DENIED.to_hresult() => Err(AppError::Invalid(elevated())),
+                    Err(ev_err) => {
+                        log::info!("multi-instance: {name} is neither a mutex nor an openable event ({ev_err})");
+                        Err(AppError::Invalid(running()))
+                    }
+                };
+            }
+        }
         // SAFETY: as above.
-        Err(e) if e.code() == ERROR_ACCESS_DENIED.to_hresult() => unsafe { OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, false, &name) }
+        Err(e) if e.code() == ERROR_ACCESS_DENIED.to_hresult() => unsafe { OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, false, &hname) }
             .inspect(|_| log::info!("multi-instance: another program's mutex holds the name; it blocks clients the same way"))
             .map_err(|_| AppError::Invalid(elevated()))?,
         Err(e) => return Err(AppError::Internal(tr!("Could not take the multi-instance lock: {why}", why = e.message()))),
     };
     // SAFETY: as above.
     Ok(Singleton { _handle: unsafe { Owned::new(h) } })
+}
+
+/// Opens an existing non-Event kernel object (semaphore, waitable timer, file mapping) holding
+/// `name`. Any of these makes Roblox's `CreateEventW(name)` fail with `ERROR_INVALID_HANDLE` just
+/// like a mutex does.
+fn open_blocking_non_event(name: &HSTRING) -> Option<HANDLE> {
+    // SAFETY: each Open*W only reads `name`; on success the returned handle is ours to close.
+    unsafe {
+        OpenSemaphoreW(SYNCHRONIZATION_SYNCHRONIZE, false, name)
+            .or_else(|_| OpenWaitableTimerW(SYNCHRONIZATION_SYNCHRONIZE, false, name))
+            .or_else(|_| OpenFileMappingW(FILE_MAP_READ.0, false, name))
+            .ok()
+    }
 }
 
 fn still_running() -> String {
@@ -470,21 +533,47 @@ fn dup(proc: HANDLE, value: usize) -> Option<Owned<HANDLE>> {
 }
 
 /// The processes with a handle to the event `name` (pid, exe name), found through a handle of
-/// our own to it. Err when Windows won't give us one (its creator runs as administrator); none
-/// when there is no such event (or the name is a mutex: another tool's, which blocks clients).
+/// our own to it. Err when Windows won't give us one or won't let us inspect its owner (its
+/// creator runs as administrator or is protected); none when there is no such event (or the name
+/// is a mutex/non-event: another tool's, which blocks clients).
 fn find_holders(name: &str) -> Holders {
+    let hname = HSTRING::from(name);
     // SAFETY: OpenEventW only reads the name; the handle is ours, closed on drop.
-    let ours = match unsafe { OpenEventW(SYNCHRONIZATION_SYNCHRONIZE, false, &HSTRING::from(name)) } {
+    let ours = match unsafe { OpenEventW(SYNCHRONIZATION_SYNCHRONIZE, false, &hname) } {
         // SAFETY: as above.
         Ok(h) => unsafe { Owned::new(h) },
         Err(e) if e.code() == ERROR_ACCESS_DENIED.to_hresult() => return Err(elevated()),
-        Err(_) => return Ok(Vec::new()),
+        Err(e) => {
+            log::debug!("multi-instance: OpenEventW({name}) while finding holders: {e}");
+            return Ok(Vec::new());
+        }
     };
     let table = handle_table().map_err(|e| e.message())?;
     let Some(mine) = table.iter().find(|h| h.pid == std::process::id() && h.value == ours.0 as usize).copied() else {
         return Ok(Vec::new());
     };
     let pids = holding(&table, mine, *ours, mine.object != 0);
+    if pids.is_empty() {
+        // Drop our own handle and check whether the event still exists: if it does, another
+        // process holds it that Windows wouldn't let us inspect (running as administrator or
+        // protected, e.g. on Windows 11 24H2 where kernel object addresses are hidden).
+        drop(ours);
+        // SAFETY: as above.
+        return match unsafe { OpenEventW(SYNCHRONIZATION_SYNCHRONIZE, false, &hname) } {
+            Ok(h) => {
+                let _ = unsafe { Owned::new(h) };
+                let hidden = process::unreadable_roblox_pids();
+                if !hidden.is_empty() {
+                    log::info!("multi-instance: {name} is held by unreadable Roblox process(es) {hidden:?}");
+                } else {
+                    log::info!("multi-instance: {name} exists, but no accessible process holds it (elevated or protected)");
+                }
+                Err(elevated())
+            }
+            Err(e) if e.code() == ERROR_ACCESS_DENIED.to_hresult() => Err(elevated()),
+            Err(_) => Ok(Vec::new()),
+        };
+    }
     Ok(pids.into_iter().map(|pid| (pid, process::exe_name(pid).unwrap_or_else(|| tr!("process {pid}", pid = pid)))).collect())
 }
 
@@ -568,7 +657,7 @@ fn shared_files() -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use windows::Win32::Foundation::ERROR_SHARING_VIOLATION;
-    use windows::Win32::System::Threading::CreateEventW;
+    use windows::Win32::System::Threading::{CreateEventW, CreateSemaphoreW, CreateWaitableTimerW};
 
     use super::*;
 
@@ -611,6 +700,44 @@ mod tests {
         let err = m.take(&name).unwrap_err();
         assert!(matches!(err, AppError::Invalid(ref s) if *s == running()), "{err}");
         assert!(!m.is_active());
+    }
+
+    #[test]
+    fn an_existing_semaphore_or_timer_counts_as_held() {
+        // Another tool's Semaphore blocks Roblox's CreateEventW the same way a Mutex does.
+        let sem_name = test_name();
+        // SAFETY: CreateSemaphoreW only reads the name; handle closed on drop.
+        let sem = unsafe { Owned::new(CreateSemaphoreW(None, 1, 1, &HSTRING::from(&sem_name)).unwrap()) };
+        let m = Multi::new();
+        m.take(&sem_name).unwrap();
+        assert!(m.is_active());
+        // Even after the other tool closes its handle, our open handle keeps blocking CreateEventW.
+        drop(sem);
+        assert_eq!(event(&sem_name).unwrap_err().code(), ERROR_INVALID_HANDLE.to_hresult());
+        m.disable();
+        event(&sem_name).unwrap();
+
+        // Same for a WaitableTimer.
+        let timer_name = test_name();
+        // SAFETY: CreateWaitableTimerW only reads the name; handle closed on drop.
+        let timer = unsafe { Owned::new(CreateWaitableTimerW(None, false, &HSTRING::from(&timer_name)).unwrap()) };
+        let m2 = Multi::new();
+        m2.take(&timer_name).unwrap();
+        assert!(m2.is_active());
+        drop(timer);
+        assert_eq!(event(&timer_name).unwrap_err().code(), ERROR_INVALID_HANDLE.to_hresult());
+        m2.disable();
+        event(&timer_name).unwrap();
+    }
+
+    #[test]
+    fn empty_holders_lookup_is_not_cached() {
+        let name = test_name();
+        let m = Multi::new();
+        assert!(m.holders(&name).unwrap().is_empty());
+        let _roblox = event(&name).unwrap();
+        let found = m.holders(&name).unwrap();
+        assert_eq!(found.iter().map(|h| h.0).collect::<Vec<_>>(), [std::process::id()]);
     }
 
     #[test]

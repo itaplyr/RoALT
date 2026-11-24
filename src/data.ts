@@ -205,7 +205,14 @@ export const useBackgroundUrl = (enabled = true) => useQuery({ ...background, en
 /** Its first frame when it may move (a GIF or WebP), else null. */
 export const useBackgroundStill = (enabled = true) => useQuery({ ...background, enabled }).data?.still ?? null;
 
-const byAccount = (list: AccountPresence[]) => new Map(list.map((p) => [p.accountId, p.presence]));
+// A plain object, not a Map: react-query's structural sharing can compare objects and keep the
+// previous reference when nothing changed; a new Map every poll would look like a change every
+// render and loop useSyncExternalStore.
+const byAccount = (list: AccountPresence[]) =>
+  list.reduce<Record<number, AccountPresence["presence"]>>((map, p) => {
+    map[p.accountId] = p.presence;
+    return map;
+  }, {});
 /** Presence of the given (on-screen, valid) accounts, polled once a minute while a caller is
  * mounted and the window is visible. Each account asks about itself, so keep the list short. */
 export const usePresence = (ids: number[]) =>

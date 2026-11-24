@@ -20,8 +20,10 @@ const REBIND_MS: i64 = 120_000;
 const MAX_ENDED: usize = 30;
 /// How long a teleport may take to reach its next game; then it failed (`LogFacts::teleporting`).
 const TELEPORT_MS: i64 = 60_000;
-/// How far a client's start may be from its log file's creation, in seconds.
+/// How far a client's start may be ahead of its log file's creation (clock/FS slack), in seconds.
 pub const LOG_SKEW_SECS: u64 = 3;
+/// How long after process creation a client may take to create its log file (Hyperion, AV, disk load).
+const LOG_STARTUP_SECS: u64 = 15;
 // Notes are made in the current language and compared against these (a note made before a
 // language switch stops matching until the next poll remakes it).
 /// The note of a client whose log signed in as a different user than its account.
@@ -926,6 +928,15 @@ impl Tracker {
             .collect()
     }
 
+    /// The client's PID for window-only queries (previews): works even when the process's start
+    /// time couldn't be read (e.g. elevated client), as long as it is adopted and still alive.
+    pub fn window_pid(&self, id: &str) -> Option<u32> {
+        self.entries()
+            .iter()
+            .find(|e| e.inst.id == id && e.inst.state != InstanceState::Exited && e.adopted && e.alive)
+            .map(|e| e.inst.pid)
+    }
+
     /// Running (non-Exited) clients broken down into (in_game_or_joining, disconnected, given_up)
     /// for Discord's status summary.
     pub fn status_counts(&self) -> (usize, usize, usize) {
@@ -1419,6 +1430,8 @@ impl Tracker {
             return Vec::new();
         }
         let mut taken: Vec<u32> = work.iter().filter(|e| e.adopted).map(|e| e.inst.pid).collect();
+        let mut taken_logs: Vec<PathBuf> = work.iter().filter_map(|e| e.log.clone()).collect();
+        let all_btids: Vec<(String, i64)> = work.iter().filter(|e| e.btid != 0).map(|e| (e.inst.id.clone(), e.btid)).collect();
         let mut roblox = None;
         let profiles = procs.profiles();
         for e in &mut work {
@@ -1426,7 +1439,8 @@ impl Tracker {
                 e.expected_user = user_of(e.inst.account_id);
                 e.user_checked = true;
             }
-            observe(e, dir, procs, &mut roblox, &mut taken, now);
+            let other_btids: Vec<i64> = all_btids.iter().filter(|(id, _)| *id != e.inst.id).map(|(_, b)| *b).collect();
+            observe(e, dir, procs, &mut roblox, &mut taken, &mut taken_logs, &other_btids, now);
             // A Cordial/cage process can outlive the PID RoALT follows (or a zombie can keep
             // that PID around). The account profile is the source of truth: when it is gone,
             // the instance is gone even if the old process table entry still exists.
@@ -1693,8 +1707,20 @@ impl Procs for Live {
 }
 
 /// The blocking part of a poll for one entry: liveness, rebinding, log binding and reading.
-/// `roblox` lists the Roblox processes at most once per poll; `taken` holds the PIDs entries follow.
-fn observe(e: &mut Entry, dir: Option<&Path>, procs: &dyn Procs, roblox: &mut Option<Vec<ProcInfo>>, taken: &mut Vec<u32>, now: i64) {
+/// `roblox` lists the Roblox processes at most once per poll; `taken` holds the PIDs entries follow;
+/// `taken_logs` holds the log paths already bound to live entries; `other_btids` holds other live
+/// entries' browser tracker ids.
+#[allow(clippy::too_many_arguments)]
+fn observe(
+    e: &mut Entry,
+    dir: Option<&Path>,
+    procs: &dyn Procs,
+    roblox: &mut Option<Vec<ProcInfo>>,
+    taken: &mut Vec<u32>,
+    taken_logs: &mut Vec<PathBuf>,
+    other_btids: &[i64],
+    now: i64,
+) {
     let seen = procs.start_time(e.inst.pid);
     // 0: unread so far. The first good read is its identity, else a client read late never matches.
     if e.start_time == Some(0) {
@@ -1733,26 +1759,41 @@ fn observe(e: &mut Entry, dir: Option<&Path>, procs: &dyn Procs, roblox: &mut Op
     let after = first.max(u64::try_from(e.inst.started_at / 1000 - 1).unwrap_or(0));
 
     // Roblox's updater relaunched it: a log created after the dead client's own (which is
-    // created within seconds of its start) names the same tracker id. Judged by creation time,
-    // not by the bound path: the dead client may have died before its log was bound, or the
-    // relaunch's log may have been bound to the dead PID.
-    if !e.alive
-        && e.adopted
-        && may_appear(e, now)
-        && let Some(path) = logwatch::find_log(dir, e.btid, launched)
-        && let Some(created) = created_secs(&path).filter(|&c| c > after + LOG_SKEW_SECS)
-        && let Some(p) = pick_client(roblox.get_or_insert_with(|| procs.roblox()), Some(created), after, taken)
-    {
-        log::info!("instance {}: rebound from process {} to {} (updater relaunch)", e.inst.id, e.inst.pid, p.pid);
-        adopt(e, p, taken);
-        if e.log.as_ref() != Some(&path) {
-            e.log = Some(path);
-            e.offset = 0;
-            e.facts = LogFacts::default();
+    // created within seconds of its start) names the same tracker id (or the account's user id).
+    // Judged by creation time, not by the bound path: the dead client may have died before its log
+    // was bound, or the relaunch's log may have been bound to the dead PID.
+    if !e.alive && e.adopted && may_appear(e, now) {
+        let relaunch_log = logwatch::find_log(dir, e.btid, launched)
+            .filter(|p| created_secs(p).is_some_and(|c| c > after + LOG_SKEW_SECS))
+            .or_else(|| {
+                e.expected_user
+                    .and_then(|uid| logwatch::find_log_by_user(dir, uid, launched, taken_logs, other_btids))
+                    .filter(|p| created_secs(p).is_some_and(|c| c > after + LOG_SKEW_SECS))
+            });
+        if let Some(path) = relaunch_log
+            && let Some(created) = created_secs(&path)
+            && let Some(p) = pick_client(roblox.get_or_insert_with(|| procs.roblox()), Some(created), after, taken)
+        {
+            log::info!("instance {}: rebound from process {} to {} (updater relaunch)", e.inst.id, e.inst.pid, p.pid);
+            adopt(e, p, taken);
+            if e.log.as_ref() != Some(&path) {
+                taken_logs.push(path.clone());
+                e.log = Some(path);
+                e.offset = 0;
+                e.facts = LogFacts::default();
+            }
         }
     }
     if e.log.is_none() {
-        e.log = logwatch::find_log(dir, e.btid, launched);
+        e.log = logwatch::find_log(dir, e.btid, launched).or_else(|| {
+            let uid = e.expected_user?;
+            let path = logwatch::find_log_by_user(dir, uid, launched, taken_logs, other_btids)?;
+            log::info!("instance {}: bound client log by user id {uid} (browser tracker id not in log)", e.inst.id);
+            Some(path)
+        });
+        if let Some(path) = &e.log {
+            taken_logs.push(path.clone());
+        }
     }
     // Behind a bootstrapper: the client is the one that wrote the log.
     if !e.adopted
@@ -1807,12 +1848,22 @@ fn adopt(e: &mut Entry, p: ProcInfo, taken: &mut Vec<u32>) {
     taken.push(p.pid);
 }
 
-/// The client that wrote a log: started within a few seconds of the log's creation and since
-/// `after`. PIDs already followed are skipped. Nothing else counts: a client the user started
+/// The client that wrote a log: started since `after`, at most `LOG_SKEW_SECS` after the log's
+/// creation (clock/FS slack) and at most `LOG_STARTUP_SECS` before it (Hyperion, antivirus, disk
+/// load). PIDs already followed are skipped. Nothing else counts: a client the user started
 /// themselves must never be taken for RoALT's.
 fn pick_client(procs: &[ProcInfo], log_created: Option<u64>, after: u64, taken: &[u32]) -> Option<ProcInfo> {
     let c = log_created?;
-    procs.iter().filter(|p| p.start_time >= after && !taken.contains(&p.pid) && p.start_time.abs_diff(c) <= LOG_SKEW_SECS).min_by_key(|p| p.start_time.abs_diff(c)).cloned()
+    procs
+        .iter()
+        .filter(|p| {
+            p.start_time >= after
+                && !taken.contains(&p.pid)
+                && p.start_time <= c.saturating_add(LOG_SKEW_SECS)
+                && c <= p.start_time.saturating_add(LOG_STARTUP_SECS)
+        })
+        .min_by_key(|p| p.start_time.abs_diff(c))
+        .cloned()
 }
 
 fn created_secs(path: &Path) -> Option<u64> {
@@ -2593,9 +2644,32 @@ mod tests {
         assert_eq!(pick_client(&procs, Some(105), 90, &[]).map(|c| c.pid), Some(2), "the closest in time");
         assert_eq!(pick_client(&procs, Some(105), 90, &[2]).map(|c| c.pid), Some(4), "not one already followed");
         assert_eq!(pick_client(&procs, Some(105), 105, &[]).map(|c| c.pid), Some(4), "not one from before the launch");
+        // A slow-starting client (up to LOG_STARTUP_SECS before log creation) is still picked.
+        assert_eq!(pick_client(&[p(5, 100)], Some(110), 90, &[]).map(|c| c.pid), Some(5));
         // The user's own client, started later, isn't taken just for being the newest.
         assert_eq!(pick_client(&procs, Some(150), 90, &[]), None);
         assert_eq!(pick_client(&procs, None, 90, &[]), None, "no log, no claim");
+    }
+
+    // Windows-only: `old_log` sets the log's creation time, which Linux metadata cannot set.
+    #[cfg(windows)]
+    #[test]
+    fn adopts_bootstrapper_client_by_user_id_when_btid_is_missing_and_startup_is_slow() {
+        let dir = temp_dir();
+        let t = Tracker::new();
+        let start = now_ms() - 10_000;
+        let secs = (start / 1000) as u64;
+        let id = t.register(&info(900, start, true), target()).id;
+        // Bootstrapper exited; Roblox started at `secs`, created its log 8 s later without BTID.
+        let procs = Fake::new(&[(901, secs)]);
+        let log = dir.join("0.744.0.7441080_20261024T120008Z_Player_NOBTID_last.log");
+        append(&log, &join_lines(USER));
+        append(&log, &[replicator()]);
+        old_log(&log, secs + 8);
+        t.poll(Some(&dir), &procs, &user_of, start + 9_000);
+        assert_eq!(state(&t, &id), (InGame, None, 901));
+        assert_eq!(t.window_pid(&id), Some(901));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -71,6 +71,15 @@ impl Multi {
 
     pub fn adopt(&self, _clients: &[(u32, u64)]) {}
 
+    /// Linux has no Windows handle-table cache to invalidate.
+    pub fn clear_holders_cache(&self) {}
+
+    /// Linux has no `RobloxCrashHandler.exe`/`RobloxPlayerLauncher.exe` singleton holders;
+    /// Cordial profiles are the multi path, so there are no helper holders to close.
+    pub fn roblox_helper_holders(&self) -> Vec<(u32, Option<u64>)> {
+        Vec::new()
+    }
+
     pub fn has_survivors(&self) -> bool {
         false
     }

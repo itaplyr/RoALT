@@ -41,7 +41,10 @@ class Boundary extends Component<{ children: ReactNode }, { failed: boolean }> {
     return { failed: true };
   }
   componentDidCatch(e: unknown, info: { componentStack?: string | null }) {
-    report("error", `render failed: ${describe(e)}${info.componentStack ?? ""}`);
+    // The component stack goes first and on its own line: it says which component looped, and the
+    // logger drops anything past its length limit, which a long error stack would otherwise use up.
+    report("error", `render failed (component stack):${info.componentStack ?? " (none)"}`);
+    report("error", `render failed: ${describe(e)}`);
   }
   render() {
     if (!this.state.failed) return this.props.children;

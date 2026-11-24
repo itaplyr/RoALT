@@ -17,12 +17,14 @@ v1.3.0.1
 - `0.9.2` / `1.3.0` is the upstream RoALT version.
 - `.1`, `.2`, ... are Linux-fork releases for that upstream version.
 - The latest Linux tag in this repository is `v0.9.2.2` (upstream `0.9.2`).
-  Upstream has since released `v1.3.0`, which this fork has merged; the next
-  Linux release starts at `v1.3.0.1`.
+  Upstream has since released `v1.3.11`, which this fork has merged into its
+  working tree; the first Linux release for that upstream version is
+  `v1.3.11.1`.
 - Four-part tags never collide with upstream's three-part tags.
 
-The current tree is upstream version `1.3.0` with `LINUX_REVISION = 1`, so a
-release cut now is `v1.3.0.1`.
+The current tree is upstream version `1.3.11` with `LINUX_REVISION = 1`, so a
+release cut now is `v1.3.11.1`. Nothing is tagged yet: the v1.3.11 integration
+is being verified in the working tree.
 
 The app version shown in Settings is computed from `Cargo.toml` plus
 `LINUX_REVISION` in `src-tauri/src/self_update_linux.rs`. `Cargo.toml`,

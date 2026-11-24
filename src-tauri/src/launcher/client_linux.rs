@@ -241,6 +241,19 @@ pub fn devctl_socket(user_id: i64) -> Option<PathBuf> {
         .map(|dir| dir.join("devctl.sock"))
 }
 
+/// Mocktail's own data root, where its managed payload and `rbx_bin` live: `$XDG_DATA_HOME/mocktail`
+/// or `~/.local/share/mocktail`. RoALT shares it (the payload is read-only) and isolates only auth,
+/// cache and state per account; pointing this at RoALT's own store hid the payload and made Mocktail
+/// fail on `rbx_bin/libroblox.so`.
+fn mocktail_data_root() -> PathBuf {
+    std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| env_home().map(|h| h.join(".local").join("share")))
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join("mocktail")
+}
+
 /// RoALT's Mocktail store: `$XDG_DATA_HOME/roalt/mocktail` (or `~/.local/share/roalt/mocktail`).
 ///
 /// It is shared by every account; only `auth/<user id>` is per account. Mocktail's own lock is
@@ -263,6 +276,30 @@ fn private_dir(path: &Path) -> std::io::Result<()> {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
     }
     Ok(())
+}
+
+/// The folder holding Mocktail's runtime bridges (`libEGL.so`, `libGLESv2.so`, ...). It reads
+/// `MOCKTAIL_RUNTIME_LIBRARY_DIR` before falling back to its executable's own folder, which the
+/// per-account copy does not share. The installed layout is `<prefix>/lib/mocktail`.
+fn mocktail_runtime_library_dir(source: &Path) -> Option<PathBuf> {
+    let dir = source.parent()?;
+    [dir.to_path_buf(), dir.join("..").join("lib").join("mocktail")]
+        .into_iter()
+        .filter_map(|p| p.canonicalize().ok())
+        .find(|p| p.join("libEGL.so").is_file())
+}
+
+/// The folders Mocktail's shared libraries live in, relative to the installed binary: its own
+/// folder and `<prefix>/lib/mocktail` (its `$ORIGIN/../lib/mocktail` RUNPATH). A per-account copy
+/// lives in RoALT's data folder, where that RUNPATH no longer points at the libraries, so the
+/// loader must be told where they are.
+fn mocktail_lib_dirs(source: &Path) -> Vec<PathBuf> {
+    let Some(dir) = source.parent() else { return Vec::new() };
+    [dir.to_path_buf(), dir.join("..").join("lib").join("mocktail"), dir.join("..").join("lib")]
+        .into_iter()
+        .filter_map(|p| p.canonicalize().ok())
+        .filter(|p| p.is_dir())
+        .collect()
 }
 
 /// A per-account copy of Mocktail. Its executable path is what Mocktail hashes for the
@@ -709,20 +746,35 @@ fn start_mocktail(
     let root = mocktail_root();
     let auth = mocktail_auth_dir(user_id);
     let instance = root.join("instances").join(user_id.to_string());
-    let (cache, state, android_data, android_files, android_cache, android_external) = if multi {
+    // Mocktail's Android runtime root: the platform-cache migration requires the files directory to
+    // sit under `<runtime root>/data` (its appStorage lives there), so data/files/cache share that root.
+    let android = instance.join("android");
+    let android_data = android.join("data");
+    let (cache, state, android_runtime, android_files, android_cache, android_external) = if multi {
         (
             instance.join("cache"),
             instance.join("state"),
-            instance.join("android/data"),
-            instance.join("android/files"),
-            instance.join("android/cache"),
-            instance.join("android/external"),
+            android.clone(),
+            android_data.join("files"),
+            android_data.join("cache"),
+            android.join("external"),
         )
     } else {
         (root.join("cache"), root.join("state"), PathBuf::new(), PathBuf::new(), PathBuf::new(), PathBuf::new())
     };
     let dirs = if multi {
-        vec![&root, &auth, &instance, &cache, &state, &android_data, &android_files, &android_cache, &android_external]
+        vec![
+            &root,
+            &auth,
+            &instance,
+            &cache,
+            &state,
+            &android_runtime,
+            &android_data,
+            &android_files,
+            &android_cache,
+            &android_external,
+        ]
     } else {
         vec![&root, &auth, &cache, &state]
     };
@@ -737,12 +789,29 @@ fn start_mocktail(
     }
     let launcher = if multi { mocktail_copy(&exe.path, user_id)? } else { exe.path.clone() };
     let mut cmd = Command::new(&launcher);
-    cmd.env("MOCKTAIL_DATA_ROOT", &root)
+    cmd.env("MOCKTAIL_DATA_ROOT", mocktail_data_root())
         .env("MOCKTAIL_AUTH_ROOT", &auth)
         .env("MOCKTAIL_CACHE_ROOT", &cache)
         .env("MOCKTAIL_STATE_ROOT", &state);
+    if let Some(dir) = mocktail_runtime_library_dir(&exe.path) {
+        cmd.env("MOCKTAIL_RUNTIME_LIBRARY_DIR", dir);
+    }
     if multi {
-        cmd.env("MOCKTAIL_ANDROID_DATA_DIR", &android_data)
+        // The copy sits outside Mocktail's install tree, so its RUNPATH misses the bundle's
+        // libraries (e.g. libmocktail_audio_sdl.so). Add them ahead of any existing search path.
+        let mut libs = mocktail_lib_dirs(&exe.path);
+        if let Some(existing) = std::env::var_os("LD_LIBRARY_PATH") {
+            libs.extend(std::env::split_paths(&existing));
+        }
+        if !libs.is_empty()
+            && let Ok(dirs) = std::env::join_paths(libs)
+        {
+            cmd.env("LD_LIBRARY_PATH", dirs);
+        }
+    }
+    if multi {
+        cmd.env("MOCKTAIL_RUNTIME_ROOT", &android_runtime)
+            .env("MOCKTAIL_ANDROID_DATA_DIR", &android_data)
             .env("MOCKTAIL_ANDROID_FILES_DIR", &android_files)
             .env("MOCKTAIL_ANDROID_CACHE_DIR", &android_cache)
             .env("MOCKTAIL_ANDROID_EXTERNAL_BASE_DIR", &android_external)
@@ -995,6 +1064,32 @@ pub fn bootstrapper_version(_exe: &ClientExe) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mocktail_copy_finds_the_runtime_bridges() {
+        let root = std::env::temp_dir().join(format!("roalt-mocktail-egl-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        std::fs::create_dir_all(root.join("lib").join("mocktail")).unwrap();
+        std::fs::write(root.join("bin").join("mocktail"), b"").unwrap();
+        std::fs::write(root.join("lib").join("mocktail").join("libEGL.so"), b"").unwrap();
+        assert_eq!(
+            mocktail_runtime_library_dir(&root.join("bin").join("mocktail")),
+            Some(root.join("lib").join("mocktail").canonicalize().unwrap())
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_mocktail_copy_finds_the_bundled_libraries() {
+        let root = std::env::temp_dir().join(format!("roalt-mocktail-libs-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        std::fs::create_dir_all(root.join("lib").join("mocktail")).unwrap();
+        std::fs::write(root.join("bin").join("mocktail"), b"").unwrap();
+        let dirs = mocktail_lib_dirs(&root.join("bin").join("mocktail"));
+        assert!(dirs.contains(&root.join("bin").canonicalize().unwrap()));
+        assert!(dirs.contains(&root.join("lib").join("mocktail").canonicalize().unwrap()));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn the_mocktail_cookie_is_the_bare_cookie_with_a_private_mode() {

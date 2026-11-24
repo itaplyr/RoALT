@@ -3,4 +3,8 @@
 /**
  * `browse://page`: the page Browse finished loading.
  */
-export type BrowsePage = { accountId: number, path: string, };
+export type BrowsePage = { accountId: number, 
+/**
+ * Path and query on www.roblox.com, like "games/123/x" or "search/users?keyword=bob".
+ */
+path: string, };

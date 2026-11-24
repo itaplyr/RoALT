@@ -1495,8 +1495,11 @@ pub fn debug_log(level: String, message: String) {
         _ => log::Level::Debug,
     };
     let mut message = message;
-    if message.len() > 4096 {
-        let mut end = 4096;
+    // Long React error + component stacks must survive whole (the component stack is what names
+    // the culprit); 4 KiB cut them off.
+    const LIMIT: usize = 16 * 1024;
+    if message.len() > LIMIT {
+        let mut end = LIMIT;
         while !message.is_char_boundary(end) {
             end -= 1;
         }
@@ -2716,7 +2719,11 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> 
 /// the picture's RGBA unless `known` is its number already. Answers at once with the newest picture there is.
 #[tauri::command]
 pub async fn instance_thumbnail(s: State<'_, App>, id: String, max_w: u32, known: u32) -> Result<tauri::ipc::Response> {
-    let pid = client_pid(&s, &id)?;
+    s.tracker.get(&id).ok_or(AppError::NotFound)?;
+    #[cfg(windows)]
+    let pid = s.tracker.window_pid(&id);
+    #[cfg(not(windows))]
+    let pid = s.tracker.window_pid(&id).or_else(|| client_pid(&s, &id).ok().flatten());
     let max_w = (max_w > 0).then(|| max_w.clamp(16, 1280));
     let preview = blocking(move || crate::instances::window::preview(pid, max_w)).await?;
     Ok(tauri::ipc::Response::new(preview.to_bytes(known)))
@@ -3187,6 +3194,7 @@ pub async fn multi_instance_set(app: AppHandle, enabled: bool) -> Result<MultiIn
         s.db.save_settings(&v)?;
         drop(change);
         if enabled {
+            s.multi.clear_holders_cache();
             match s.multi.enable() {
                 Ok(()) => protect_running(&s, &v),
                 Err(e) => log::info!("multi-instance not active yet: {e}"),
@@ -3371,7 +3379,20 @@ async fn close_roblox(s: &App, force: bool, keep_closing: bool) -> Result<MultiI
         remove_secrets_if_stopped(s, i.account_id);
     }
     let v = s.db.settings()?;
+    s.multi.clear_holders_cache();
     retake_multi(s, &v);
+    if v.multi_instance && !s.multi.is_active() {
+        let helpers = s.multi.roblox_helper_holders();
+        if !helpers.is_empty() {
+            for ((pid, _), r) in helpers.iter().zip(close_all(helpers.clone(), force, grace(s)).await?) {
+                if let Err(e) = r {
+                    log::warn!("could not close Roblox helper process {pid}: {e}");
+                }
+            }
+            s.multi.clear_holders_cache();
+            retake_multi(s, &v);
+        }
+    }
     Ok(multi_status(s, &v))
 }
 

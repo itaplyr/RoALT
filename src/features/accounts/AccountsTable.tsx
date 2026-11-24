@@ -42,7 +42,7 @@ export function AccountsTable({ rows, ordered, groupById, presence, compact, now
   /** Every account in list order: a drop lands among them. */
   ordered: AccountSummary[];
   groupById: Map<number, Group>;
-  presence: Map<number, Presence> | undefined;
+  presence: Record<number, Presence> | undefined;
   compact: boolean;
   now: number;
   currentId: number | undefined;
@@ -312,7 +312,7 @@ export function AccountsTable({ rows, ordered, groupById, presence, compact, now
               tabbable={tabId === a.id}
               menuOpen={menuId === a.id}
               a={a}
-              p={presence?.get(a.id)}
+              p={presence?.[a.id]}
               groupById={groupById}
               compact={compact}
               checkedAgo={!compact && a.statusCheckedAt ? ago(a.statusCheckedAt, now) : undefined}

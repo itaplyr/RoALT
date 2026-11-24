@@ -5176,5 +5176,6 @@
 <rect x="934.4" y="763.8" width="8.0" height="8.0" fill="#30363d" stroke="#0d1117" stroke-width="0.5"><title>TRAY: 90%</title></rect>
 <rect x="943.8" y="763.8" width="8.0" height="8.0" fill="#30363d" stroke="#0d1117" stroke-width="0.5"><title>TRAY: 90%</title></rect>
 <rect x="953.2" y="763.8" width="8.0" height="8.0" fill="#30363d" stroke="#0d1117" stroke-width="0.5"><title>TRAY: 90%</title></rect>
+<text x="8" y="786" font-family="sans-serif" font-size="10" fill="#8b949e">Upstream v1.3.11 integrated and Browse embedded in the main window; Linux compile, 481 tests and clippy verified 2026-11-24; no Roblox/GUI run.</text>
 <text x="8" y="798" font-family="sans-serif" font-size="10" fill="#8b949e">Green: working or complete. Gray: partial, untested, or unavailable.</text>
 </svg>

@@ -1,5 +1,10 @@
 # RoALT for Linux
 
+<h1 align="center">⚠️ IMPORTANT ⚠️</h1>
+
+> [!CAUTION]
+> **This fork has changed the way it worked. Now updates will be smaller and more regular instead of big updates every some weeks, i will try to do more frequent ones to fix bugs, if you have problems open an [issue](https://github.com/itaplyr/RoALT/issues).**
+
 > [!WARNING]
 > **This Linux fork is a work in progress.** Some features are missing or incomplete, some may not work
 > as intended, and performance and memory use are still being improved. Expect rough edges, and keep

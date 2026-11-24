@@ -43,8 +43,10 @@ pub struct LogFacts {
 
 /// Mtime slack for `find_log` (clocks and file-time granularity).
 const SINCE_SLACK: Duration = Duration::from_secs(5);
-/// The tracker id is logged within the first second; this is far more than that.
-const HEAD_BYTES: u64 = 256 * 1024;
+/// The tracker id is logged near startup; 1 MiB covers noisy startup logs (FFlags/warnings).
+const HEAD_BYTES: u64 = 1024 * 1024;
+/// How far into a log `find_log_by_user` looks for `GameJoinLoadTime`'s `userid:`.
+const USER_HEAD_BYTES: u64 = 4 * 1024 * 1024;
 
 const JOINING: &str = "! Joining game '";
 /// A log line holding one of these (lowercase) is never reported or shared.
@@ -114,6 +116,57 @@ pub fn find_log(dir: &Path, browser_tracker_id: i64, since: SystemTime) -> Optio
         .collect();
     candidates.sort_by_key(|c| std::cmp::Reverse(c.0));
     candidates.into_iter().map(|(_, p)| p).find(|p| names_tracker(p, browser_tracker_id))
+}
+
+/// Fallback for `find_log` when a bootstrapper or Roblox build doesn't log the launch's browser
+/// tracker id: the newest `_Player_` log created and modified since `since` that isn't already
+/// bound (`exclude`), doesn't name another live launch's tracker id (`exclude_btids`), and logs a
+/// `GameJoinLoadTime` line for `user_id`.
+pub fn find_log_by_user(
+    dir: &Path,
+    user_id: i64,
+    since: SystemTime,
+    exclude: &[PathBuf],
+    exclude_btids: &[i64],
+) -> Option<PathBuf> {
+    let since = since.checked_sub(SINCE_SLACK).unwrap_or(UNIX_EPOCH);
+    let mut candidates: Vec<(SystemTime, PathBuf)> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(is_player_log)
+        .filter_map(|e| {
+            let path = e.path();
+            if exclude.contains(&path) {
+                return None;
+            }
+            let m = e.metadata().ok()?;
+            let modified = m.modified().ok()?;
+            let created = m.created().map_or(true, |c| c >= since);
+            (modified >= since && created).then_some((modified, path))
+        })
+        .collect();
+    candidates.sort_by_key(|c| std::cmp::Reverse(c.0));
+    candidates.into_iter().map(|(_, p)| p).find(|p| names_user(p, user_id, exclude_btids))
+}
+
+fn names_user(path: &Path, user_id: i64, exclude_btids: &[i64]) -> bool {
+    let mut head = Vec::new();
+    if open_shared(path).and_then(|f| f.take(USER_HEAD_BYTES).read_to_end(&mut head)).is_err() {
+        return false;
+    }
+    let text = String::from_utf8_lossy(&head);
+    let mut matched = false;
+    for line in text.lines() {
+        if let Some(btid) = tracker_id(line)
+            && exclude_btids.contains(&btid)
+        {
+            return false;
+        }
+        if line.contains("[FLog::GameJoinLoadTime] Report game_join_loadtime:") && number_after(line, "userid:") == Some(user_id) {
+            matched = true;
+        }
+    }
+    matched
 }
 
 fn is_player_log(e: &std::fs::DirEntry) -> bool {
@@ -674,6 +727,36 @@ mod tests {
         // Modified a little before `since`: within the slack.
         assert!(find_log(&dir, BTID + 1, now + Duration::from_secs(3)).is_some());
         assert_eq!(find_log(&dir.join("missing"), BTID, since), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn finds_the_log_by_user_id_when_tracker_id_is_missing() {
+        let dir = temp_dir();
+        let now = SystemTime::now();
+        let since = now - Duration::from_secs(60);
+        let p_other = dir.join("0.744.0.7441080_20261024T120001Z_Player_11111_last.log");
+        std::fs::write(
+            &p_other,
+            format!(
+                "{}{}",
+                line(&format!("[FLog::LogWin32BTId] LogWin32BTId, App, web launch, websiteBTId is {}", BTID + 1)),
+                line(&format!("[FLog::GameJoinLoadTime] Report game_join_loadtime: placeid:{PLACE}, userid:{USER},")),
+            ),
+        )
+        .unwrap();
+        // Belongs to another live launch's btid: skipped.
+        assert_eq!(find_log_by_user(&dir, USER, since, &[], &[BTID + 1]), None);
+
+        let p_ours = dir.join("0.744.0.7441080_20261024T120002Z_Player_22222_last.log");
+        std::fs::write(
+            &p_ours,
+            line(&format!("[FLog::GameJoinLoadTime] Report game_join_loadtime: placeid:{PLACE}, userid:{USER},")),
+        )
+        .unwrap();
+        assert_eq!(find_log_by_user(&dir, USER, since, &[], &[BTID + 1]), Some(p_ours.clone()));
+        // Already bound to another live entry: skipped.
+        assert_eq!(find_log_by_user(&dir, USER, since, &[p_ours], &[BTID + 1]), None);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

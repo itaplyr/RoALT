@@ -1,8 +1,11 @@
 # Linux port progress
 
-This describes the Linux fork of RoALT after the v1.3.0 merge (upstream
-v1.2.0 through v1.3.0). It is not a statement about the upstream Windows
-application. Upstream removed macros in v1.0.1, so macros are not a Linux port
+This describes the Linux fork of RoALT after the v1.3.11 integration (upstream
+v1.2.0 through v1.3.11, merged into the working tree). It is not a statement
+about the upstream Windows application. Upstream's v1.3.11 changes are
+Windows-only where they touch Win32 singletons, window APIs and process
+handles; those stay in `#[cfg(windows)]` modules, while the shared log/tracker
+fixes and the Linux `Multi` stubs keep the fork's Cordial behaviour. Upstream removed macros in v1.0.1, so macros are not a Linux port
 gap. It removed Clips, Trades, Outfits, owning or buying private servers and the
 Friend requests view in v1.3.0, so those are not port gaps either; joining a
 private server by link and the Servers › Private tab remain. The Mocktail
@@ -25,6 +28,8 @@ not-applicable areas.
 
 Current totals: **14 ported, 31 partial, untested or missing** across 45 areas.
 
+SVG note: Upstream v1.3.11 integrated and Browse embedded in the main window; Linux compile, 481 tests and clippy verified 2026-11-24; no Roblox/GUI run.
+
 ## Summary
 
 | Category | Status | Coverage | Summary |
@@ -36,13 +41,13 @@ Current totals: **14 ported, 31 partial, untested or missing** across 45 areas.
 | Launch queue | Partial | 70% | One-at-a-time queue shared by Play, Home, Servers and recent servers; needs a Linux run |
 | Batches and same server | Partial | 75% | Shared batch engine and same-server picking; needs a Linux run |
 | Take control | Partial | 85% | Shared backend; Linux window restore, focus and `pactl` unmute; not exercised |
-| Multi-client | Ported | 100% | One Cordial profile per account; Cordial is the tested multi path |
+| Multi-client | Ported | 100% | One Cordial profile per account; Cordial is the tested multi path; v1.3.11 Windows singleton-holder calls are no-ops on Linux |
 | Mocktail backend | Partial | 40% | Experimental launcher; multi-instance uses per-account copies and isolated data, no previews, cookie seeded from the vault |
 | Headless | Partial | 75% | Cage mode, previews and audio disable work; Show restarts, resolution is limited |
-| Previews | Partial | 90% | Cordial devctl screenshots, including headless clients; v1.3.0 Off/1 FPS and cap untested |
+| Previews | Partial | 90% | Cordial devctl screenshots, including headless clients; v1.3.11 overview-window lookup keeps a Linux client-pid fallback; Off/1 FPS and cap untested |
 | Rejoin | Ported | 100% | Auto-rejoin/restart verified by closing a client |
 | Servers | Ported | 100% | Server browser, private servers, same-server batches |
-| Browse and details | Untested | 0% | Upstream child webview is Windows-only; Linux uses a kept-profile session window, details panes absent |
+| Browse and details | Untested | 0% | Linux embeds roblox.com in the main window as a WebKitGTK child webview over a GTK overlay; compile/test-verified, no GUI run; details panes absent |
 | FPS cap | Partial | 60% | Passed through `CORDIAL_FLAGS`; some builds/settings still ignore it |
 | Discord | Ported | 100% | Webhook alerts and rich presence tested |
 | Alerts | Partial | 90% | Newer batch and client alert kinds use the existing Discord path; not yet run on Linux |
@@ -65,7 +70,7 @@ Current totals: **14 ported, 31 partial, untested or missing** across 45 areas.
 | Languages | Partial | 90% | 18 catalogs; some newer and Linux-only strings fall back to English |
 | Max alts | Partial | 80% | FPS, fair cap, render flags and compositor tiny windows; trim still does not |
 | Usage stats | Ported | 100% | Process-tree PSS and CPU/I/O reporting |
-| Logs | Partial | 95% | v1.3.0 diagnostics report and Linux log-tail autopsy work; no crash dumps/event log |
+| Logs | Partial | 95% | v1.3.0 diagnostics report, Linux log-tail autopsy and v1.3.11 user-id log fallback (unit-tested on Linux); no crash dumps/event log |
 | Modpacks | Partial | 30% | Library import/export/on-off shared; applying skipped because Cordial counts as a bootstrapper |
 | News | Ported | 100% | Loaded real RoALT, DevForum and Roblox news in the v1.0.0 dev run |
 | Cookie export | Ported | 100% | `localtime_r` and atomic file writes on Linux |
@@ -119,21 +124,28 @@ Untested.
 
 ## Browse, game and player details
 
-Untested.
+Compile- and test-verified; not yet run under a GUI.
 
 - v1.1.0 adds **Browse**, with **Popular**, **Playtime**, game pages and profile
   pages; v1.2.0/v1.3.0 added Browse games, Last played, the Limiteds list and
   purchase lock.
 - Upstream Browse is a WebView2 child webview (`browse.rs`,
-  `Window::add_child`); that is Windows-only.
-- On Linux `browse_linux.rs` opens the account's roblox.com session in its own
-  kept-profile window (`webview::open_session`) instead. Page geometry, the
-  profile card and page events are no-ops, so the RoALT-rendered **Popular**,
-  **Playtime**, game-details and player-details panes are not available there,
-  and `set_lock` is a no-op, so the purchase lock is not enforced in that
-  window.
-- The session window itself has not been verified under WebKitGTK. If it fails,
-  use **Open profile** in the account menu or roblox.com in your own browser.
+  `Window::add_child`).
+- On Linux `browse_linux.rs` now embeds roblox.com in the main RoALT window as a
+  WebKitGTK child webview. Tauri's `add_child` puts it in the window's GTK box,
+  where `set_bounds` is a no-op, so the page is re-parented into a
+  `gtk::Overlay`/`gtk::Fixed` and moved by `browse_bounds`.
+- Cookie isolation is kept: each account keeps its own profile directory
+  (`webview::session_profile`). Navigation stays on Roblox and the Google/Apple
+  sign-in hosts, off Create, and off real-money pages while the purchase lock is
+  on; new windows and downloads stay in the pane; `browse://page`,
+  `browse://play` and `browse://blocked` are emitted.
+- Still Windows-only: body-level Robux / sign-out request interception (Linux
+  refuses the money pages at navigation instead), the RoALT-rendered **Popular**,
+  **Playtime**, game-details and player-details panes, and the page profile card.
+- Not yet verified under WebKitGTK on a GUI: the overlay geometry, focus and
+  input behaviour, and `roblox-player:` interception. If it fails, use **Open
+  profile** in the account menu or roblox.com in your own browser.
 
 ## Launching
 

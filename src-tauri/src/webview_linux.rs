@@ -21,7 +21,7 @@ const LOGIN_DIR: &str = "webview-login";
 const SESSIONS_DIR: &str = "webview-sessions";
 /// In a kept profile while its window is open; still there at start-up → the profile may hold a
 /// cookie or a sign-in left by a window that never closed normally.
-const OPEN_MARK: &str = ".roalt-open";
+pub(crate) const OPEN_MARK: &str = ".roalt-open";
 const POLL: Duration = Duration::from_millis(700);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const HOME_PAGE: &str = "https://www.roblox.com/home";
@@ -90,7 +90,7 @@ pub async fn capture_login(app: &AppHandle, data_dir: &Path, fill: Option<&Login
         }
     };
     // A Google / Apple sign-in left by an earlier window goes before the page loads.
-    let cookie = if clear_auth_cookies(&window) {
+    let cookie = if clear_cookies(window.as_ref(), true) {
         match window.navigate(login) {
             Ok(()) => wait_for_cookie(app.clone(), label.clone()).await,
             Err(e) => Err(e.into()),
@@ -99,7 +99,7 @@ pub async fn capture_login(app: &AppHandle, data_dir: &Path, fill: Option<&Login
         Err(AppError::Internal(tr!("Could not clear the previous Roblox sign-in. Try again.")))
     };
     // Keep the profile (a captcha solved in it stays solved), but only when its auth cookies are gone.
-    let cleared = app.get_webview_window(&label).is_some() && clear_auth_cookies(&window);
+    let cleared = app.get_webview_window(&label).is_some() && clear_cookies(window.as_ref(), true);
     if cleared {
         mark_closed(&profile);
     }
@@ -121,6 +121,10 @@ pub fn close_login(app: &AppHandle) {
     }
 }
 
+/// The separate-session-window path kept from the fork's earlier Browse: no longer opened (Browse
+/// is a child webview now, `browse_linux`); retained because `wait_sessions_closed` and the profile
+/// sweep below still share its shape.
+#[allow(dead_code)]
 pub async fn open_session(
     app: &AppHandle,
     data_dir: &Path,
@@ -197,7 +201,7 @@ pub async fn open_session(
 }
 
 /// Marks `profile` as in use (created if needed). Logged, not an error: the window still works.
-fn mark_open(profile: &Path) {
+pub(crate) fn mark_open(profile: &Path) {
     if let Err(e) = std::fs::create_dir_all(profile).and_then(|()| std::fs::write(profile.join(OPEN_MARK), b"")) {
         log::warn!("could not mark browser profile {} as open: {e}", profile.display());
     }
@@ -211,7 +215,7 @@ fn mark_open(profile: &Path) {
 }
 
 /// After a normal close, once the cookies were deleted.
-fn mark_closed(profile: &Path) {
+pub(crate) fn mark_closed(profile: &Path) {
     match std::fs::remove_file(profile.join(OPEN_MARK)) {
         Err(e) if e.kind() != ErrorKind::NotFound => log::warn!("could not unmark browser profile {}: {e}", profile.display()),
         _ => {}
@@ -233,7 +237,7 @@ fn login_profile(data_dir: &Path) -> PathBuf {
     data_dir.join(LOGIN_DIR)
 }
 
-fn session_profile(data_dir: &Path, account_id: i64) -> PathBuf {
+pub(crate) fn session_profile(data_dir: &Path, account_id: i64) -> PathBuf {
     data_dir.join(SESSIONS_DIR).join(account_id.to_string())
 }
 
@@ -252,10 +256,14 @@ pub fn reset_profiles(app: &AppHandle, data_dir: &Path) -> bool {
 }
 
 /// A sign-in or session window is open, or one is still closing: its browser holds a profile,
-/// and a closing session may yet hand over a newer cookie.
+/// and a closing session may yet hand over a newer cookie. Browse (a child webview) counts too: its
+/// browser holds the account's profile.
 pub fn browsing(app: &AppHandle) -> bool {
     let closing = !CLOSING.lock().unwrap_or_else(|e| e.into_inner()).is_empty();
-    closing || LOGIN_ACTIVE.load(Ordering::Acquire) || app.webview_windows().keys().any(|l| l.starts_with("login-") || l.starts_with("session-"))
+    crate::browse::is_open()
+        || closing
+        || LOGIN_ACTIVE.load(Ordering::Acquire)
+        || app.webview_windows().keys().any(|l| l.starts_with("login-") || l.starts_with("session-"))
 }
 
 /// Waits (blocking, up to ~5 s) for session windows to finish closing: `end_session` stores the
@@ -287,9 +295,11 @@ pub fn sweep_orphan_profiles(data_dir: &Path, account_ids: &[i64]) {
     }
 }
 
-/// Deletes a removed account's session profile (blocking; logged, never an error). Its window
-/// was asked to close: waits up to ~5 s for it and its close path to go first.
+/// Deletes a removed account's session profile (blocking; logged, never an error). Browse, open
+/// as that account, closes first (its cookie isn't kept: the account is gone), then we wait for any
+/// leftover session window and its close path.
 pub fn remove_account_profile(app: &AppHandle, data_dir: &Path, account_id: i64) {
+    crate::browse::close_if(app, account_id);
     let label = format!("session-{account_id}");
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline
@@ -345,7 +355,7 @@ pub fn log_process_failures(_window: &WebviewWindow) {}
 /// Kept for the shared `set_main_shown`: WebKitGTK has no per-webview memory target to lower.
 pub fn memory_target(_wv: &Webview, _low: bool) {}
 
-fn parse_url(s: &str) -> Result<url::Url> {
+pub(crate) fn parse_url(s: &str) -> Result<url::Url> {
     s.parse().map_err(|e: url::ParseError| AppError::Internal(e.to_string()))
 }
 
@@ -372,7 +382,7 @@ fn end_session(app: &AppHandle, label: &str, title: &str, profile: &Path, on_clo
         // The cookie is the vault's job: drop it from the kept profile, and keep the profile
         // (a captcha solved in it stays solved). If that fails, the mark stays and the next
         // start deletes the whole profile.
-        if clear_auth_cookies(&window) {
+        if clear_cookies(window.as_ref(), true) {
             mark_closed(profile);
         }
         if let Err(e) = window.destroy() {
@@ -384,16 +394,17 @@ fn end_session(app: &AppHandle, label: &str, title: &str, profile: &Path, on_clo
     CLOSING.lock().unwrap_or_else(|e| e.into_inner()).retain(|l| l != label);
 }
 
-/// Deletes every `.ROBLOSECURITY` and every Google / Apple sign-in cookie from a window's
-/// profile; false when one couldn't be deleted (the profile is then swept the next start).
-fn clear_auth_cookies(window: &WebviewWindow) -> bool {
-    match window.cookies() {
+/// Deletes every `.ROBLOSECURITY` (when `auth` — not the account's own, just put in when `false`)
+/// and every Google / Apple sign-in cookie from a webview's profile; false when one couldn't be
+/// deleted (the profile is then swept the next start).
+pub(crate) fn clear_cookies(wv: &Webview, auth: bool) -> bool {
+    match wv.cookies() {
         Ok(all) => {
             let mut ok = true;
             for c in all.into_iter().filter(|c| {
-                c.domain().is_some_and(|d| (c.name() == ".ROBLOSECURITY" && is_roblox(d)) || is_sign_in_provider(d))
+                c.domain().is_some_and(|d| is_sign_in_provider(d) || (auth && c.name() == ".ROBLOSECURITY" && is_roblox(d)))
             }) {
-                if let Err(e) = window.delete_cookie(c) {
+                if let Err(e) = wv.delete_cookie(c) {
                     log::warn!("could not delete an auth cookie from a window's profile: {e}");
                     ok = false;
                 }
@@ -408,7 +419,7 @@ fn clear_auth_cookies(window: &WebviewWindow) -> bool {
 }
 
 /// Where a Roblox window may go: Roblox over https, and the sign-in providers it hands off to.
-fn allowed(url: &url::Url) -> bool {
+pub(crate) fn allowed(url: &url::Url) -> bool {
     let ok = url.as_str() == "about:blank"
         || (url.scheme() == "https"
             && url.username().is_empty()
@@ -423,6 +434,15 @@ fn allowed(url: &url::Url) -> bool {
 fn is_sign_in_provider(domain: &str) -> bool {
     let d = domain.trim_start_matches('.').to_ascii_lowercase();
     d == "google.com" || d.ends_with(".google.com") || d == "apple.com" || d.ends_with(".apple.com")
+}
+
+/// Roblox's Create pages: the Creator Hub and Studio's web pages. Browse never opens them (building
+/// games is not what RoALT is for).
+pub(crate) fn creating(url: &url::Url) -> bool {
+    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    let path = url.path().to_ascii_lowercase();
+    host == "create.roblox.com"
+        || ((host == "www.roblox.com" || host == "roblox.com") && ["/develop", "/create", "/build"].iter().any(|p| path == *p || path.starts_with(&format!("{p}/"))))
 }
 
 async fn wait_for_cookie(app: AppHandle, label: String) -> Result<Secret> {
@@ -457,7 +477,7 @@ fn poll_cookie(app: &AppHandle, label: &str) -> Result<Secret> {
     Err(AppError::Invalid(tr!("The Roblox sign-in window timed out after 15 minutes. Try again.")))
 }
 
-fn pick_roblosecurity(cookies: Vec<Cookie<'static>>) -> Option<Secret> {
+pub(crate) fn pick_roblosecurity(cookies: Vec<Cookie<'static>>) -> Option<Secret> {
     cookies
         .into_iter()
         .find(|c| c.name() == ".ROBLOSECURITY" && !c.value().is_empty() && c.domain().is_some_and(is_roblox))
@@ -472,7 +492,7 @@ fn is_roblox(domain: &str) -> bool {
 /// Child processes can hold files a moment longer, so retry; a final failure is logged and
 /// returns false (gone or never there: true). What is left is marked open, so the next sweep
 /// tries again (the mark may have been among the files already deleted).
-fn remove_profile(dir: &Path) -> bool {
+pub(crate) fn remove_profile(dir: &Path) -> bool {
     for attempt in 1..=5 {
         match std::fs::remove_dir_all(dir) {
             Ok(()) => return true,

@@ -40,7 +40,16 @@ export function TooltipHost() {
       text.textContent = el.dataset.tip;
       kbd.textContent = el.dataset.tipKbd ?? "";
       kbd.hidden = !el.dataset.tipKbd;
-      if (!open()) tip.showPopover();
+      if (!open()) {
+        // A click can close a menu and move the focus while the tip is still hiding; the browser
+        // refuses a show mid-hide. Drop this one: the next hover or focus shows the tip again.
+        try {
+          tip.showPopover();
+        } catch {
+          current = null;
+          return;
+        }
+      }
       flow();
     };
     // Moving from trigger to trigger, the tip flows from where it was instead of blinking there.
@@ -67,7 +76,12 @@ export function TooltipHost() {
       current = null;
       if (open()) {
         remember();
-        tip.hidePopover();
+        // The same show/hide race as above, in the other direction.
+        try {
+          tip.hidePopover();
+        } catch {
+          // Already hiding; nothing to undo.
+        }
         warmUntil = performance.now() + 600;
       }
     };
